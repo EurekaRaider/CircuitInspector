@@ -1,0 +1,33 @@
+[package]
+name = "circuit-inspector-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "circuit_inspector_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "circuit-inspector-core"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+flate2 = "1.1"
+hex = "0.4"
+png = "0.18"
+rayon = "1.11"
+rstar = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tar = "0.4"
+tempfile = "3.23"
+thiserror = "2.0"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+walkdir = "2.5"
+zip = { version = "5.1", default-features = false, features = ["deflate", "deflate64", "bzip2", "zstd"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4"

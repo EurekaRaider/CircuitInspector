@@ -1,0 +1,29 @@
+node_modules/
+target/
+dist/
+release/
+coverage/
+.cache/
+.circuit-inspector/
+apps/viewer/dist/
+apps/mcp/dist/
+benchmarks/generated-*/
+benchmarks/cache/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+*.mobileprovision
+
+# Logs and local tooling
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

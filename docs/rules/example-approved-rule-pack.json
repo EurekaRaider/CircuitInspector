@@ -1,0 +1,53 @@
+{
+  "id": "fixture-dft-dfm",
+  "version": "1.0.0",
+  "title": "CircuitInspector fixture DFT and DFM rules",
+  "status": "APPROVED",
+  "rules": [
+    {
+      "id": "dft-testpoint-spacing",
+      "title": "测试点边缘间距",
+      "kind": "MINIMUM_DISTANCE",
+      "source": "TEST_POINT",
+      "target": "TEST_POINT",
+      "metric": "EDGE_TO_EDGE",
+      "threshold_nm": 500000,
+      "severity": "ERROR",
+      "layer_functions": [],
+      "same_net_only": false,
+      "different_net_only": false,
+      "citation": {
+        "source_path": "fixture-rule.md",
+        "source_hash": "fixture",
+        "page": null,
+        "paragraph": 1,
+        "excerpt": "测试点边缘间距不得低于 0.5 mm。"
+      }
+    },
+    {
+      "id": "dfm-minimum-trace-width",
+      "title": "最小导线宽度",
+      "kind": "MINIMUM_WIDTH",
+      "source": "COPPER",
+      "target": null,
+      "metric": null,
+      "threshold_nm": 150000,
+      "severity": "WARNING",
+      "layer_functions": ["COPPER"],
+      "same_net_only": false,
+      "different_net_only": false,
+      "citation": {
+        "source_path": "fixture-rule.md",
+        "source_hash": "fixture",
+        "page": null,
+        "paragraph": 2,
+        "excerpt": "导线宽度不得低于 0.15 mm。"
+      }
+    }
+  ],
+  "approval": {
+    "approved_by": "fixture-owner",
+    "approved_at": "2026-08-07T00:00:00Z",
+    "content_hash": "fixture-approved"
+  }
+}

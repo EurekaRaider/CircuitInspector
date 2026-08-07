@@ -1,0 +1,8 @@
+{
+  "Header": { "GenerationSoftware": { "Vendor": "CircuitInspector", "Application": "Fixture" } },
+  "FilesAttributes": [
+    { "Path": "top.gtl", "FileFunction": "Copper,L1,Top" },
+    { "Path": "outline.gko", "FileFunction": "Profile,NP" },
+    { "Path": "board.drl", "FileFunction": "Plated,1,2,PTH" }
+  ]
+}

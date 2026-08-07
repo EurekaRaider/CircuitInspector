@@ -1,0 +1,45 @@
+{
+  "name": "circuit-inspector",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:core": "cargo build --release -p circuit-inspector-core",
+    "build:mcp": "npm run build -w @circuit-inspector/mcp",
+    "build:viewer": "npm run build -w @circuit-inspector/viewer",
+    "build": "npm run build:core && npm run build:mcp && npm run build:viewer",
+    "test:rust": "cargo test --workspace",
+    "test:ts": "vitest run",
+    "test": "npm run test:rust && npm run test:ts",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:viewer": "npm run dev -w @circuit-inspector/viewer",
+    "start:mcp": "npm run start -w @circuit-inspector/mcp",
+    "benchmark:generate": "node scripts/generate-benchmark-design.mjs",
+    "benchmark:import": "node scripts/benchmark-import.mjs",
+    "package:mac": "npm run build && node scripts/write-sbom.mjs release && node scripts/package-viewer.mjs mac arm64 && node scripts/stage-mcp.mjs mac arm64 && npm run manifest",
+    "package:win": "npm run build && node scripts/write-sbom.mjs release && node scripts/package-viewer.mjs win x64 && node scripts/stage-mcp.mjs win x64 && npm run manifest",
+    "manifest": "node scripts/write-manifest.mjs release"
+  },
+  "devDependencies": {
+    "@phosphor-icons/react": "2.1.10",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "6.0.5",
+    "electron": "43.3.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.2.1",
+    "vitest": "4.1.10"
+  }
+}

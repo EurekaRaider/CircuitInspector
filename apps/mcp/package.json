@@ -1,0 +1,21 @@
+{
+  "name": "@circuit-inspector/mcp",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "circuit-inspector-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "mammoth": "1.12.0",
+    "pdfjs-dist": "6.2.108",
+    "zod": "4.4.3"
+  }
+}

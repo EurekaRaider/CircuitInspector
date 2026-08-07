@@ -1,0 +1,9 @@
+UNITS=MM
+STEP {
+  NAME=pcb
+}
+LAYER {
+  NAME=comp_+_top
+  CONTEXT=BOARD
+  TYPE=COMPONENT
+}

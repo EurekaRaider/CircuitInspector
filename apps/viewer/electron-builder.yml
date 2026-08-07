@@ -1,0 +1,26 @@
+appId: com.circuitinspector.viewer
+productName: CircuitInspector
+directories:
+  app: apps/viewer
+  output: release
+files:
+  - dist/**
+  - package.json
+extraResources:
+  - from: target/release/${env.CIRCUIT_INSPECTOR_CORE_BINARY}
+    to: bin/${env.CIRCUIT_INSPECTOR_CORE_BINARY}
+asar: true
+npmRebuild: false
+mac:
+  target: zip
+  category: public.app-category.developer-tools
+  artifactName: CircuitInspector-macOS-${arch}-${version}.${ext}
+  identity: null
+win:
+  target: zip
+  artifactName: CircuitInspector-Windows-${arch}-${version}.${ext}
+publish: null
+protocols:
+  - name: CircuitInspector analysis link
+    schemes:
+      - circuitinspector
