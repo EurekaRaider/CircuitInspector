@@ -3,8 +3,10 @@ productName: CircuitInspector
 directories:
   app: apps/viewer
   output: release
+  buildResources: apps/viewer/assets
 files:
   - dist/**
+  - assets/icon.png
   - package.json
 extraResources:
   - from: target/release/${env.CIRCUIT_INSPECTOR_CORE_BINARY}
@@ -15,10 +17,12 @@ mac:
   target: zip
   category: public.app-category.developer-tools
   artifactName: CircuitInspector-macOS-${arch}-${version}.${ext}
+  icon: icon.icns
   identity: null
 win:
   target: zip
   artifactName: CircuitInspector-Windows-${arch}-${version}.${ext}
+  icon: icon.ico
 publish: null
 protocols:
   - name: CircuitInspector analysis link

@@ -1,21 +1,26 @@
 <div align="center">
 
+<img src="apps/viewer/assets/icon.svg" alt="CircuitInspector logo" width="112" height="112">
+
 # CircuitInspector
 
 ### Local PCB manufacturing-data inspection with explicit semantic confidence.
 
 **A Rust-native ODB++ and Gerber analysis engine, auditable DFT/DFM rules, a GPU vector viewer, and a local stdio MCP.**
 
-[![CI](https://github.com/williamjinj-eng/CircuitInspector/actions/workflows/ci.yml/badge.svg)](https://github.com/williamjinj-eng/CircuitInspector/actions/workflows/ci.yml)
-![Rust](https://img.shields.io/badge/Rust-native_core-DEA584?logo=rust&logoColor=white)
-![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)
-![MCP](https://img.shields.io/badge/MCP-stdio-111827)
-![License](https://img.shields.io/badge/License-MIT-22C55E)
+<p>
+  <img alt="Rust native core" src="https://img.shields.io/badge/Rust-native_core-DEA584?logo=rust&logoColor=white">
+  <img alt="Electron 43" src="https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white">
+  <img alt="MCP stdio" src="https://img.shields.io/badge/MCP-stdio-111827">
+  <img alt="MIT License" src="https://img.shields.io/badge/License-MIT-22C55E">
+</p>
 
-![macOS arm64](https://img.shields.io/badge/macOS_arm64-validated-16A34A?logo=apple&logoColor=white)
-![Windows x64](https://img.shields.io/badge/Windows_x64-CI_configured-2563EB?logo=windows&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-21_passed-16A34A)
-![Conformance](https://img.shields.io/badge/Ucamco_suite-NOT__RUN-D97706)
+<p>
+  <img alt="Cross-platform: Windows x64 and macOS arm64" src="https://img.shields.io/badge/Cross--platform-Windows_x64_%2F_macOS_arm64-2563EB">
+  <img alt="21 tests passed" src="https://img.shields.io/badge/tests-21_passed-16A34A">
+  <img alt="ODB++ and Gerber formats" src="https://img.shields.io/badge/Formats-ODB%2B%2B_%26_Gerber-0F766E">
+  <img alt="Local-first data" src="https://img.shields.io/badge/Data-local--first-7C3AED">
+</p>
 
 [Overview](#01--system-overview) · [Quick start](#02--quick-start) · [Format support](#03--manufacturing-data-and-semantics) · [MCP](#05--mcp-surface) · [Architecture](#07--architecture) · [Validation](#08--validation-and-performance)
 

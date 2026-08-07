@@ -11,6 +11,7 @@ import {
   WarningCircleIcon,
   XIcon
 } from "@phosphor-icons/react";
+import brandMark from "../../assets/icon.svg";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardCanvas, type BoardCanvasHandle } from "./BoardCanvas";
 import { LOCALE_STORAGE_KEY, resolveLocale, translate, type Locale, type Translator } from "./i18n";
@@ -213,10 +214,8 @@ export function App() {
   return (
     <main className="grid h-[100dvh] min-w-[1080px] grid-rows-[52px_minmax(0,1fr)_28px] overflow-hidden bg-[#17191b] text-zinc-100">
       <header className="title-drag grid grid-cols-[310px_minmax(360px,1fr)_auto] items-center border-b border-white/8 bg-[#1b1e20] px-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="grid size-7 place-items-center rounded-md border border-[#79a5a7]/40 bg-[#79a5a7]/10 text-[#8bb7b9]">
-            <CrosshairIcon size={16} weight="bold" />
-          </div>
+        <div className={`flex min-w-0 items-center gap-3 ${window.circuitInspector.platform === "darwin" ? "pl-[72px]" : ""}`}>
+          <img src={brandMark} alt="" aria-hidden="true" className="size-8 shrink-0" />
           <div className="min-w-0">
             <div className="text-[13px] font-semibold tracking-[-0.01em]">CircuitInspector</div>
             <div className="truncate font-mono text-[10px] text-zinc-500">{sourceName ?? t("localPcbReview")}</div>

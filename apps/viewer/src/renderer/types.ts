@@ -81,6 +81,7 @@ export interface TilePayload {
 }
 
 export interface ViewerApi {
+  platform: NodeJS.Platform;
   chooseDesign(locale: "zh-CN" | "en-US"): Promise<string | null>;
   importDesign(path: string): Promise<DesignSummary>;
   getDesignSummary(designId: string): Promise<DesignSummary>;

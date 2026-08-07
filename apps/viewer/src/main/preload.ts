@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 const api = {
+  platform: process.platform,
   chooseDesign: (locale: "zh-CN" | "en-US") => ipcRenderer.invoke("design:choose", locale) as Promise<string | null>,
   importDesign: (path: string) => ipcRenderer.invoke("design:import", path),
   getDesignSummary: (designId: string) => ipcRenderer.invoke("design:summary", designId),

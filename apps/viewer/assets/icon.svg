@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="surface" x1="122" y1="56" x2="902" y2="966" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#191A19"/>
+      <stop offset="0.5" stop-color="#0D0F0F"/>
+      <stop offset="1" stop-color="#070808"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(352 236) rotate(50) scale(730)">
+      <stop stop-color="#2B2921" stop-opacity="0.58"/>
+      <stop offset="0.54" stop-color="#171714" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#090A0A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="232" y1="204" x2="808" y2="826" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7E5AC"/>
+      <stop offset="0.2" stop-color="#C8953D"/>
+      <stop offset="0.46" stop-color="#FFE9AD"/>
+      <stop offset="0.72" stop-color="#A96E20"/>
+      <stop offset="1" stop-color="#E2B75D"/>
+    </linearGradient>
+    <linearGradient id="package" x1="378" y1="362" x2="652" y2="672" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#242521"/>
+      <stop offset="0.52" stop-color="#141514"/>
+      <stop offset="1" stop-color="#0B0C0C"/>
+    </linearGradient>
+    <linearGradient id="die" x1="432" y1="420" x2="600" y2="606" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7E5AB"/>
+      <stop offset="0.48" stop-color="#D4A34A"/>
+      <stop offset="1" stop-color="#8D5615"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="url(#surface)"/>
+  <rect width="1024" height="1024" rx="220" fill="url(#sheen)"/>
+  <rect x="2" y="2" width="1020" height="1020" rx="218" stroke="#EACB7A" stroke-opacity="0.14" stroke-width="4"/>
+
+  <g transform="translate(512 512) scale(1.34) translate(-512 -512)">
+    <g fill="url(#gold)">
+    <rect x="390" y="316" width="28" height="40" rx="7"/>
+    <rect x="444" y="316" width="28" height="40" rx="7"/>
+    <rect x="498" y="316" width="28" height="40" rx="7"/>
+    <rect x="552" y="316" width="28" height="40" rx="7"/>
+    <rect x="606" y="316" width="28" height="40" rx="7"/>
+
+    <rect x="390" y="668" width="28" height="40" rx="7"/>
+    <rect x="444" y="668" width="28" height="40" rx="7"/>
+    <rect x="498" y="668" width="28" height="40" rx="7"/>
+    <rect x="552" y="668" width="28" height="40" rx="7"/>
+    <rect x="606" y="668" width="28" height="40" rx="7"/>
+
+    <rect x="316" y="390" width="40" height="28" rx="7"/>
+    <rect x="316" y="444" width="40" height="28" rx="7"/>
+    <rect x="316" y="498" width="40" height="28" rx="7"/>
+    <rect x="316" y="552" width="40" height="28" rx="7"/>
+    <rect x="316" y="606" width="40" height="28" rx="7"/>
+
+    <rect x="668" y="390" width="40" height="28" rx="7"/>
+    <rect x="668" y="444" width="40" height="28" rx="7"/>
+    <rect x="668" y="498" width="40" height="28" rx="7"/>
+    <rect x="668" y="552" width="40" height="28" rx="7"/>
+    <rect x="668" y="606" width="40" height="28" rx="7"/>
+    </g>
+
+    <rect x="344" y="344" width="336" height="336" rx="54" fill="#030404" opacity="0.88" transform="translate(0 10)"/>
+    <rect x="352" y="352" width="320" height="320" rx="50" fill="url(#package)" stroke="url(#gold)" stroke-width="16"/>
+    <rect x="424" y="424" width="176" height="176" rx="30" fill="url(#die)"/>
+    <rect x="458" y="458" width="108" height="108" rx="20" fill="#101111"/>
+    <rect x="480" y="480" width="64" height="64" rx="13" fill="#D7A84D"/>
+    <rect x="382" y="382" width="26" height="26" rx="6" fill="#E1B861"/>
+  </g>
+</svg>

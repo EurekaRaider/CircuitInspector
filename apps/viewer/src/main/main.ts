@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { CoreClient } from "./core-client.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+const iconPath = path.resolve(directory, "../assets/icon.png");
 const cacheDir = path.resolve(
   process.env.CIRCUIT_INSPECTOR_CACHE_DIR ?? path.join(os.homedir(), ".circuit-inspector", "cache")
 );
@@ -38,6 +39,7 @@ app.on("open-url", (event, url) => {
 });
 
 app.whenReady().then(async () => {
+  if (process.platform === "darwin") app.dock?.setIcon(iconPath);
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -57,6 +59,7 @@ function createWindow() {
     minWidth: 1080,
     minHeight: 700,
     backgroundColor: "#17191b",
+    icon: iconPath,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     show: false,
     webPreferences: {
