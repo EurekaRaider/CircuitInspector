@@ -32,7 +32,7 @@
   <img src="docs/images/circuitinspector-viewer.png" alt="CircuitInspector Viewer focused on a Gerber test-point spacing violation" width="100%">
 </p>
 
-<p align="center"><sub>Actual packaged macOS arm64 Viewer rendering a local Gerber fixture and its selected test-point spacing violation.</sub></p>
+<p align="center"><sub>Current macOS arm64 Viewer rendering a local Gerber fixture and its selected test-point spacing violation.</sub></p>
 
 <div align="center">
 
