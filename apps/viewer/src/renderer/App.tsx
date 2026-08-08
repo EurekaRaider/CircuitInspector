@@ -14,9 +14,11 @@ import {
 import brandMark from "../../assets/icon.svg";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardCanvas, type BoardCanvasHandle } from "./BoardCanvas";
+import { DocumentAnalysisScreen } from "./DocumentAnalysisScreen";
 import { LOCALE_STORAGE_KEY, resolveLocale, translate, type Locale, type Translator } from "./i18n";
 import type {
   AnalysisSummary,
+  DocumentAnalysis,
   BoundsNm,
   DesignSummary,
   ProgressEvent,
@@ -36,6 +38,7 @@ export function App() {
   const [tile, setTile] = useState<TilePayload | null>(null);
   const [enabledLayers, setEnabledLayers] = useState<string[]>([]);
   const [analysis, setAnalysis] = useState<AnalysisSummary>();
+  const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis>();
   const [activeViolation, setActiveViolation] = useState<Violation | null>(null);
   const [rulePacks, setRulePacks] = useState<RulePack[]>([]);
   const [selectedRulePack, setSelectedRulePack] = useState("");
@@ -92,7 +95,15 @@ export function App() {
       if (!analysisId) return;
       setBusy(true);
       const loaded = await window.circuitInspector.readAnalysis(analysisId);
+      if ("kind" in loaded) {
+        setDesign(undefined);
+        setAnalysis(undefined);
+        setActiveViolation(null);
+        setDocumentAnalysis(loaded);
+        return;
+      }
       const summary = await window.circuitInspector.getDesignSummary(loaded.design_id);
+      setDocumentAnalysis(undefined);
       setDesign(summary);
       setAnalysis(loaded);
       const issue = parsed.searchParams.get("issue");
@@ -112,6 +123,7 @@ export function App() {
     setBusy(true);
     setError("");
     setAnalysis(undefined);
+    setDocumentAnalysis(undefined);
     setActiveViolation(null);
     try {
       setDesign(await window.circuitInspector.importDesign(source));
@@ -210,6 +222,15 @@ export function App() {
     ? progress.progress >= 100 ? t("designIndexed") : t("validatingDesign")
     : progress?.message ?? t("processingLocalData");
   const statusLabel = busy ? progressLabel : design ? `${design.format} · ${t("layers", { count: design.layers.length })}` : t("waitingForImport");
+
+  if (documentAnalysis) {
+    return <DocumentAnalysisScreen
+      analysis={documentAnalysis}
+      locale={locale}
+      onLocaleChange={() => setLocale((current) => current === "zh-CN" ? "en-US" : "zh-CN")}
+      onOpenDesign={() => void chooseDesign()}
+    />;
+  }
 
   return (
     <main className="app-shell grid h-[100dvh] min-w-[1080px] grid-rows-[64px_minmax(0,1fr)_32px] overflow-hidden text-[#ecebe7]">

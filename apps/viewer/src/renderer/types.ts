@@ -72,6 +72,145 @@ export interface AnalysisSummary {
   elapsed_ms: number;
 }
 
+export interface WiringConnection {
+  id: string;
+  product_connector: string;
+  product_pin: string;
+  product_net: string | null;
+  wib_connector: string;
+  wib_pin: string;
+  wib_net: string | null;
+  verdict: Violation["verdict"];
+  message: string;
+}
+
+export interface WiringAnalysis {
+  kind: "WIRING_COMPARISON";
+  id: string;
+  verdict: Violation["verdict"];
+  verification_mode: "DOCUMENT_BACKED";
+  pass_count: number;
+  fail_count: number;
+  review_count: number;
+  not_applicable_count: number;
+  product: SchematicPinout;
+  wib: SchematicPinout;
+  connections: WiringConnection[];
+  violations: Array<Violation & {
+    product_connector: string | null;
+    product_pin: string | null;
+    product_net: string | null;
+    wib_connector: string | null;
+    wib_pin: string | null;
+    wib_net: string | null;
+  }>;
+  report_uri: string;
+  report_path: string;
+}
+
+export interface SchematicPinout {
+  id: string;
+  role: "PRODUCT" | "WIB";
+  source_path: string;
+  source_hash: string;
+  revision: string | null;
+  status: "DRAFT" | "CONFIRMED";
+  pins: Array<{ connector: string; pin: string; net_name: string }>;
+  design_metrics: Array<{ id: string; value: string | number; unit: string | null }>;
+}
+
+export interface TestRecommendation {
+  id: string;
+  status: "REVIEW";
+  category: string;
+  priority: "HIGH" | "MEDIUM";
+  title: string;
+  net_names: string[];
+  rationale: string;
+  suggested_test: string;
+  stimulus: string;
+  observation: string;
+  missing_inputs: string[];
+  closure_evidence: string;
+}
+
+export interface WibDesignRecommendation {
+  id: string;
+  status: "REVIEW";
+  category: string;
+  priority: "HIGH" | "MEDIUM";
+  title: string;
+  related_net_names: string[];
+  recommendation: string;
+  rationale: string;
+  validation_needed: string;
+}
+
+export interface WibConstraint {
+  id: string;
+  status: "REVIEW";
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
+  area: string;
+  requirement: string;
+  metric: string;
+  comparator: string;
+  required_value: string | number | null;
+  unit: string | null;
+  owner: string;
+}
+
+export interface TestRecommendationAnalysis {
+  kind: "MANUFACTURING_TEST_RECOMMENDATIONS";
+  id: string;
+  verdict: "REVIEW";
+  verification_mode: "DOCUMENT_BACKED";
+  product: SchematicPinout;
+  recommendation_count: number;
+  recommendations: TestRecommendation[];
+  wib_design_recommendations: WibDesignRecommendation[];
+  wib_constraints: WibConstraint[];
+  diagnostics: Array<{ code: string; severity: string; message: string }>;
+  report_uri: string;
+  report_path: string;
+}
+
+export interface WibConstraintResult {
+  id: string;
+  constraint_id: string;
+  status: Violation["verdict"];
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
+  area: string;
+  requirement: string;
+  comparator: string;
+  required_value: string | number | { min: number; max: number };
+  actual_value: string | number | null;
+  unit: string | null;
+  message: string;
+}
+
+export interface WibQualificationAnalysis {
+  kind: "WIB_DESIGN_QUALIFICATION";
+  id: string;
+  verdict: Violation["verdict"];
+  verification_mode: "DOCUMENT_BACKED";
+  product_pinout_id: string;
+  wib_pinout_id: string;
+  constraint_set_id: string;
+  wiring_analysis_id: string;
+  wiring_verdict: Violation["verdict"];
+  pass_count: number;
+  fail_count: number;
+  review_count: number;
+  not_applicable_count: number;
+  constraint_results: WibConstraintResult[];
+  violations: Array<WibConstraintResult & { rule_id: string; title: string; severity: "ERROR" | "WARNING" }>;
+  report_uri: string;
+  report_path: string;
+}
+
+export type DocumentAnalysis = WiringAnalysis | TestRecommendationAnalysis | WibQualificationAnalysis;
+export type AnyAnalysis = AnalysisSummary | DocumentAnalysis;
+
 export interface TilePayload {
   path: string;
   feature_count: number;
@@ -91,7 +230,7 @@ export interface ViewerApi {
   listRulePacks(): Promise<{ rule_packs: RulePack[] }>;
   approveRulePack(rulePackId: string, approvedBy: string): Promise<RulePack>;
   runAnalysis(designId: string, rulePackId: string): Promise<AnalysisSummary>;
-  readAnalysis(analysisId: string): Promise<AnalysisSummary>;
+  readAnalysis(analysisId: string): Promise<AnyAnalysis>;
   openEvidence(filePath: string): Promise<{ ok: boolean; error: string | null }>;
   onProgress(callback: (event: ProgressEvent) => void): () => void;
   onDeepLink(callback: (url: string) => void): () => void;

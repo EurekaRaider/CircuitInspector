@@ -7,6 +7,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { CoreClient } from "./core-client.js";
 import { extractRulePack } from "./documents.js";
+import { readLocalDocumentAnalysis, recommendManufacturingTests } from "./test-recommendations.js";
+import {
+  compareFixtureWiring,
+  confirmSchematicPinout,
+  importSchematicPinout,
+  readWiringAnalysis
+} from "./wiring.js";
+import { createWibConstraintSet, qualifyWibDesign } from "./wib-qualification.js";
 
 const cacheDir = path.resolve(
   process.env.CIRCUIT_INSPECTOR_CACHE_DIR ?? path.join(os.homedir(), ".circuit-inspector", "cache")
@@ -56,6 +64,287 @@ server.registerTool(
     );
     await progress(extra, 100, 100, "PCB design is indexed");
     return toolResult(result, `Imported ${String(result.format)} design ${String(result.id)}.`);
+  }
+);
+
+server.registerTool(
+  "import_schematic",
+  {
+    title: "Import product or WIB schematic pinout",
+    description: "Import connector/pin/NET NAME evidence from a local JSON, CSV, TSV, text, or text-bearing PDF schematic export. PDF rows remain candidates until confirmed.",
+    inputSchema: {
+      path: z.string().min(1),
+      role: z.enum(["PRODUCT", "WIB"]),
+      revision: z.string().min(1).optional()
+    },
+    outputSchema: {
+      id: z.string(),
+      role: z.enum(["PRODUCT", "WIB"]),
+      source_path: z.string(),
+      source_hash: z.string(),
+      source_format: z.enum(["JSON", "CSV", "TSV", "TEXT", "PDF"]),
+      revision: z.string().nullable(),
+      status: z.enum(["DRAFT", "CONFIRMED"]),
+      pins: z.array(z.record(z.string(), z.unknown())),
+      design_metrics: z.array(z.record(z.string(), z.unknown())),
+      diagnostics: z.array(z.record(z.string(), z.unknown())),
+      confirmation: z.record(z.string(), z.unknown()).nullable()
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ path: schematicPath, role, revision }, extra) => {
+    await progress(extra, 0, 100, "Extracting connector, pin, and NET NAME evidence");
+    const document = await importSchematicPinout(schematicPath, role, cacheDir, revision);
+    await progress(extra, 100, 100, "Schematic pinout candidate is ready for confirmation");
+    return toolResult(document as unknown as Record<string, unknown>, `Imported ${role} schematic pinout ${document.id}: ${document.pins.length} pin row(s), status ${document.status}.`);
+  }
+);
+
+server.registerTool(
+  "confirm_schematic_pinout",
+  {
+    title: "Confirm schematic pinout evidence",
+    description: "Confirm the complete connector/pin/NET NAME set before it can support deterministic WIB PASS or FAIL. Supply corrected pins when PDF extraction is incomplete or wrong.",
+    inputSchema: {
+      pinout_id: z.string().min(1),
+      confirmed_by: z.string().min(1),
+      revision: z.string().min(1).optional(),
+      pins: z.array(z.object({ connector: z.string().min(1), pin: z.string().min(1), net_name: z.string().min(1) })).min(1).optional(),
+      design_metrics: z.array(z.object({
+        id: z.string().min(1),
+        value: z.union([z.string().min(1), z.number().finite()]),
+        unit: z.string().nullable().optional()
+      })).optional()
+    },
+    outputSchema: {
+      id: z.string(),
+      role: z.enum(["PRODUCT", "WIB"]),
+      source_path: z.string(),
+      source_hash: z.string(),
+      source_format: z.enum(["JSON", "CSV", "TSV", "TEXT", "PDF"]),
+      revision: z.string().nullable(),
+      status: z.literal("CONFIRMED"),
+      pins: z.array(z.record(z.string(), z.unknown())),
+      design_metrics: z.array(z.record(z.string(), z.unknown())),
+      diagnostics: z.array(z.record(z.string(), z.unknown())),
+      confirmation: z.record(z.string(), z.unknown())
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ pinout_id, confirmed_by, pins, revision, design_metrics }) => {
+    const document = await confirmSchematicPinout(pinout_id, confirmed_by, cacheDir, pins, revision, design_metrics);
+    return toolResult(document as unknown as Record<string, unknown>, `Confirmed ${document.role} pinout ${document.id} with ${document.pins.length} pin row(s).`);
+  }
+);
+
+server.registerTool(
+  "compare_fixture_wiring",
+  {
+    title: "Compare product and WIB schematic wiring",
+    description: "Compare confirmed product and WIB connector pins one-to-one by NET NAME, generate an evidence-linked report, and return PASS only for a complete confirmed mapping with no mismatch.",
+    inputSchema: {
+      product_pinout_id: z.string().min(1),
+      wib_pinout_id: z.string().min(1),
+      connector_mappings: z.array(z.object({
+        product_connector: z.string().min(1),
+        wib_connector: z.string().min(1),
+        pin_map: z.array(z.object({ product_pin: z.string().min(1), wib_pin: z.string().min(1) })).min(1).optional()
+      })).min(1).optional(),
+      net_aliases: z.array(z.object({ product_net: z.string().min(1), wib_net: z.string().min(1) })).optional(),
+      case_sensitive: z.boolean().default(false)
+    },
+    outputSchema: {
+      kind: z.literal("WIRING_COMPARISON"),
+      id: z.string(),
+      product_pinout_id: z.string(),
+      wib_pinout_id: z.string(),
+      verdict: z.enum(["PASS", "FAIL", "REVIEW", "NOT_APPLICABLE"]),
+      verification_mode: z.literal("DOCUMENT_BACKED"),
+      pass_count: z.number(),
+      fail_count: z.number(),
+      review_count: z.number(),
+      not_applicable_count: z.number(),
+      connections: z.array(z.record(z.string(), z.unknown())),
+      violations: z.array(z.record(z.string(), z.unknown())),
+      diagnostics: z.array(z.record(z.string(), z.unknown())),
+      report_uri: z.string(),
+      report_path: z.string(),
+      elapsed_ms: z.number(),
+      product: z.record(z.string(), z.unknown()),
+      wib: z.record(z.string(), z.unknown()),
+      connector_mappings: z.array(z.record(z.string(), z.unknown())),
+      net_aliases: z.array(z.record(z.string(), z.unknown()))
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  },
+  async ({ product_pinout_id, wib_pinout_id, connector_mappings, net_aliases, case_sensitive }, extra) => {
+    await progress(extra, 0, 100, "Comparing product and WIB pin mappings");
+    const analysis = await compareFixtureWiring(product_pinout_id, wib_pinout_id, cacheDir, {
+      ...(connector_mappings ? { connectorMappings: connector_mappings } : {}),
+      ...(net_aliases ? { netAliases: net_aliases } : {}),
+      caseSensitive: case_sensitive
+    });
+    await progress(extra, 100, 100, "WIB wiring comparison and report are ready");
+    return {
+      content: [
+        { type: "text" as const, text: `WIB wiring ${analysis.id}: ${analysis.verdict}. PASS ${analysis.pass_count}, FAIL ${analysis.fail_count}, REVIEW ${analysis.review_count}.` },
+        { type: "resource_link" as const, name: "Open wiring report", uri: analysis.report_uri, mimeType: "text/html" },
+        { type: "resource_link" as const, name: "Open wiring analysis in CircuitInspector Viewer", uri: viewerLink(analysis.id), mimeType: "application/x-circuit-inspector" }
+      ],
+      structuredContent: analysis as unknown as Record<string, unknown>
+    };
+  }
+);
+
+server.registerTool(
+  "recommend_manufacturing_tests",
+  {
+    title: "Recommend manufacturing tests and WIB design constraints",
+    description: "Generate schematic-backed manufacturing-line test recommendations, corresponding WIB design guidance, and a hard-constraint matrix. Missing factory/tester numeric limits remain REVIEW and are never invented.",
+    inputSchema: { product_pinout_id: z.string().min(1) },
+    outputSchema: {
+      kind: z.literal("MANUFACTURING_TEST_RECOMMENDATIONS"),
+      id: z.string(),
+      product_pinout_id: z.string(),
+      product: z.record(z.string(), z.unknown()),
+      verdict: z.literal("REVIEW"),
+      verification_mode: z.literal("DOCUMENT_BACKED"),
+      recommendation_count: z.number(),
+      recommendations: z.array(z.record(z.string(), z.unknown())),
+      wib_design_recommendations: z.array(z.record(z.string(), z.unknown())),
+      wib_constraints: z.array(z.record(z.string(), z.unknown())),
+      diagnostics: z.array(z.record(z.string(), z.unknown())),
+      report_uri: z.string(),
+      report_path: z.string(),
+      elapsed_ms: z.number()
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  },
+  async ({ product_pinout_id }, extra) => {
+    await progress(extra, 0, 100, "Classifying schematic NET NAME evidence and building the manufacturing test plan");
+    const plan = await recommendManufacturingTests(product_pinout_id, cacheDir);
+    await progress(extra, 100, 100, "Manufacturing test, WIB design, and hard-constraint lists are ready");
+    return {
+      content: [
+        { type: "text" as const, text: `Generated ${plan.recommendation_count} manufacturing-test groups, ${plan.wib_design_recommendations.length} WIB design recommendations, and ${plan.wib_constraints.length} hard-constraint rows. Overall status remains REVIEW.` },
+        { type: "resource_link" as const, name: "Open manufacturing test and WIB design report", uri: plan.report_uri, mimeType: "text/html" },
+        { type: "resource_link" as const, name: "Open recommendations in CircuitInspector Viewer", uri: viewerLink(plan.id), mimeType: "application/x-circuit-inspector" }
+      ],
+      structuredContent: plan as unknown as Record<string, unknown>
+    };
+  }
+);
+
+const constraintValueSchema = z.union([
+  z.string().min(1),
+  z.number().finite(),
+  z.object({ min: z.number().finite(), max: z.number().finite() })
+]);
+
+server.registerTool(
+  "create_wib_constraint_set",
+  {
+    title: "Create an approved WIB hard-constraint set",
+    description: "Store explicit WIB hard requirements with comparator, value/range, unit, authority, revision, and approver. This tool accepts structured approved requirements; it does not infer or invent numeric limits.",
+    inputSchema: {
+      title: z.string().min(1),
+      revision: z.string().min(1),
+      approved_by: z.string().min(1),
+      constraints: z.array(z.object({
+        id: z.string().min(1),
+        area: z.string().min(1),
+        requirement: z.string().min(1),
+        check: z.enum(["WIRING_ONE_TO_ONE", "NET_IDENTITY", "COMPLETE_PIN_COVERAGE", "NO_UNINTENDED_INTERCONNECT", "NC_ISOLATION", "DESIGN_METRIC"]),
+        metric_id: z.string().nullable().optional(),
+        comparator: z.enum(["EXACT", "ALL", "NONE", "MAXIMUM", "MINIMUM", "RANGE"]),
+        required_value: constraintValueSchema,
+        unit: z.string().nullable().optional(),
+        verification_mode: z.enum(["DOCUMENT_BACKED", "MANUAL_FACTORY_CONFIRMATION"]),
+        source_authority: z.string().min(1)
+      })).min(1)
+    },
+    outputSchema: {
+      id: z.string(),
+      title: z.string(),
+      revision: z.string(),
+      status: z.literal("APPROVED"),
+      approved_by: z.string(),
+      approved_at: z.string(),
+      content_hash: z.string(),
+      constraints: z.array(z.record(z.string(), z.unknown()))
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ title, revision, approved_by, constraints }) => {
+    const constraintSet = await createWibConstraintSet({
+      title,
+      revision,
+      approvedBy: approved_by,
+      constraints: constraints.map((constraint) => ({
+        ...constraint,
+        metric_id: constraint.metric_id ?? null,
+        unit: constraint.unit ?? null
+      }))
+    }, cacheDir);
+    return toolResult(constraintSet as unknown as Record<string, unknown>, `Stored approved WIB constraint set ${constraintSet.id} revision ${constraintSet.revision} with ${constraintSet.constraints.length} hard requirement(s).`);
+  }
+);
+
+server.registerTool(
+  "qualify_wib_design",
+  {
+    title: "Qualify final WIB design",
+    description: "Close the loop across a confirmed product schematic, confirmed actual WIB schematic/design metrics, and an approved WIB hard-constraint set. PASS requires every applicable constraint to have supported evidence and pass.",
+    inputSchema: {
+      product_pinout_id: z.string().min(1),
+      wib_pinout_id: z.string().min(1),
+      constraint_set_id: z.string().min(1),
+      connector_mappings: z.array(z.object({
+        product_connector: z.string().min(1),
+        wib_connector: z.string().min(1),
+        pin_map: z.array(z.object({ product_pin: z.string().min(1), wib_pin: z.string().min(1) })).min(1).optional()
+      })).min(1).optional(),
+      net_aliases: z.array(z.object({ product_net: z.string().min(1), wib_net: z.string().min(1) })).optional(),
+      case_sensitive: z.boolean().default(false)
+    },
+    outputSchema: {
+      kind: z.literal("WIB_DESIGN_QUALIFICATION"),
+      id: z.string(),
+      product_pinout_id: z.string(),
+      wib_pinout_id: z.string(),
+      constraint_set_id: z.string(),
+      verdict: z.enum(["PASS", "FAIL", "REVIEW", "NOT_APPLICABLE"]),
+      verification_mode: z.literal("DOCUMENT_BACKED"),
+      wiring_analysis_id: z.string(),
+      wiring_verdict: z.enum(["PASS", "FAIL", "REVIEW", "NOT_APPLICABLE"]),
+      pass_count: z.number(),
+      fail_count: z.number(),
+      review_count: z.number(),
+      not_applicable_count: z.number(),
+      constraint_results: z.array(z.record(z.string(), z.unknown())),
+      violations: z.array(z.record(z.string(), z.unknown())),
+      report_uri: z.string(),
+      report_path: z.string(),
+      elapsed_ms: z.number()
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  },
+  async ({ product_pinout_id, wib_pinout_id, constraint_set_id, connector_mappings, net_aliases, case_sensitive }, extra) => {
+    await progress(extra, 0, 100, "Running closed-loop WIB wiring and hard-constraint qualification");
+    const qualification = await qualifyWibDesign(product_pinout_id, wib_pinout_id, constraint_set_id, cacheDir, {
+      ...(connector_mappings ? { connectorMappings: connector_mappings } : {}),
+      ...(net_aliases ? { netAliases: net_aliases } : {}),
+      caseSensitive: case_sensitive
+    });
+    await progress(extra, 100, 100, "Final WIB qualification report is ready");
+    return {
+      content: [
+        { type: "text" as const, text: `Final WIB qualification ${qualification.id}: ${qualification.verdict}. PASS ${qualification.pass_count}, FAIL ${qualification.fail_count}, REVIEW ${qualification.review_count}.` },
+        { type: "resource_link" as const, name: "Open final WIB qualification report", uri: qualification.report_uri, mimeType: "text/html" },
+        { type: "resource_link" as const, name: "Open final WIB qualification in CircuitInspector Viewer", uri: viewerLink(qualification.id), mimeType: "application/x-circuit-inspector" }
+      ],
+      structuredContent: qualification as unknown as Record<string, unknown>
+    };
   }
 );
 
@@ -167,6 +456,21 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false }
   },
   async (input, extra) => {
+    const wiring = await readWiringAnalysis(input.analysis_id, cacheDir);
+    if (wiring) {
+      const filtered = wiring.violations
+        .filter((finding) => input.net_name == null || finding.net_names.some((net) => net.includes(input.net_name!)))
+        .filter((finding) => input.component_ref == null || finding.component_refs.some((reference) => reference.includes(input.component_ref!)))
+        .filter((finding) => input.rule_id == null || finding.rule_id === input.rule_id)
+        .filter((finding) => input.verdict == null || finding.verdict === input.verdict);
+      const result = {
+        analysis_id: wiring.id,
+        total: filtered.length,
+        offset: input.offset,
+        violations: filtered.slice(input.offset, input.offset + input.limit)
+      };
+      return toolResult(result, `Returned ${result.violations.length} wiring findings.`);
+    }
     const result = await core.request<Record<string, unknown>>(
       "query_violations",
       { cache_dir: cacheDir, ...input },
@@ -220,7 +524,8 @@ server.registerResource(
   new ResourceTemplate("circuit://analysis/{analysisId}/summary", { list: undefined }),
   { title: "CircuitInspector analysis summary", mimeType: "application/json" },
   async (uri, { analysisId }) => {
-    const analysis = await core.request("read_analysis", { cache_dir: cacheDir, analysis_id: String(analysisId) });
+    const analysis = await readLocalDocumentAnalysis(String(analysisId), cacheDir)
+      ?? await core.request("read_analysis", { cache_dir: cacheDir, analysis_id: String(analysisId) });
     return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(analysis, null, 2) }] };
   }
 );

@@ -143,9 +143,17 @@ ipcMain.handle("rules:approve", (_event, rulePackId: string, approvedBy: string)
 ipcMain.handle("analysis:run", (_event, designId: string, rulePackId: string) =>
   core.request("analyze_design", { cache_dir: cacheDir, design_id: designId, rule_pack_id: rulePackId })
 );
-ipcMain.handle("analysis:read", (_event, analysisId: string) =>
-  core.request("read_analysis", { cache_dir: cacheDir, analysis_id: analysisId })
-);
+ipcMain.handle("analysis:read", async (_event, analysisId: string) => {
+  if (!/^[a-zA-Z0-9_-]+$/.test(analysisId)) throw new Error("Invalid analysis identifier");
+  const localAnalysis = path.join(cacheDir, "evidence", analysisId, "analysis.json");
+  try {
+    const parsed = JSON.parse(await readFile(localAnalysis, "utf8")) as { kind?: string };
+    if (["WIRING_COMPARISON", "MANUFACTURING_TEST_RECOMMENDATIONS", "WIB_DESIGN_QUALIFICATION"].includes(parsed.kind ?? "")) return parsed;
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+  }
+  return core.request("read_analysis", { cache_dir: cacheDir, analysis_id: analysisId });
+});
 ipcMain.handle("evidence:open", async (_event, filePath: string) => {
   const evidenceRoot = path.resolve(cacheDir, "evidence");
   const resolved = path.resolve(filePath);

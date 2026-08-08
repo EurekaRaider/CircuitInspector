@@ -1,0 +1,17 @@
+{
+  "revision": "B1",
+  "connectors": [
+    {
+      "reference": "P1",
+      "pins": [
+        { "number": "1", "net": "VDD_3V3" },
+        { "number": "2", "net": "GND" },
+        { "number": "3", "net": "I2C_SDA" },
+        { "number": "4", "net": "I2C_SCL" }
+      ]
+    }
+  ],
+  "design_metrics": [
+    { "id": "CHANNEL_MAX_VOLTAGE", "value": 5, "unit": "V" }
+  ]
+}
