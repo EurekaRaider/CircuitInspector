@@ -92,6 +92,31 @@ export interface AnalysisSummary {
   violations: Violation[];
   report_uri: string;
   elapsed_ms: number;
+  report_path?: string;
+}
+
+export interface RuleDefinition {
+  id: string;
+  title: string;
+  kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING";
+  source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL";
+  target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | null;
+  metric: "CENTER_TO_CENTER" | "EDGE_TO_EDGE" | "BODY_TO_PAD" | null;
+  threshold_nm: number;
+  severity: "INFO" | "WARNING" | "ERROR";
+  layer_functions: string[];
+  same_net_only: boolean;
+  different_net_only: boolean;
+  citation: RuleCitation;
+}
+
+export interface RulePack {
+  id: string;
+  version: string;
+  title: string;
+  status: "DRAFT" | "APPROVED" | "DEPRECATED";
+  rules: RuleDefinition[];
+  approval: { approved_by: string; approved_at: string; content_hash: string } | null;
 }
 
 export interface SchematicPin {
@@ -99,6 +124,13 @@ export interface SchematicPin {
   pin: string;
   net_name: string;
   confidence: "EXPLICIT" | "INFERRED";
+  evidence?: {
+    source_path: string;
+    source_hash: string;
+    page: number | null;
+    line: number | null;
+    excerpt: string;
+  };
 }
 
 export interface SchematicDesignMetric {
@@ -109,6 +141,7 @@ export interface SchematicDesignMetric {
 }
 
 export interface SchematicPinout {
+  schema_version: 1;
   id: string;
   role: "PRODUCT" | "WIB";
   source_path: string;
@@ -118,6 +151,7 @@ export interface SchematicPinout {
   status: "DRAFT" | "CONFIRMED";
   pins: SchematicPin[];
   design_metrics: SchematicDesignMetric[];
+  diagnostics: Diagnostic[];
   confirmation: { confirmed_by: string; confirmed_at: string; content_hash: string } | null;
 }
 
@@ -140,10 +174,15 @@ export interface WiringConnection {
 }
 
 export interface WiringAnalysis {
+  schema_version: 1;
   kind: "WIRING_COMPARISON";
   id: string;
   product_pinout_id: string;
   wib_pinout_id: string;
+  product: SchematicPinout;
+  wib: SchematicPinout;
+  connector_mappings: ConnectorMapping[];
+  net_aliases: Array<{ product_net: string; wib_net: string }>;
   verdict: Verdict;
   verification_mode: "DOCUMENT_BACKED";
   pass_count: number;
@@ -152,19 +191,24 @@ export interface WiringAnalysis {
   not_applicable_count: number;
   connections: WiringConnection[];
   violations: Array<Record<string, unknown>>;
+  diagnostics: Diagnostic[];
   report_uri: string;
   report_path: string;
 }
 
 export interface ManufacturingTestPlan {
+  schema_version: 1;
   kind: "MANUFACTURING_TEST_RECOMMENDATIONS";
   id: string;
   product_pinout_id: string;
+  product: SchematicPinout;
   verdict: "REVIEW";
   verification_mode: "DOCUMENT_BACKED";
   recommendations: Array<Record<string, unknown>>;
   wib_design_recommendations: Array<Record<string, unknown>>;
   wib_constraints: Array<Record<string, unknown>>;
+  recommendation_count: number;
+  diagnostics: Diagnostic[];
   report_uri: string;
   report_path: string;
 }
@@ -183,6 +227,7 @@ export interface WibConstraintDefinition {
 }
 
 export interface WibConstraintSet {
+  schema_version: 1;
   id: string;
   title: string;
   revision: string;
@@ -194,6 +239,7 @@ export interface WibConstraintSet {
 }
 
 export interface WibQualification {
+  schema_version: 1;
   kind: "WIB_DESIGN_QUALIFICATION";
   id: string;
   product_pinout_id: string;
@@ -210,6 +256,75 @@ export interface WibQualification {
   constraint_results: Array<Record<string, unknown>>;
   report_uri: string;
   report_path: string;
+}
+
+export type DocumentAnalysis = WiringAnalysis | ManufacturingTestPlan | WibQualification;
+export type AnyAnalysis = AnalysisSummary | DocumentAnalysis;
+
+export type ArtifactKind = "DESIGN" | "RULE_PACK" | "PINOUT" | "CONSTRAINT_SET" | "ANALYSIS" | "WORKFLOW_DRAFT";
+
+export interface ArtifactSummary {
+  id: string;
+  kind: ArtifactKind;
+  title: string;
+  subtitle: string;
+  status: string | null;
+  verdict: Verdict | null;
+  analysis_kind: "GEOMETRY" | "WIRING_COMPARISON" | "MANUFACTURING_TEST_RECOMMENDATIONS" | "WIB_DESIGN_QUALIFICATION" | null;
+  source_path: string | null;
+  updated_at: string;
+}
+
+export interface ArtifactCatalog {
+  artifacts: ArtifactSummary[];
+  diagnostics: Diagnostic[];
+}
+
+export interface WibWorkflowDraft {
+  schema_version: 1;
+  id: string;
+  title: string;
+  step: 1 | 2 | 3 | 4 | 5 | 6;
+  product_pinout_id: string | null;
+  wib_pinout_id: string | null;
+  product_edits?: WibDraftPinoutEdits;
+  wib_edits?: WibDraftPinoutEdits;
+  connector_mappings: ConnectorMapping[];
+  net_aliases: Array<{ product_net: string; wib_net: string }>;
+  case_sensitive?: boolean;
+  constraint_set_id: string | null;
+  constraint_title?: string;
+  constraint_revision?: string;
+  constraint_rows: Array<Partial<WibConstraintDefinition> & { id: string }>;
+  updated_at: string;
+}
+
+export interface WibDraftPinoutEdits {
+  pins: Array<{ connector: string; pin: string; net_name: string }>;
+  design_metrics: Array<{ id: string; value: string | number; unit: string | null }>;
+  revision: string;
+}
+
+export type TableKind = "PINOUT" | "DESIGN_METRIC" | "CONNECTOR_MAPPING" | "NET_ALIAS" | "CONSTRAINT";
+export type TableFormat = "CSV" | "JSON";
+
+export interface TableRowError {
+  row: number;
+  field: string | null;
+  message: string;
+}
+
+export interface TableImportResult {
+  schema_version: 1;
+  kind: TableKind;
+  rows: Array<Record<string, unknown>>;
+  errors: TableRowError[];
+}
+
+export interface WorkflowProgressEvent {
+  phase: string;
+  progress: number;
+  message: string;
 }
 
 export interface TileDescriptor {

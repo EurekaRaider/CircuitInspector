@@ -9,6 +9,9 @@ await Promise.all([
     target: "node22",
     format: "esm",
     sourcemap: true,
+    banner: {
+      js: "import { createRequire as __circuitInspectorCreateRequire } from 'node:module';\nconst require = __circuitInspectorCreateRequire(import.meta.url);"
+    },
     external: ["electron"]
   }),
   build({

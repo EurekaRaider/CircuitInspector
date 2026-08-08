@@ -102,4 +102,27 @@ describe("closed-loop WIB qualification", () => {
     expect(qualification.verdict).toBe("REVIEW");
     expect(qualification.review_count).toBe(1);
   });
+
+  it("rejects metric constraints without a unit before approval", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "circuit-inspector-wib-units-"));
+    temporaryDirectories.push(root);
+
+    await expect(createWibConstraintSet({
+      title: "Invalid constraints",
+      revision: "1",
+      approvedBy: "test-engineering",
+      constraints: [{
+        id: "WIB-METRIC",
+        area: "ELECTRICAL",
+        requirement: "Voltage must stay below the controlled limit",
+        check: "DESIGN_METRIC",
+        metric_id: "MAX_VOLTAGE",
+        comparator: "MAXIMUM",
+        required_value: 5,
+        unit: null,
+        verification_mode: "DOCUMENT_BACKED",
+        source_authority: "Approved tester specification"
+      }]
+    }, path.join(root, "cache"))).rejects.toThrow(/requires unit/);
+  });
 });

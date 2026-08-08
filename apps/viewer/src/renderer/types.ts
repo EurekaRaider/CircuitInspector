@@ -1,3 +1,16 @@
+import type {
+  ArtifactCatalog,
+  ConnectorMapping,
+  TableFormat,
+  TableImportResult,
+  TableKind,
+  WibConstraintDefinition,
+  WibConstraintSet,
+  WibWorkflowDraft
+} from "@circuit-inspector/contracts";
+
+export type { ArtifactCatalog, ConnectorMapping, TableFormat, TableImportResult, TableKind, WibConstraintDefinition, WibConstraintSet, WibWorkflowDraft };
+
 export type CoverageLevel = "EXPLICIT" | "SUPPLEMENTED" | "INFERRED" | "MISSING";
 
 export interface BoundsNm {
@@ -36,7 +49,20 @@ export interface RulePack {
   version: string;
   title: string;
   status: "DRAFT" | "APPROVED" | "DEPRECATED";
-  rules: Array<{ id: string; title: string; threshold_nm: number; citation?: { excerpt: string } }>;
+  rules: Array<{
+    id: string;
+    title: string;
+    kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING";
+    source: string;
+    target: string | null;
+    metric: string | null;
+    threshold_nm: number;
+    severity: "INFO" | "WARNING" | "ERROR";
+    layer_functions: string[];
+    same_net_only: boolean;
+    different_net_only: boolean;
+    citation: { source_path: string; source_hash: string; page: number | null; paragraph: number | null; excerpt: string };
+  }>;
   approval: { approved_by: string; approved_at: string; content_hash: string } | null;
 }
 
@@ -109,14 +135,18 @@ export interface WiringAnalysis {
 }
 
 export interface SchematicPinout {
+  schema_version: 1;
   id: string;
   role: "PRODUCT" | "WIB";
   source_path: string;
   source_hash: string;
+  source_format: "JSON" | "CSV" | "TSV" | "TEXT" | "PDF";
   revision: string | null;
   status: "DRAFT" | "CONFIRMED";
-  pins: Array<{ connector: string; pin: string; net_name: string }>;
-  design_metrics: Array<{ id: string; value: string | number; unit: string | null }>;
+  pins: Array<{ connector: string; pin: string; net_name: string; confidence?: "EXPLICIT" | "INFERRED" }>;
+  design_metrics: Array<{ id: string; value: string | number; unit: string | null; confidence?: "EXPLICIT" | "INFERRED" }>;
+  diagnostics: Array<{ code: string; severity: "INFO" | "WARNING" | "ERROR"; message: string }>;
+  confirmation: { confirmed_by: string; confirmed_at: string; content_hash: string } | null;
 }
 
 export interface TestRecommendation {
@@ -157,9 +187,13 @@ export interface WibConstraint {
   required_value: string | number | null;
   unit: string | null;
   owner: string;
+  source_authority?: string;
+  related_net_names?: string[];
+  closure_evidence?: string;
 }
 
 export interface TestRecommendationAnalysis {
+  schema_version?: 1;
   kind: "MANUFACTURING_TEST_RECOMMENDATIONS";
   id: string;
   verdict: "REVIEW";
@@ -230,8 +264,45 @@ export interface ViewerApi {
   listRulePacks(): Promise<{ rule_packs: RulePack[] }>;
   approveRulePack(rulePackId: string, approvedBy: string): Promise<RulePack>;
   runAnalysis(designId: string, rulePackId: string): Promise<AnalysisSummary>;
+  queryViolations(input: Record<string, unknown>): Promise<{ analysis_id: string; total: number; offset: number; violations: Violation[] }>;
+  renderEvidence(input: Record<string, unknown>): Promise<{ analysis_id: string; evidence: Array<{ violation_id: string; png_path: string; svg_path: string }> }>;
   readAnalysis(analysisId: string): Promise<AnyAnalysis>;
   openEvidence(filePath: string): Promise<{ ok: boolean; error: string | null }>;
+  chooseWorkbenchInput(kind: "RULE_DOCUMENT" | "SCHEMATIC" | "TABLE", multiple: boolean, locale: "zh-CN" | "en-US"): Promise<string[]>;
+  listArtifacts(): Promise<ArtifactCatalog>;
+  extractRulePack(input: { paths: string[]; title?: string }): Promise<{ rule_pack: RulePack; passage_count: number; rule_count: number; rag_index_path: string }>;
+  importSchematic(input: { path: string; role: "PRODUCT" | "WIB"; revision?: string }): Promise<SchematicPinout>;
+  readPinout(id: string): Promise<SchematicPinout>;
+  confirmPinout(input: {
+    pinout_id: string;
+    confirmed_by: string;
+    revision?: string;
+    pins: Array<{ connector: string; pin: string; net_name: string }>;
+    design_metrics: Array<{ id: string; value: string | number; unit?: string | null }>;
+  }): Promise<SchematicPinout>;
+  compareWiring(input: {
+    product_pinout_id: string;
+    wib_pinout_id: string;
+    connector_mappings: ConnectorMapping[];
+    net_aliases: Array<{ product_net: string; wib_net: string }>;
+    case_sensitive: boolean;
+  }): Promise<WiringAnalysis>;
+  recommendTests(productPinoutId: string): Promise<TestRecommendationAnalysis>;
+  createConstraintSet(input: { title: string; revision: string; approved_by: string; constraints: WibConstraintDefinition[] }): Promise<WibConstraintSet>;
+  readConstraintSet(id: string): Promise<WibConstraintSet>;
+  qualifyWib(input: {
+    product_pinout_id: string;
+    wib_pinout_id: string;
+    constraint_set_id: string;
+    connector_mappings: ConnectorMapping[];
+    net_aliases: Array<{ product_net: string; wib_net: string }>;
+    case_sensitive: boolean;
+  }): Promise<WibQualificationAnalysis>;
+  saveWibDraft(draft: WibWorkflowDraft): Promise<WibWorkflowDraft>;
+  readWibDraft(id: string): Promise<WibWorkflowDraft>;
+  importTable(kind: TableKind, filePath: string): Promise<TableImportResult>;
+  parseTableText(kind: TableKind, text: string): Promise<TableImportResult>;
+  exportTable(kind: TableKind, rows: Array<Record<string, unknown>>, format: TableFormat, locale: "zh-CN" | "en-US"): Promise<{ ok: boolean; path: string | null }>;
   onProgress(callback: (event: ProgressEvent) => void): () => void;
   onDeepLink(callback: (url: string) => void): () => void;
 }

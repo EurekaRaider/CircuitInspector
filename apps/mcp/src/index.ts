@@ -6,15 +6,17 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { CoreClient } from "./core-client.js";
-import { extractRulePack } from "./documents.js";
-import { readLocalDocumentAnalysis, recommendManufacturingTests } from "./test-recommendations.js";
 import {
   compareFixtureWiring,
   confirmSchematicPinout,
   importSchematicPinout,
-  readWiringAnalysis
-} from "./wiring.js";
-import { createWibConstraintSet, qualifyWibDesign } from "./wib-qualification.js";
+  readLocalDocumentAnalysis,
+  readWiringAnalysis,
+  recommendManufacturingTests,
+  createWibConstraintSet,
+  extractRulePack,
+  qualifyWibDesign
+} from "@circuit-inspector/workflows";
 
 const cacheDir = path.resolve(
   process.env.CIRCUIT_INSPECTOR_CACHE_DIR ?? path.join(os.homedir(), ".circuit-inspector", "cache")

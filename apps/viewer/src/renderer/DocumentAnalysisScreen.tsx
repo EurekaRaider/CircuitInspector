@@ -1,4 +1,4 @@
-import { CheckCircleIcon, FileHtmlIcon, FolderOpenIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, CheckCircleIcon, FileHtmlIcon, FolderOpenIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { DocumentAnalysis, TestRecommendationAnalysis, WibQualificationAnalysis, WiringAnalysis } from "./types";
 import type { Locale } from "./i18n";
@@ -8,9 +8,10 @@ interface Props {
   locale: Locale;
   onLocaleChange(): void;
   onOpenDesign(): void;
+  onBack?(): void;
 }
 
-export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpenDesign }: Props) {
+export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpenDesign, onBack }: Props) {
   const chinese = locale === "zh-CN";
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     analysis.kind === "WIRING_COMPARISON" ? analysis.violations[0]?.id ?? analysis.connections[0]?.id ?? null
@@ -24,13 +25,14 @@ export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpe
       : chinese ? "最终 WIB 设计闭环验证" : "Final WIB design qualification";
 
   return (
-    <main className="app-shell grid h-[100dvh] min-w-[1080px] grid-rows-[64px_minmax(0,1fr)_32px] overflow-hidden text-[#ecebe7]">
+    <main className="app-shell grid h-full min-w-[1000px] grid-rows-[64px_minmax(0,1fr)_32px] overflow-hidden text-[#ecebe7]">
       <header className="topbar title-drag grid grid-cols-[minmax(320px,1fr)_auto] items-center px-5">
         <div className={`min-w-0 ${window.circuitInspector.platform === "darwin" ? "pl-[70px]" : ""}`}>
           <div className="text-[14px] font-semibold tracking-[-0.018em] text-[#f0efeb]">CircuitInspector</div>
           <div className="mt-0.5 truncate font-mono text-[10px] tracking-[0.025em] text-[#777875]">{title} · {analysis.id}</div>
         </div>
         <div className="title-no-drag flex items-center gap-2">
+          {onBack && <button className="icon-button" onClick={onBack} aria-label={chinese ? "返回结果资料库" : "Back to results"}><ArrowLeftIcon size={15} /></button>}
           <button className="icon-button min-w-9 px-2 font-mono text-[10px]" onClick={onLocaleChange}>{chinese ? "EN" : "中"}</button>
           <button className="secondary-button" onClick={() => void window.circuitInspector.openEvidence(analysis.report_path)}><FileHtmlIcon size={15} />{chinese ? "打开报告" : "Open report"}</button>
           <button className="primary-button" onClick={onOpenDesign}><FolderOpenIcon size={15} />{chinese ? "打开 PCB" : "Open PCB"}</button>

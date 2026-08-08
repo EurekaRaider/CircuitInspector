@@ -1,0 +1,24 @@
+{
+  "name": "@circuit-inspector/workflows",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./documents": "./src/documents.ts",
+    "./wiring": "./src/wiring.ts",
+    "./test-recommendations": "./src/test-recommendations.ts",
+    "./wib-qualification": "./src/wib-qualification.ts",
+    "./artifacts": "./src/artifacts.ts",
+    "./tables": "./src/tables.ts"
+  },
+  "dependencies": {
+    "@circuit-inspector/contracts": "0.1.0",
+    "mammoth": "1.12.0",
+    "pdfjs-dist": "6.2.108"
+  }
+}

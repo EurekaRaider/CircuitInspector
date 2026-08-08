@@ -125,4 +125,18 @@ describe("product to WIB schematic wiring comparison", () => {
     expect(analysis.verdict).toBe("FAIL");
     expect(analysis.violations.some((finding) => finding.message.includes("unmapped"))).toBe(true);
   });
+
+  it("does not confirm a design metric without an explicit unit", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "circuit-inspector-metric-unit-"));
+    temporaryDirectories.push(root);
+    const cache = path.join(root, "cache");
+    const source = path.join(root, "product.json");
+    await writeFile(source, JSON.stringify({
+      connectors: [{ reference: "J1", pins: [{ number: "1", net: "GND" }] }],
+      design_metrics: [{ id: "MAX_VOLTAGE", value: 5 }]
+    }), "utf8");
+    const product = await importSchematicPinout(source, "PRODUCT", cache);
+
+    await expect(confirmSchematicPinout(product.id, "owner", cache)).rejects.toThrow(/requires a unit/);
+  });
 });

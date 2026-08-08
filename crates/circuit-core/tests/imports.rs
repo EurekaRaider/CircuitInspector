@@ -64,6 +64,33 @@ fn core_protocol_imports_analyzes_and_renders_evidence() {
         serde_json::to_value(Verdict::Fail).unwrap()
     );
     let analysis_id = analysis["id"].as_str().unwrap();
+    let listed_designs =
+        dispatch("list_designs", json!({ "cache_dir": temporary.path() })).unwrap();
+    assert_eq!(listed_designs["designs"][0]["summary"]["id"], design_id);
+    assert!(
+        listed_designs["designs"][0]["updated_at_unix_ms"]
+            .as_u64()
+            .is_some()
+    );
+    let listed_analyses =
+        dispatch("list_analyses", json!({ "cache_dir": temporary.path() })).unwrap();
+    assert_eq!(listed_analyses["analyses"][0]["summary"]["id"], analysis_id);
+    assert_eq!(listed_analyses["analyses"][0]["summary"]["verdict"], "FAIL");
+    std::fs::write(
+        temporary.path().join("designs").join("broken.json"),
+        b"{not-json",
+    )
+    .unwrap();
+    let designs_with_diagnostic =
+        dispatch("list_designs", json!({ "cache_dir": temporary.path() })).unwrap();
+    assert_eq!(
+        designs_with_diagnostic["designs"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        designs_with_diagnostic["diagnostics"][0]["code"],
+        "INVALID_CACHED_DESIGN"
+    );
     let evidence = dispatch(
         "render_evidence",
         json!({

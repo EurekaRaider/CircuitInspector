@@ -86,6 +86,7 @@ pub fn dispatch(method: &str, params: Value) -> CoreResult<Value> {
             Ok(json!({ "name": "circuit-inspector-core", "version": env!("CARGO_PKG_VERSION") }))
         }
         "import_design" => import_request(params),
+        "list_designs" => list_designs_request(params),
         "get_design_summary" => design_summary_request(params),
         "get_tile" => tile_request(params),
         "search_design" => search_request(params),
@@ -94,6 +95,7 @@ pub fn dispatch(method: &str, params: Value) -> CoreResult<Value> {
         "list_rule_packs" => list_rule_packs_request(params),
         "approve_rule_pack" => approve_rule_pack_request(params),
         "analyze_design" => analyze_request(params),
+        "list_analyses" => list_analyses_request(params),
         "query_violations" => query_request(params),
         "render_evidence" => render_request(params),
         "read_analysis" => read_analysis_request(params),
@@ -124,6 +126,43 @@ fn import_request(params: Value) -> CoreResult<Value> {
         cache_hit,
         started.elapsed().as_millis(),
     ))?)
+}
+
+fn list_designs_request(params: Value) -> CoreResult<Value> {
+    #[derive(Deserialize)]
+    struct Params {
+        cache_dir: PathBuf,
+    }
+    let params: Params = serde_json::from_value(params)?;
+    let cache = CacheStore::new(&params.cache_dir)?;
+    let mut designs = Vec::new();
+    let mut diagnostics = Vec::new();
+    for entry in fs::read_dir(cache.root().join("designs"))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        match cache.load_json(&path) {
+            Ok(design) => {
+                let design: crate::model::Design = design;
+                designs.push(json!({
+                    "summary": DesignSummary::from_design(&design, true, 0),
+                    "updated_at_unix_ms": modified_unix_ms(&path),
+                }));
+            }
+            Err(error) => diagnostics.push(json!({
+                "code": "INVALID_CACHED_DESIGN",
+                "severity": "WARNING",
+                "message": error.to_string(),
+                "source": path,
+            })),
+        }
+    }
+    designs.sort_by_key(|value| {
+        std::cmp::Reverse(value["updated_at_unix_ms"].as_u64().unwrap_or_default())
+    });
+    Ok(json!({ "designs": designs, "diagnostics": diagnostics }))
 }
 
 fn design_summary_request(params: Value) -> CoreResult<Value> {
@@ -397,6 +436,43 @@ fn analyze_request(params: Value) -> CoreResult<Value> {
     Ok(value)
 }
 
+fn list_analyses_request(params: Value) -> CoreResult<Value> {
+    #[derive(Deserialize)]
+    struct Params {
+        cache_dir: PathBuf,
+    }
+    let params: Params = serde_json::from_value(params)?;
+    let cache = CacheStore::new(&params.cache_dir)?;
+    let mut analyses = Vec::new();
+    let mut diagnostics = Vec::new();
+    for entry in fs::read_dir(cache.root().join("analyses"))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        match cache.load_json(&path) {
+            Ok(analysis) => {
+                let analysis: crate::model::AnalysisSummary = analysis;
+                analyses.push(json!({
+                    "summary": analysis,
+                    "updated_at_unix_ms": modified_unix_ms(&path),
+                }));
+            }
+            Err(error) => diagnostics.push(json!({
+                "code": "INVALID_CACHED_ANALYSIS",
+                "severity": "WARNING",
+                "message": error.to_string(),
+                "source": path,
+            })),
+        }
+    }
+    analyses.sort_by_key(|value| {
+        std::cmp::Reverse(value["updated_at_unix_ms"].as_u64().unwrap_or_default())
+    });
+    Ok(json!({ "analyses": analyses, "diagnostics": diagnostics }))
+}
+
 fn query_request(params: Value) -> CoreResult<Value> {
     #[derive(Deserialize)]
     struct Params {
@@ -541,6 +617,15 @@ fn rule_path(cache: &CacheStore, id: &str) -> PathBuf {
         })
         .collect::<String>();
     cache.root().join("rules").join(format!("{safe}.json"))
+}
+
+fn modified_unix_ms(path: &Path) -> u128 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 fn success(id: u64, result: Value) -> CoreResponse {
