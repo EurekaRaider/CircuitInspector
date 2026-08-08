@@ -212,37 +212,39 @@ export function App() {
   const statusLabel = busy ? progressLabel : design ? `${design.format} · ${t("layers", { count: design.layers.length })}` : t("waitingForImport");
 
   return (
-    <main className="grid h-[100dvh] min-w-[1080px] grid-rows-[52px_minmax(0,1fr)_28px] overflow-hidden bg-[#17191b] text-zinc-100">
-      <header className="title-drag grid grid-cols-[310px_minmax(360px,1fr)_auto] items-center border-b border-white/8 bg-[#1b1e20] px-4">
-        <div className={`flex min-w-0 items-center gap-3 ${window.circuitInspector.platform === "darwin" ? "pl-[72px]" : ""}`}>
-          <img src={brandMark} alt="" aria-hidden="true" className="size-8 shrink-0" />
+    <main className="app-shell grid h-[100dvh] min-w-[1080px] grid-rows-[64px_minmax(0,1fr)_32px] overflow-hidden text-[#ecebe7]">
+      <header className="topbar title-drag grid grid-cols-[272px_minmax(360px,1fr)_auto] items-center px-5">
+        <div className={`flex min-w-0 items-center gap-3 ${window.circuitInspector.platform === "darwin" ? "pl-[70px]" : ""}`}>
+          <div className="brand-emblem size-9 shrink-0">
+            <img src={brandMark} alt="" aria-hidden="true" className="size-9" />
+          </div>
           <div className="min-w-0">
-            <div className="text-[13px] font-semibold tracking-[-0.01em]">CircuitInspector</div>
-            <div className="truncate font-mono text-[10px] text-zinc-500">{sourceName ?? t("localPcbReview")}</div>
+            <div className="text-[14px] font-semibold tracking-[-0.018em] text-[#f0efeb]">CircuitInspector</div>
+            <div className="mt-0.5 truncate font-mono text-[10px] tracking-[0.025em] text-[#777875]">{sourceName ?? t("localPcbReview")}</div>
           </div>
         </div>
 
         <form
-          className="title-no-drag mx-auto flex h-8 w-full max-w-[520px] items-center rounded-md border border-white/8 bg-[#121416] px-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] focus-within:border-[#79a5a7]/50"
+          className="search-field title-no-drag mx-auto flex h-9 w-full max-w-[560px] items-center rounded-[10px] border border-white/[0.09] bg-[#101214]/90 px-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"
           onSubmit={(event) => {
             event.preventDefault();
             void runSearch();
           }}
         >
-          <MagnifyingGlassIcon size={15} className="mr-2 shrink-0 text-zinc-500" />
+          <MagnifyingGlassIcon size={16} className="mr-2.5 shrink-0 text-[#747572]" />
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder={t("searchPlaceholder")}
-            className="min-w-0 flex-1 bg-transparent text-xs text-zinc-200 outline-none placeholder:text-zinc-600"
+            className="min-w-0 flex-1 bg-transparent text-[12px] text-[#d9d8d3] outline-none placeholder:text-[#666765]"
             aria-label={t("searchPlaceholder")}
           />
-          <kbd className="rounded border border-white/8 px-1.5 py-0.5 font-mono text-[9px] text-zinc-600">Enter</kbd>
+          <kbd className="rounded-md border border-white/[0.08] bg-white/[0.018] px-1.5 py-0.5 font-mono text-[9px] tracking-wide text-[#656663]">Enter</kbd>
         </form>
 
-        <div className="title-no-drag flex items-center gap-1.5">
+        <div className="title-no-drag flex items-center gap-2">
           <button
-            className="grid h-8 min-w-9 place-items-center rounded border border-white/8 bg-white/[0.025] px-2 font-mono text-[9px] text-zinc-400 transition hover:bg-white/5 active:translate-y-px"
+            className="icon-button min-w-9 px-2 font-mono text-[10px]"
             title={locale === "zh-CN" ? t("switchToEnglish") : t("switchToChinese")}
             aria-label={locale === "zh-CN" ? t("switchToEnglish") : t("switchToChinese")}
             onClick={() => setLocale((current) => current === "zh-CN" ? "en-US" : "zh-CN")}
@@ -256,7 +258,7 @@ export function App() {
             <RulerIcon size={16} />
           </ToolbarButton>
           <button
-            className="grid h-8 min-w-12 place-items-center rounded border border-white/8 bg-white/[0.025] px-2 font-mono text-[9px] text-zinc-400 transition hover:bg-white/5 active:translate-y-px disabled:opacity-30"
+            className="icon-button min-w-[3.4rem] px-2 font-mono text-[9px] tracking-[0.035em]"
             title={t("switchSide")}
             aria-label={t("switchSide")}
             disabled={!design}
@@ -264,53 +266,55 @@ export function App() {
           >
             {viewSide === "TOP" ? "TOP" : "BOTTOM"}
           </button>
-          <button className="primary-button ml-1" onClick={() => void chooseDesign()} disabled={busy}>
+          <button className="primary-button ml-0.5" onClick={() => void chooseDesign()} disabled={busy}>
             <FolderOpenIcon size={16} />
             {t("openDesign")}
           </button>
         </div>
       </header>
 
-      <section className="grid min-h-0 grid-cols-[248px_minmax(0,1fr)_336px]">
-        <aside className="min-h-0 overflow-y-auto border-r border-white/8 bg-[#1a1c1e]">
+      <section className="grid min-h-0 grid-cols-[272px_minmax(0,1fr)_360px]">
+        <aside className="sidebar-surface min-h-0 overflow-y-auto border-r border-white/[0.07]">
           <PanelTitle title={t("designStructure")} caption={design ? t("layers", { count: design.layers.length }) : t("noDesign")} />
           {!design ? (
-            <div className="px-4 py-8 text-xs leading-5 text-zinc-500">{t("emptySidebar")}</div>
+            <div className="px-5 py-10 text-[12px] leading-6 text-[#777875]">{t("emptySidebar")}</div>
           ) : (
             <>
-              <div className="border-b border-white/7 px-4 py-3">
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
+              <div className="border-b border-white/[0.065] px-5 py-4">
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
                   <Metric label={t("components")} value={design.component_count} />
                   <Metric label={t("nets")} value={design.net_count} />
                   <Metric label={t("testPoints")} value={design.test_point_count} />
                   <Metric label={t("drills")} value={design.drill_count} />
                 </div>
               </div>
-              <div className="border-b border-white/7 px-3 py-2">
+              <div className="border-b border-white/[0.065] px-3 py-3">
                 {design.layers.map((layer, index) => {
                   const checked = enabledLayers.includes(layer.id);
                   return (
-                    <label key={layer.id} className="group flex cursor-pointer items-center gap-2.5 rounded px-1.5 py-1.5 text-xs hover:bg-white/[0.035]">
+                    <label key={layer.id} className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 text-[12px] transition-colors hover:bg-white/[0.04]">
                       <input
                         type="checkbox"
                         checked={checked}
                         onChange={() => setEnabledLayers((layers) => checked ? layers.filter((id) => id !== layer.id) : [...layers, layer.id])}
                         className="sr-only"
                       />
-                      <span className={`size-2.5 rounded-sm border ${checked ? "border-[#89a96f] bg-[#89a96f]" : "border-zinc-600 bg-transparent"}`} />
+                      <span className={`grid size-3.5 place-items-center rounded-[4px] border transition-colors ${checked ? "border-[#c5a063]/70 bg-[#c5a063] shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]" : "border-white/[0.18] bg-transparent"}`}>
+                        {checked && <span className="size-1.5 rounded-[2px] bg-[#241d14]" />}
+                      </span>
                       <span className="size-2 rounded-full" style={{ backgroundColor: layerColor(index) }} />
-                      <span className="min-w-0 flex-1 truncate text-zinc-300">{layer.name}</span>
-                      <span className="font-mono text-[9px] text-zinc-600">{compact(layer.feature_count)}</span>
+                      <span className="min-w-0 flex-1 truncate text-[#c9c8c3]">{layer.name}</span>
+                      <span className="font-mono text-[10px] text-[#6d6e6b]">{compact(layer.feature_count)}</span>
                     </label>
                   );
                 })}
               </div>
-              <div className="px-4 py-3">
-                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.13em] text-zinc-600">{t("semanticCoverage")}</div>
-                <div className="space-y-1.5">
+              <div className="px-5 py-4">
+                <div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6e6f6c]">{t("semanticCoverage")}</div>
+                <div className="space-y-2.5">
                   {Object.entries(design.semantic_coverage).map(([key, value]) => (
-                    <div key={key} className="flex items-center justify-between text-[10px]">
-                      <span className="text-zinc-500">{coverageName(key, t)}</span>
+                    <div key={key} className="flex items-center justify-between text-[11px]">
+                      <span className="text-[#8a8a86]">{coverageName(key, t)}</span>
                       <CoverageBadge value={value} />
                     </div>
                   ))}
@@ -320,7 +324,7 @@ export function App() {
           )}
         </aside>
 
-        <div className="relative min-h-0 overflow-hidden bg-[#131618]">
+        <div className="canvas-stage relative min-h-0 overflow-hidden">
           {design ? (
             <BoardCanvas
               ref={canvasRef}
@@ -342,36 +346,37 @@ export function App() {
           )}
           {busy && <LoadingRail label={progressLabel} progress={progress?.progress ?? 12} />}
           {activeViolation && (
-            <div className="pointer-events-none absolute bottom-4 left-1/2 max-w-[min(720px,calc(100%-32px))] -translate-x-1/2 border border-white/10 bg-[#202427]/95 px-3 py-2 shadow-xl backdrop-blur-md">
-              <div className="flex items-center gap-2 font-mono text-[10px]">
+            <div className="popover-surface pointer-events-none absolute bottom-5 left-1/2 w-max max-w-[min(760px,calc(100%-40px))] -translate-x-1/2 rounded-xl px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2.5">
                 <VerdictBadge verdict={activeViolation.verdict} />
-                <span className="truncate text-zinc-200">{activeViolation.rule_id}</span>
-                <span className="text-zinc-600">#{activeViolation.id}</span>
+                <span className="truncate text-[12px] font-medium text-[#e1e0db]">{activeViolation.title}</span>
+                <span className="shrink-0 font-mono text-[9px] text-[#6e6f6c]">{activeViolation.rule_id} · #{activeViolation.id}</span>
               </div>
-              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-400">
+              <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[10px] text-[#969691]">
                 <span>{t("net")} {activeViolation.net_names.join(", ") || "-"}</span>
                 <span>{t("reference")} {activeViolation.component_refs.join(", ") || "-"}</span>
-                <span className="text-[#79b5b8]">{t("measured")} {formatNm(activeViolation.measured_value_nm)} / {t("threshold")} {formatNm(activeViolation.threshold_nm)}</span>
+                <span className="text-[#d1ad6f]">{t("measured")} {formatNm(activeViolation.measured_value_nm)} / {t("threshold")} {formatNm(activeViolation.threshold_nm)}</span>
               </div>
             </div>
           )}
           {searchResults.length > 0 && (
-            <div className="absolute left-4 top-4 w-[320px] overflow-hidden rounded-md border border-white/10 bg-[#202326]/96 shadow-[0_18px_50px_rgba(0,0,0,0.32)] backdrop-blur-xl">
-              <div className="flex items-center justify-between border-b border-white/8 px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            <div className="popover-surface absolute left-5 top-5 w-[340px] overflow-hidden rounded-xl">
+              <div className="flex items-center justify-between border-b border-white/[0.07] px-3.5 py-2.5 text-[10px] font-semibold uppercase tracking-[0.13em] text-[#777875]">
                 {t("searchResults")}
-                <button onClick={() => setSearchResults([])} aria-label={t("closeSearchResults")} className="rounded p-1 hover:bg-white/5"><XIcon size={13} /></button>
+                <button onClick={() => setSearchResults([])} aria-label={t("closeSearchResults")} className="rounded-md p-1 text-[#777875] transition-colors hover:bg-white/5 hover:text-[#e1e0db]"><XIcon size={14} /></button>
               </div>
-              <div className="max-h-72 overflow-y-auto p-1.5">
-                {searchResults.map((result) => (
+              <div className="max-h-72 overflow-y-auto p-2">
+                {searchResults.map((result, index) => (
                   <button
                     key={`${result.kind}:${result.id}`}
-                    className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-white/5 active:translate-y-px"
+                    className="reveal-row flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left text-[12px] text-[#d1d0cb] transition-colors hover:bg-white/5 active:translate-y-px"
+                    style={{ animationDelay: `${Math.min(index, 12) * 30}ms` }}
                     onClick={() => {
                       if (result.xNm != null && result.yNm != null) canvasRef.current?.focus(result.xNm, result.yNm);
                       setSearchResults([]);
                     }}
                   >
-                    <span className="rounded border border-white/8 px-1 py-0.5 font-mono text-[9px] text-[#8bb7b9]">{result.kind}</span>
+                    <span className="rounded-md border border-[#c5a063]/20 bg-[#c5a063]/[0.055] px-1.5 py-0.5 font-mono text-[9px] text-[#cbaa72]">{result.kind}</span>
                     <span className="truncate">{result.label}</span>
                   </button>
                 ))}
@@ -379,30 +384,30 @@ export function App() {
             </div>
           )}
           {picked && searchResults.length === 0 && (
-            <div className="absolute left-4 top-4 max-w-[360px] border border-white/10 bg-[#202326]/95 px-3 py-2 shadow-lg backdrop-blur-md">
-              <div className="flex items-center gap-2 font-mono text-[9px] text-[#8bb7b9]"><span>{picked.kind}</span><span className="truncate text-zinc-200">{picked.label}</span></div>
-              <div className="mt-1 flex flex-wrap gap-x-3 font-mono text-[9px] text-zinc-500"><span>{t("layer")} {picked.layer_id ?? "-"}</span><span>{t("net")} {picked.net_name ?? "-"}</span><span>{t("reference")} {picked.component_ref ?? "-"}</span></div>
+            <div className="popover-surface absolute left-5 top-5 max-w-[380px] rounded-xl px-4 py-3">
+              <div className="flex items-center gap-2.5 text-[11px]"><span className="font-mono text-[9px] text-[#cbaa72]">{picked.kind}</span><span className="truncate font-medium text-[#e1e0db]">{picked.label}</span></div>
+              <div className="mt-2 flex flex-wrap gap-x-4 font-mono text-[9px] text-[#81827f]"><span>{t("layer")} {picked.layer_id ?? "-"}</span><span>{t("net")} {picked.net_name ?? "-"}</span><span>{t("reference")} {picked.component_ref ?? "-"}</span></div>
             </div>
           )}
           {error && (
-            <div className="absolute bottom-4 left-4 right-4 flex items-start gap-3 rounded-md border border-[#b76755]/40 bg-[#3a2420]/95 px-3 py-2.5 text-xs text-[#efc1b6] shadow-lg">
+            <div role="alert" className="absolute bottom-5 left-5 right-5 flex items-start gap-3 rounded-xl border border-[#b76755]/35 bg-[#35231f]/95 px-4 py-3 text-[12px] text-[#efc1b6] shadow-[0_18px_48px_rgba(6,4,3,0.35)] backdrop-blur-xl">
               <WarningCircleIcon size={17} className="mt-0.5 shrink-0" />
               <span className="min-w-0 flex-1">{error}</span>
-              <button onClick={() => setError("")} aria-label={t("closeError")}><XIcon size={15} /></button>
+              <button onClick={() => setError("")} aria-label={t("closeError")} className="rounded-md p-0.5 transition-colors hover:bg-white/5"><XIcon size={15} /></button>
             </div>
           )}
         </div>
 
-        <aside className="min-h-0 overflow-y-auto border-l border-white/8 bg-[#1a1c1e]">
+        <aside className="sidebar-surface min-h-0 overflow-y-auto border-l border-white/[0.07]">
           <PanelTitle title={t("rulesAndIssues")} caption={analysis ? analysis.verdict : t("notRun")} />
-          <div className="border-b border-white/7 p-3">
-            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-600" htmlFor="rule-pack">{t("rulePack")}</label>
+          <div className="border-b border-white/[0.065] p-4">
+            <label className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.13em] text-[#6e6f6c]" htmlFor="rule-pack">{t("rulePack")}</label>
             <div className="grid grid-cols-[1fr_auto] gap-2">
               <select
                 id="rule-pack"
                 value={selectedRulePack}
                 onChange={(event) => setSelectedRulePack(event.target.value)}
-                className="h-8 min-w-0 rounded border border-white/8 bg-[#121416] px-2 text-xs text-zinc-300 outline-none focus:border-[#79a5a7]/50"
+                className="h-9 min-w-0 rounded-lg border border-white/[0.09] bg-[#101214] px-2.5 text-[12px] text-[#d0cfca] shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] transition-colors focus:border-[#c5a063]/45"
               >
                 <option value="">{t("selectApprovedRulePack")}</option>
                 {rulePacks.filter((pack) => pack.status === "APPROVED").map((pack) => <option key={pack.id} value={pack.id}>{pack.title}</option>)}
@@ -413,13 +418,13 @@ export function App() {
               </button>
             </div>
             {rulePacks.some((pack) => pack.status === "DRAFT") && (
-              <div className="mt-3 border-t border-white/7 pt-2">
-                <div className="mb-1 text-[10px] text-zinc-500">{t("pendingConfirmation")}</div>
+              <div className="mt-4 border-t border-white/[0.065] pt-3">
+                <div className="mb-1.5 text-[10px] font-medium text-[#777875]">{t("pendingConfirmation")}</div>
                 {rulePacks.filter((pack) => pack.status === "DRAFT").map((pack) => (
-                  <button key={pack.id} className="flex w-full items-center gap-2 py-1.5 text-left text-xs text-zinc-300" onClick={() => setApprovalPack(pack)}>
+                  <button key={pack.id} className="flex w-full items-center gap-2 rounded-lg px-1.5 py-2 text-left text-[12px] text-[#cbc9c4] transition-colors hover:bg-white/[0.035]" onClick={() => setApprovalPack(pack)}>
                     <WarningCircleIcon size={14} className="text-[#c79d57]" />
                     <span className="min-w-0 flex-1 truncate">{pack.title}</span>
-                    <CaretRightIcon size={12} className="text-zinc-600" />
+                    <CaretRightIcon size={12} className="text-[#686966]" />
                   </button>
                 ))}
               </div>
@@ -428,35 +433,35 @@ export function App() {
 
           {analysis ? (
             <>
-              <div className="grid grid-cols-4 divide-x divide-white/7 border-b border-white/7">
+              <div className="grid grid-cols-4 divide-x divide-white/[0.065] border-b border-white/[0.065]">
                 <Count label="PASS" value={analysis.pass_count} tone="pass" />
                 <Count label="FAIL" value={analysis.fail_count} tone="fail" />
                 <Count label="REVIEW" value={analysis.review_count} tone="review" />
                 <Count label="N/A" value={analysis.not_applicable_count} tone="muted" />
               </div>
-              <div className="divide-y divide-white/7">
+              <div className="divide-y divide-white/[0.06]">
                 {violations.length === 0 ? (
-                  <div className="px-4 py-10 text-center">
-                    <CheckCircleIcon size={28} className="mx-auto mb-3 text-[#89a96f]" />
-                    <div className="text-sm font-medium">{t("noViolations")}</div>
-                    <p className="mt-1 text-xs leading-5 text-zinc-500">{t("passReportGenerated")}</p>
+                  <div className="px-6 py-12 text-center">
+                    <CheckCircleIcon size={30} className="mx-auto mb-3 text-[#93ad7c]" />
+                    <div className="text-[13px] font-medium text-[#e0dfda]">{t("noViolations")}</div>
+                    <p className="mt-2 text-[11px] leading-5 text-[#777875]">{t("passReportGenerated")}</p>
                   </div>
                 ) : violations.map((violation, index) => (
                   <button
                     key={violation.id}
-                    className={`w-full px-3 py-3 text-left transition-colors hover:bg-white/[0.035] ${activeViolation?.id === violation.id ? "bg-[#79a5a7]/8" : ""}`}
+                    className={`reveal-row w-full border-l-2 px-4 py-3.5 text-left transition-colors hover:bg-white/[0.035] ${activeViolation?.id === violation.id ? "border-l-[#c5a063] bg-[#c5a063]/[0.055]" : "border-l-transparent"}`}
                     style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
                     onClick={() => {
                       setActiveViolation(violation);
                       canvasRef.current?.focus(violation.x_nm, violation.y_nm);
                     }}
                   >
-                    <div className="mb-1.5 flex items-center gap-2">
+                    <div className="mb-2 flex items-center gap-2.5">
                       <VerdictBadge verdict={violation.verdict} />
-                      <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-200">{violation.title}</span>
-                      <span className="font-mono text-[9px] text-zinc-600">{index + 1}</span>
+                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#deddd8]">{violation.title}</span>
+                      <span className="font-mono text-[9px] text-[#686966]">{String(index + 1).padStart(2, "0")}</span>
                     </div>
-                    <p className="line-clamp-2 text-[11px] leading-4 text-zinc-500">{violation.message}</p>
+                    <p className="line-clamp-2 text-[11px] leading-[1.55] text-[#7f807d]">{violation.message}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {violation.net_names.map((net) => <Tag key={net}>{net}</Tag>)}
                       {violation.component_refs.map((reference) => <Tag key={reference}>{reference}</Tag>)}
@@ -466,43 +471,43 @@ export function App() {
               </div>
             </>
           ) : (
-            <div className="px-4 py-8 text-xs leading-5 text-zinc-500">{t("analysisPrompt")}</div>
+            <div className="px-5 py-10 text-[12px] leading-6 text-[#777875]">{t("analysisPrompt")}</div>
           )}
         </aside>
       </section>
 
-      <footer className="grid grid-cols-[248px_minmax(0,1fr)_336px] items-center border-t border-white/8 bg-[#151719] font-mono text-[9px] text-zinc-600">
-        <div className="border-r border-white/8 px-3">{statusLabel}</div>
-        <div className="flex items-center justify-between px-3">
+      <footer className="grid grid-cols-[272px_minmax(0,1fr)_360px] items-center border-t border-white/[0.07] bg-[#131517] font-mono text-[9px] tracking-[0.02em] text-[#696a67]">
+        <div className="truncate border-r border-white/[0.07] px-4">{statusLabel}</div>
+        <div className="flex items-center justify-between px-4">
           <span>X {pointer.xMm.toFixed(3)} mm&nbsp;&nbsp;Y {pointer.yMm.toFixed(3)} mm</span>
-          <span>{measureDistance == null ? "" : `${t("measurement")} ${measureDistance.toFixed(3)} mm`}</span>
+          <span className="text-[#b9965d]">{measureDistance == null ? "" : `${t("measurement")} ${measureDistance.toFixed(3)} mm`}</span>
           <span>{t("zoom")} {pointer.zoom.toFixed(1)} px/mm</span>
         </div>
-        <div className="border-l border-white/8 px-3 text-right">{t("localOnly")}</div>
+        <div className="border-l border-white/[0.07] px-4 text-right">{t("localOnly")}</div>
       </footer>
 
       {approvalPack && (
-        <div className="fixed inset-0 grid place-items-center bg-[#0d0f10]/75 p-6 backdrop-blur-sm">
-          <div className="w-full max-w-[560px] rounded-lg border border-white/10 bg-[#202326] p-5 shadow-[0_28px_90px_rgba(0,0,0,0.48)]">
-            <div className="mb-4 flex items-start justify-between gap-4">
+        <div className="fixed inset-0 grid place-items-center bg-[#0d0f10]/78 p-6 backdrop-blur-md">
+          <div role="dialog" aria-modal="true" aria-labelledby="approval-title" className="popover-surface w-full max-w-[580px] rounded-2xl p-6">
+            <div className="mb-5 flex items-start justify-between gap-4">
               <div>
-                <div className="text-sm font-semibold">{t("approveRulePack")}</div>
-                <p className="mt-1 text-xs leading-5 text-zinc-500">{t("approvalDescription")}</p>
+                <div id="approval-title" className="text-[15px] font-semibold tracking-[-0.012em] text-[#edebe7]">{t("approveRulePack")}</div>
+                <p className="mt-1.5 max-w-[52ch] text-[12px] leading-5 text-[#858681]">{t("approvalDescription")}</p>
               </div>
-              <button onClick={() => setApprovalPack(undefined)} aria-label={t("closeApproval")} className="rounded p-1 text-zinc-500 hover:bg-white/5"><XIcon size={16} /></button>
+              <button onClick={() => setApprovalPack(undefined)} aria-label={t("closeApproval")} className="rounded-lg p-1.5 text-[#777875] transition-colors hover:bg-white/5 hover:text-[#e1e0db]"><XIcon size={16} /></button>
             </div>
-            <div className="max-h-56 divide-y divide-white/7 overflow-y-auto border-y border-white/7">
+            <div className="max-h-60 divide-y divide-white/[0.065] overflow-y-auto border-y border-white/[0.065]">
               {approvalPack.rules.map((rule) => (
-                <div key={rule.id} className="py-3">
-                  <div className="flex justify-between gap-4 text-xs"><span>{rule.title}</span><span className="font-mono text-[#8bb7b9]">{(rule.threshold_nm / 1_000_000).toFixed(3)} mm</span></div>
-                  {rule.citation?.excerpt && <p className="mt-1 text-[11px] leading-4 text-zinc-500">{rule.citation.excerpt}</p>}
+                <div key={rule.id} className="py-3.5">
+                  <div className="flex justify-between gap-4 text-[12px]"><span className="text-[#d8d7d2]">{rule.title}</span><span className="shrink-0 font-mono text-[10px] text-[#ceaa6c]">{(rule.threshold_nm / 1_000_000).toFixed(3)} mm</span></div>
+                  {rule.citation?.excerpt && <p className="mt-1.5 text-[11px] leading-[1.55] text-[#797a77]">{rule.citation.excerpt}</p>}
                 </div>
               ))}
             </div>
-            <label htmlFor="approver" className="mt-4 block text-xs font-medium text-zinc-300">{t("approver")}</label>
-            <input id="approver" value={approver} onChange={(event) => setApprover(event.target.value)} className="mt-2 h-9 w-full rounded border border-white/10 bg-[#141719] px-3 text-xs outline-none focus:border-[#79a5a7]/60" placeholder={t("approverPlaceholder")} />
-            <p className="mt-1.5 text-[10px] text-zinc-600">{t("approvalRecord")}</p>
-            <div className="mt-5 flex justify-end gap-2">
+            <label htmlFor="approver" className="mt-5 block text-[12px] font-medium text-[#d0cfca]">{t("approver")}</label>
+            <input id="approver" value={approver} onChange={(event) => setApprover(event.target.value)} className="mt-2 h-10 w-full rounded-lg border border-white/[0.1] bg-[#111315] px-3 text-[12px] text-[#e0dfda] transition-colors placeholder:text-[#5e5f5d] focus:border-[#c5a063]/50" placeholder={t("approverPlaceholder")} />
+            <p className="mt-2 text-[10px] leading-4 text-[#686966]">{t("approvalRecord")}</p>
+            <div className="mt-6 flex justify-end gap-2.5">
               <button className="secondary-button" onClick={() => setApprovalPack(undefined)}>{t("cancel")}</button>
               <button className="primary-button" disabled={!approver.trim() || busy} onClick={() => void approvePack()}><ShieldCheckIcon size={15} />{t("confirmApproval")}</button>
             </div>
@@ -514,21 +519,48 @@ export function App() {
 }
 
 function EmptyCanvas({ onOpen, t }: { onOpen(): void; t: Translator }) {
+  const title = t("emptyTitle");
+  const titleSeparator = title.includes("，") ? "，" : ", ";
+  const [titleLead, ...titleRest] = title.split(titleSeparator);
+  const titleTail = titleRest.join(titleSeparator);
+
   return (
-    <div className="grid size-full place-items-center p-12">
-      <div className="grid w-full max-w-[760px] grid-cols-[1.2fr_0.8fr] overflow-hidden rounded-lg border border-white/8 bg-[#191c1e] shadow-[0_24px_80px_rgba(0,0,0,0.22)]">
-        <div className="p-10">
-          <div className="mb-5 flex size-10 items-center justify-center rounded-md border border-[#79a5a7]/30 bg-[#79a5a7]/8 text-[#8bb7b9]"><CrosshairIcon size={21} /></div>
-          <h1 className="text-xl font-semibold tracking-[-0.03em]">{t("emptyTitle")}</h1>
-          <p className="mt-3 max-w-[48ch] text-sm leading-6 text-zinc-500">{t("emptyDescription")}</p>
-          <button className="primary-button mt-7" onClick={onOpen}><FolderOpenIcon size={16} />{t("chooseDesign")}</button>
+    <div className="relative flex size-full items-center overflow-hidden px-[clamp(44px,7vw,112px)] py-12">
+      <div className="pointer-events-none absolute inset-0 board-grid opacity-[0.18] [mask-image:radial-gradient(circle_at_center,black,transparent_72%)]" />
+      <div className="relative mx-auto grid w-full max-w-[980px] grid-cols-[1.2fr_0.8fr] items-center gap-[clamp(48px,5vw,72px)]">
+        <div>
+          <div className="mb-6 flex items-center gap-3">
+            <div className="brand-emblem size-11">
+              <img src={brandMark} alt="" aria-hidden="true" className="size-11" />
+            </div>
+            <span className="font-mono text-[10px] tracking-[0.11em] text-[#777875]">ODB++ · GERBER · IPC-356</span>
+          </div>
+          <h1 className="max-w-[22ch] text-[30px] font-semibold leading-[1.12] tracking-[-0.045em] text-[#efeee9]">
+            {titleTail ? <>{titleLead}{titleSeparator.trimEnd()}<br />{titleTail}</> : title}
+          </h1>
+          <p className="mt-5 max-w-[52ch] text-[13px] leading-6 text-[#8a8b87]">{t("emptyDescription")}</p>
+          <div className="mt-8 flex items-center gap-4">
+            <button className="primary-button" onClick={onOpen}><FolderOpenIcon size={16} />{t("chooseDesign")}</button>
+            <span className="font-mono text-[9px] tracking-[0.06em] text-[#656663]">{t("localOnly")}</span>
+          </div>
         </div>
-        <div className="relative border-l border-white/7 bg-[#131618] p-8">
-          <div className="absolute inset-0 board-grid opacity-30" />
-          <div className="relative mt-8 border-l border-t border-[#89a96f]/60 p-4">
-            <div className="h-20 border-b border-r border-[#89a96f]/35" />
-            <div className="absolute left-[40%] top-[48%] size-5 rounded-full border border-[#df6b53]" />
-            <div className="mt-3 font-mono text-[9px] text-zinc-600">VECTOR · LOCAL · AUDITABLE</div>
+
+        <div className="empty-blueprint" aria-hidden="true">
+          <div className="absolute inset-0 board-grid opacity-45" />
+          <div className="absolute inset-[13%] rounded-xl border border-[#c5a063]/30">
+            <div className="absolute left-[11%] top-[18%] h-px w-[45%] bg-[#c5a063]/55" />
+            <div className="absolute right-[10%] top-[18%] size-2.5 rounded-full border border-[#c5a063]/70 bg-[#1a1d1f]" />
+            <div className="absolute bottom-[19%] left-[18%] h-px w-[62%] bg-[#768a69]/65" />
+            <div className="absolute bottom-[calc(19%_-_4px)] left-[13%] size-2.5 rounded-full border border-[#768a69]/80 bg-[#1a1d1f]" />
+            <div className="absolute left-[55%] top-[18%] h-[36%] w-px bg-[#c5a063]/55" />
+            <div className="absolute left-[calc(55%_-_5px)] top-[52%] size-3 rounded-full border border-[#b55e4f]/75 bg-[#1a1d1f]" />
+            <div className="absolute left-[34%] top-[35%] grid size-16 place-items-center rounded-xl border border-[#c5a063]/35 bg-[#111315] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+              <CrosshairIcon size={25} className="text-[#c5a063]" />
+            </div>
+          </div>
+          <div className="absolute bottom-5 left-6 right-6 flex items-center justify-between font-mono text-[8px] tracking-[0.12em] text-[#5f605e]">
+            <span>VECTOR WORKSPACE</span>
+            <span>LOCAL · AUDITABLE</span>
           </div>
         </div>
       </div>
@@ -537,38 +569,38 @@ function EmptyCanvas({ onOpen, t }: { onOpen(): void; t: Translator }) {
 }
 
 function PanelTitle({ title, caption }: { title: string; caption: string }) {
-  return <div className="flex h-10 items-center justify-between border-b border-white/7 px-4"><span className="text-xs font-medium">{title}</span><span className="font-mono text-[9px] text-zinc-600">{caption}</span></div>;
+  return <div className="flex h-12 items-center justify-between border-b border-white/[0.065] px-5"><span className="text-[12px] font-semibold tracking-[-0.01em] text-[#dad9d4]">{title}</span><span className="panel-caption">{caption}</span></div>;
 }
 
 function ToolbarButton({ label, children, active, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean }) {
-  return <button {...props} aria-label={label} title={label} className={`grid size-8 place-items-center rounded border transition active:translate-y-px disabled:opacity-30 ${active ? "border-[#79a5a7]/45 bg-[#79a5a7]/12 text-[#8bb7b9]" : "border-white/8 bg-white/[0.025] text-zinc-400 hover:bg-white/5"}`}>{children}</button>;
+  return <button {...props} aria-label={label} title={label} data-active={active ? "true" : "false"} className="icon-button">{children}</button>;
 }
 
 function Metric({ label, value }: { label: string; value: number }) {
-  return <div><div className="font-mono text-sm text-zinc-300">{value.toLocaleString()}</div><div className="text-[9px] text-zinc-600">{label}</div></div>;
+  return <div><div className="font-mono text-[17px] leading-none tracking-[-0.03em] text-[#d8d7d2]">{value.toLocaleString()}</div><div className="mt-1.5 text-[10px] text-[#727370]">{label}</div></div>;
 }
 
 function Count({ label, value, tone }: { label: string; value: number; tone: "pass" | "fail" | "review" | "muted" }) {
-  const colors = { pass: "text-[#99b67f]", fail: "text-[#df7962]", review: "text-[#cfaa66]", muted: "text-zinc-500" };
-  return <div className="px-2 py-3 text-center"><div className={`font-mono text-sm ${colors[tone]}`}>{value}</div><div className="mt-0.5 text-[8px] text-zinc-600">{label}</div></div>;
+  const colors = { pass: "text-[#99b681]", fail: "text-[#df7962]", review: "text-[#cfaa66]", muted: "text-[#777875]" };
+  return <div className="px-2 py-3.5 text-center"><div className={`font-mono text-[16px] leading-none ${colors[tone]}`}>{value}</div><div className="mt-1.5 text-[8px] font-medium tracking-[0.08em] text-[#686966]">{label}</div></div>;
 }
 
 function CoverageBadge({ value }: { value: string }) {
-  const color = value === "EXPLICIT" ? "text-[#99b67f]" : value === "MISSING" ? "text-zinc-600" : value === "INFERRED" ? "text-[#cfaa66]" : "text-[#8bb7b9]";
-  return <span className={`font-mono ${color}`}>{value}</span>;
+  const color = value === "EXPLICIT" ? "text-[#99b681]" : value === "MISSING" ? "text-[#686966]" : value === "INFERRED" ? "text-[#cfaa66]" : "text-[#c5a063]";
+  return <span className={`font-mono text-[9px] tracking-[0.035em] ${color}`}>{value}</span>;
 }
 
 function VerdictBadge({ verdict }: { verdict: Violation["verdict"] }) {
   const color = verdict === "FAIL" ? "border-[#b76755]/35 bg-[#b76755]/10 text-[#e28a76]" : verdict === "REVIEW" ? "border-[#a98243]/35 bg-[#a98243]/10 text-[#d0aa67]" : "border-white/8 text-zinc-500";
-  return <span className={`rounded border px-1.5 py-0.5 font-mono text-[8px] ${color}`}>{verdict}</span>;
+  return <span className={`rounded-md border px-1.5 py-0.5 font-mono text-[8px] tracking-[0.04em] ${color}`}>{verdict}</span>;
 }
 
 function Tag({ children }: { children: string }) {
-  return <span className="max-w-full truncate rounded border border-white/7 bg-white/[0.025] px-1.5 py-0.5 font-mono text-[9px] text-zinc-500">{children}</span>;
+  return <span className="max-w-full truncate rounded-md border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 font-mono text-[9px] text-[#777875]">{children}</span>;
 }
 
 function LoadingRail({ label, progress }: { label: string; progress: number }) {
-  return <div className="absolute left-1/2 top-4 w-[360px] -translate-x-1/2 overflow-hidden rounded-md border border-white/10 bg-[#202326]/95 px-3 py-2 shadow-lg backdrop-blur-xl"><div className="flex items-center gap-2 text-[11px] text-zinc-300"><CircleNotchIcon size={14} className="animate-spin text-[#8bb7b9]" />{label}<span className="ml-auto font-mono text-[9px] text-zinc-600">{progress}%</span></div><div className="mt-2 h-px bg-white/7"><div className="h-px bg-[#79a5a7] transition-[width] duration-300" style={{ width: `${Math.max(3, progress)}%` }} /></div></div>;
+  return <div aria-live="polite" className="popover-surface absolute left-1/2 top-5 w-[380px] -translate-x-1/2 overflow-hidden rounded-xl px-4 py-3"><div className="flex items-center gap-2.5 text-[11px] text-[#d0cfca]"><span className="loading-beacon" />{label}<span className="ml-auto font-mono text-[9px] text-[#777875]">{progress}%</span></div><div className="mt-2.5 h-0.5 overflow-hidden rounded-full bg-white/[0.07]"><div className="loading-progress h-full rounded-full bg-[#c5a063] transition-[width] duration-300" style={{ width: `${Math.max(3, progress)}%` }} /></div></div>;
 }
 
 function compact(value: number): string {

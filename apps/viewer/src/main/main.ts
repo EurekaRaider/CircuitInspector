@@ -58,7 +58,7 @@ function createWindow() {
     height: 980,
     minWidth: 1080,
     minHeight: 700,
-    backgroundColor: "#17191b",
+    backgroundColor: "#121416",
     icon: iconPath,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     show: false,

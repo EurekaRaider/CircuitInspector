@@ -112,7 +112,7 @@ export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCa
   return (
     <canvas
       ref={canvasRef}
-      className="block size-full touch-none outline-none"
+      className={`block size-full touch-none outline-none ${measureMode ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"}`}
       tabIndex={0}
       aria-label="PCB 矢量视图。滚轮缩放，按住拖拽平移。"
       onPointerDown={(event) => {

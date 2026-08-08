@@ -125,7 +125,7 @@ export class BoardRenderer {
   draw(): void {
     const gl = this.#gl;
     gl.viewport(0, 0, this.#canvas.width, this.#canvas.height);
-    gl.clearColor(0.075, 0.086, 0.09, 1);
+    gl.clearColor(0.067, 0.078, 0.086, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(this.#program);
     gl.uniform2f(gl.getUniformLocation(this.#program, "u_center"), this.#view.centerX, this.#view.centerY);
@@ -161,7 +161,7 @@ export function decodeTile(bytes: ArrayBuffer): Float32Array {
     const x2 = view.getFloat32(offset + 12, true);
     const y2 = view.getFloat32(offset + 16, true);
     const width = view.getFloat32(offset + 20, true);
-    const color = clear ? ([0.075, 0.086, 0.09, 1] as const) : palette[layer % palette.length]!;
+    const color = clear ? ([0.067, 0.078, 0.086, 1] as const) : palette[layer % palette.length]!;
     if (kind === 1) addLine(vertices, x1, y1, x2, y2, Math.max(width, 0.01), color);
     else if (kind === 2) addRect(vertices, x1 - x2 / 2, y1 - y2 / 2, x1 + x2 / 2, y1 + y2 / 2, color);
     else if (kind === 3) addDisc(vertices, x1, y1, Math.max(x2 / 2, 0.01), color);
