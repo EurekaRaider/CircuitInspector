@@ -1,0 +1,7 @@
+interface:
+  display_name: "PCB DFT Review"
+  short_description: "Assess PCB manufacturing-test readiness"
+  default_prompt: "Use $review-pcb-dft to assess this PCB or PCBA for manufacturing-test readiness and produce an evidence-linked review."
+
+policy:
+  allow_implicit_invocation: true
