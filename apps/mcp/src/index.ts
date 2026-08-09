@@ -8,8 +8,11 @@ import { z } from "zod";
 import { CoreClient } from "./core-client.js";
 import {
   compareFixtureWiring,
+  applySchematicCorrections,
+  confirmSchematicPaths,
   confirmSchematicPinout,
-  importSchematicPinout,
+  importSchematicDocument,
+  traceSchematicInterface,
   readLocalDocumentAnalysis,
   readWiringAnalysis,
   recommendManufacturingTests,
@@ -32,6 +35,34 @@ const coverageSchema = z.object({
   test_points: z.string(),
   drills: z.string()
 });
+
+const schematicDocumentOutputSchema = {
+  schema_version: z.literal(2),
+  parser_version: z.string(),
+  id: z.string(),
+  role: z.enum(["PRODUCT", "WIB"]),
+  source_path: z.string(),
+  source_hash: z.string(),
+  source_format: z.enum(["JSON", "CSV", "TSV", "TEXT", "PDF"]),
+  revision: z.string().nullable(),
+  status: z.enum(["DRAFT", "PARTIALLY_CONFIRMED", "CONFIRMED"]),
+  pages: z.array(z.record(z.string(), z.unknown())),
+  components: z.array(z.record(z.string(), z.unknown())),
+  graph_pins: z.array(z.record(z.string(), z.unknown())),
+  nets: z.array(z.record(z.string(), z.unknown())),
+  wires: z.array(z.record(z.string(), z.unknown())),
+  junctions: z.array(z.record(z.string(), z.unknown())),
+  labels: z.array(z.record(z.string(), z.unknown())),
+  edges: z.array(z.record(z.string(), z.unknown())),
+  interface_candidates: z.array(z.record(z.string(), z.unknown())),
+  paths: z.array(z.record(z.string(), z.unknown())),
+  corrections: z.array(z.record(z.string(), z.unknown())),
+  confirmed_scopes: z.array(z.record(z.string(), z.unknown())),
+  pins: z.array(z.record(z.string(), z.unknown())),
+  design_metrics: z.array(z.record(z.string(), z.unknown())),
+  diagnostics: z.array(z.record(z.string(), z.unknown())),
+  confirmation: z.record(z.string(), z.unknown()).nullable()
+};
 
 server.registerTool(
   "import_design",
@@ -72,33 +103,83 @@ server.registerTool(
 server.registerTool(
   "import_schematic",
   {
-    title: "Import product or WIB schematic pinout",
-    description: "Import connector/pin/NET NAME evidence from a local JSON, CSV, TSV, text, or text-bearing PDF schematic export. PDF rows remain candidates until confirmed.",
+    title: "Import product or WIB schematic graph",
+    description: "Build a local SchematicDocument v2 graph from a complete vector or scanned PDF, or adapt a JSON/CSV/TSV/text pin mapping. PDF paths remain REVIEW until the relevant interface paths are confirmed.",
     inputSchema: {
       path: z.string().min(1),
       role: z.enum(["PRODUCT", "WIB"]),
       revision: z.string().min(1).optional()
     },
-    outputSchema: {
-      id: z.string(),
-      role: z.enum(["PRODUCT", "WIB"]),
-      source_path: z.string(),
-      source_hash: z.string(),
-      source_format: z.enum(["JSON", "CSV", "TSV", "TEXT", "PDF"]),
-      revision: z.string().nullable(),
-      status: z.enum(["DRAFT", "CONFIRMED"]),
-      pins: z.array(z.record(z.string(), z.unknown())),
-      design_metrics: z.array(z.record(z.string(), z.unknown())),
-      diagnostics: z.array(z.record(z.string(), z.unknown())),
-      confirmation: z.record(z.string(), z.unknown()).nullable()
-    },
+    outputSchema: schematicDocumentOutputSchema,
     annotations: { readOnlyHint: false, openWorldHint: false }
   },
   async ({ path: schematicPath, role, revision }, extra) => {
-    await progress(extra, 0, 100, "Extracting connector, pin, and NET NAME evidence");
-    const document = await importSchematicPinout(schematicPath, role, cacheDir, revision);
-    await progress(extra, 100, 100, "Schematic pinout candidate is ready for confirmation");
-    return toolResult(document as unknown as Record<string, unknown>, `Imported ${role} schematic pinout ${document.id}: ${document.pins.length} pin row(s), status ${document.status}.`);
+    await progress(extra, 0, 100, "Building local schematic pages and connectivity graph");
+    const document = await importSchematicDocument(schematicPath, role, cacheDir, revision, (amount, message) => {
+      void progress(extra, amount, 100, message);
+    });
+    await progress(extra, 100, 100, "Schematic graph and interface candidates are ready for review");
+    return toolResult(document as unknown as Record<string, unknown>, `Imported ${role} schematic ${document.id}: ${document.pages.length} page(s), ${document.components.length} component(s), ${document.interface_candidates.length} interface candidate(s).`);
+  }
+);
+
+server.registerTool(
+  "trace_schematic_interface",
+  {
+    title: "Trace schematic interface paths",
+    description: "Trace every pin of a selected connector candidate through named nets and permitted passthrough devices to actual IC pin endpoints. Ambiguous or unmodeled paths remain REVIEW.",
+    inputSchema: { schematic_id: z.string().min(1), candidate_id: z.string().min(1) },
+    outputSchema: schematicDocumentOutputSchema,
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ schematic_id, candidate_id }) => {
+    const document = await traceSchematicInterface(schematic_id, candidate_id, cacheDir);
+    return toolResult(document as unknown as Record<string, unknown>, `Traced ${document.paths.length} path(s); ${document.paths.filter((item) => item.status === "REVIEW").length} require review.`);
+  }
+);
+
+server.registerTool(
+  "apply_schematic_corrections",
+  {
+    title: "Apply audited schematic graph corrections",
+    description: "Apply local graphical/semantic corrections and invalidate prior path confirmation. Every correction records before/after values, operator, time, and a content hash.",
+    inputSchema: {
+      schematic_id: z.string().min(1),
+      corrected_by: z.string().min(1),
+      candidate_id: z.string().min(1).optional(),
+      corrections: z.array(z.object({
+        operation: z.enum(["UPDATE", "ADD", "DELETE", "MERGE_NETS", "SPLIT_NET", "SET_JUNCTION", "SET_OFF_PAGE", "SET_PASSTHROUGH"]),
+        entity_kind: z.enum(["COMPONENT", "PIN", "NET", "WIRE", "JUNCTION", "LABEL"]),
+        entity_id: z.string().min(1),
+        after: z.record(z.string(), z.unknown()).nullable().optional()
+      })).min(1)
+    },
+    outputSchema: schematicDocumentOutputSchema,
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ schematic_id, corrected_by, candidate_id, corrections }) => {
+    const document = await applySchematicCorrections(schematic_id, corrections, corrected_by, cacheDir, candidate_id);
+    return toolResult(document as unknown as Record<string, unknown>, `Applied ${corrections.length} correction(s); prior confirmation was invalidated and paths were retraced.`);
+  }
+);
+
+server.registerTool(
+  "confirm_schematic_paths",
+  {
+    title: "Confirm selected schematic analysis paths",
+    description: "Confirm only the selected interface paths after reviewing their cross-page evidence. This does not mark the complete PDF as authoritative.",
+    inputSchema: {
+      schematic_id: z.string().min(1),
+      candidate_id: z.string().min(1),
+      path_ids: z.array(z.string().min(1)).min(1),
+      confirmed_by: z.string().min(1)
+    },
+    outputSchema: schematicDocumentOutputSchema,
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ schematic_id, candidate_id, path_ids, confirmed_by }) => {
+    const document = await confirmSchematicPaths(schematic_id, candidate_id, path_ids, confirmed_by, cacheDir);
+    return toolResult(document as unknown as Record<string, unknown>, `Confirmed ${path_ids.length} selected path(s) in scope ${document.confirmed_scopes[0]?.id ?? "-"}.`);
   }
 );
 
@@ -256,13 +337,17 @@ server.registerTool(
         id: z.string().min(1),
         area: z.string().min(1),
         requirement: z.string().min(1),
-        check: z.enum(["WIRING_ONE_TO_ONE", "NET_IDENTITY", "COMPLETE_PIN_COVERAGE", "NO_UNINTENDED_INTERCONNECT", "NC_ISOLATION", "DESIGN_METRIC"]),
+        check: z.enum(["WIRING_ONE_TO_ONE", "NET_IDENTITY", "COMPLETE_PIN_COVERAGE", "NO_UNINTENDED_INTERCONNECT", "NC_ISOLATION", "DESIGN_METRIC", "ENDPOINT_UNIQUENESS", "NO_UNRESOLVED_BRANCH", "PATH_COMPONENT_POLICY", "ENDPOINT_PIN_MATCH"]),
         metric_id: z.string().nullable().optional(),
         comparator: z.enum(["EXACT", "ALL", "NONE", "MAXIMUM", "MINIMUM", "RANGE"]),
         required_value: constraintValueSchema,
         unit: z.string().nullable().optional(),
         verification_mode: z.enum(["DOCUMENT_BACKED", "MANUAL_FACTORY_CONFIRMATION"]),
-        source_authority: z.string().min(1)
+        source_authority: z.string().min(1),
+        scope: z.object({ connector: z.string().min(1).optional(), pin: z.string().min(1).optional(), net_name: z.string().min(1).optional() }).optional(),
+        allowed_component_kinds: z.array(z.enum(["CONNECTOR", "IC", "PASSIVE", "PROTECTION", "POWER", "UNKNOWN"])).optional(),
+        forbidden_component_refs: z.array(z.string().min(1)).optional(),
+        expected_endpoint_refs: z.array(z.string().min(1)).optional()
       })).min(1)
     },
     outputSchema: {
@@ -283,9 +368,24 @@ server.registerTool(
       revision,
       approvedBy: approved_by,
       constraints: constraints.map((constraint) => ({
-        ...constraint,
+        id: constraint.id,
+        area: constraint.area,
+        requirement: constraint.requirement,
+        check: constraint.check,
         metric_id: constraint.metric_id ?? null,
-        unit: constraint.unit ?? null
+        comparator: constraint.comparator,
+        required_value: constraint.required_value,
+        unit: constraint.unit ?? null,
+        verification_mode: constraint.verification_mode,
+        source_authority: constraint.source_authority,
+        ...(constraint.scope ? { scope: {
+          ...(constraint.scope.connector ? { connector: constraint.scope.connector } : {}),
+          ...(constraint.scope.pin ? { pin: constraint.scope.pin } : {}),
+          ...(constraint.scope.net_name ? { net_name: constraint.scope.net_name } : {})
+        } } : {}),
+        ...(constraint.allowed_component_kinds ? { allowed_component_kinds: constraint.allowed_component_kinds } : {}),
+        ...(constraint.forbidden_component_refs ? { forbidden_component_refs: constraint.forbidden_component_refs } : {}),
+        ...(constraint.expected_endpoint_refs ? { expected_endpoint_refs: constraint.expected_endpoint_refs } : {})
       }))
     }, cacheDir);
     return toolResult(constraintSet as unknown as Record<string, unknown>, `Stored approved WIB constraint set ${constraintSet.id} revision ${constraintSet.revision} with ${constraintSet.constraints.length} hard requirement(s).`);

@@ -15,10 +15,11 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import type { Locale } from "./i18n";
+import { SchematicReview } from "./SchematicReview";
 import type {
   ArtifactCatalog,
   ConnectorMapping,
-  SchematicPinout,
+  SchematicDocument,
   TableImportResult,
   TableKind,
   TestRecommendationAnalysis,
@@ -35,6 +36,7 @@ type PinRow = { connector: string; pin: string; net_name: string };
 type MetricRow = { id: string; value: string | number; unit: string | null };
 type MappingRow = { product_connector: string; wib_connector: string; product_pin: string; wib_pin: string };
 type AliasRow = { product_net: string; wib_net: string };
+type SchematicCorrectionInput = Parameters<typeof window.circuitInspector.correctSchematic>[0]["corrections"][number];
 type Confirmation = { title: string; body: string; run(identity: string): Promise<void> };
 
 interface Props {
@@ -50,8 +52,8 @@ export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
   const [draftId, setDraftId] = useState(() => `wib-draft-${Date.now().toString(36)}`);
   const [draftTitle, setDraftTitle] = useState(chinese ? "WIB 验证草稿" : "WIB qualification draft");
-  const [product, setProduct] = useState<SchematicPinout | null>(null);
-  const [wib, setWib] = useState<SchematicPinout | null>(null);
+  const [product, setProduct] = useState<SchematicDocument | null>(null);
+  const [wib, setWib] = useState<SchematicDocument | null>(null);
   const [productPins, setProductPins] = useState<PinRow[]>([]);
   const [wibPins, setWibPins] = useState<PinRow[]>([]);
   const [productMetrics, setProductMetrics] = useState<MetricRow[]>([]);
@@ -76,13 +78,14 @@ export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [tableErrors, setTableErrors] = useState<string[]>([]);
+  const [focusedPath, setFocusedPath] = useState<{ role: "PRODUCT" | "WIB"; id: string } | null>(null);
 
-  const pinoutArtifacts = catalog.artifacts.filter((artifact) => artifact.kind === "PINOUT");
+  const pinoutArtifacts = catalog.artifacts.filter((artifact) => artifact.kind === "PINOUT" || artifact.kind === "SCHEMATIC");
   const constraintArtifacts = catalog.artifacts.filter((artifact) => artifact.kind === "CONSTRAINT_SET");
   const connectorMappings = useMemo(() => groupMappings(mappingRows), [mappingRows]);
   const steps = [
-    { id: 1 as const, zh: "产品输入", en: "Product input", ready: product?.status === "CONFIRMED" },
-    { id: 2 as const, zh: "WIB 输入", en: "WIB input", ready: wib?.status === "CONFIRMED" },
+    { id: 1 as const, zh: "产品输入", en: "Product input", ready: Boolean(product && product.status !== "DRAFT") },
+    { id: 2 as const, zh: "WIB 输入", en: "WIB input", ready: Boolean(wib && wib.status !== "DRAFT") },
     { id: 3 as const, zh: "映射与比较", en: "Mapping and comparison", ready: Boolean(wiring) },
     { id: 4 as const, zh: "测试建议", en: "Test recommendations", ready: Boolean(testPlan) },
     { id: 5 as const, zh: "约束审批", en: "Constraint approval", ready: Boolean(constraintSet) },
@@ -106,12 +109,12 @@ export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged
         setConstraintTitle(draft.constraint_title ?? (chinese ? "WIB 受控硬约束" : "Controlled WIB hard constraints"));
         setConstraintRevision(draft.constraint_revision ?? "");
         const [loadedProduct, loadedWib, loadedSet] = await Promise.all([
-          draft.product_pinout_id ? window.circuitInspector.readPinout(draft.product_pinout_id) : Promise.resolve(null),
-          draft.wib_pinout_id ? window.circuitInspector.readPinout(draft.wib_pinout_id) : Promise.resolve(null),
+          (draft.product_schematic_id ?? draft.product_pinout_id) ? window.circuitInspector.readSchematic((draft.product_schematic_id ?? draft.product_pinout_id)!) : Promise.resolve(null),
+          (draft.wib_schematic_id ?? draft.wib_pinout_id) ? window.circuitInspector.readSchematic((draft.wib_schematic_id ?? draft.wib_pinout_id)!) : Promise.resolve(null),
           draft.constraint_set_id ? window.circuitInspector.readConstraintSet(draft.constraint_set_id) : Promise.resolve(null)
         ]);
-        if (loadedProduct) applyPinout("PRODUCT", loadedProduct);
-        if (loadedWib) applyPinout("WIB", loadedWib);
+        if (loadedProduct) applySchematic("PRODUCT", loadedProduct);
+        if (loadedWib) applySchematic("WIB", loadedWib);
         if (draft.product_edits) {
           setProductPins(draft.product_edits.pins);
           setProductMetrics(draft.product_edits.design_metrics);
@@ -128,7 +131,7 @@ export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged
       .finally(() => setBusy(false));
   }, [initialDraftId]);
 
-  function applyPinout(role: "PRODUCT" | "WIB", pinout: SchematicPinout) {
+  function applySchematic(role: "PRODUCT" | "WIB", pinout: SchematicDocument) {
     const pins = pinout.pins.map(({ connector, pin, net_name }) => ({ connector, pin, net_name }));
     const metrics = pinout.design_metrics.map(({ id, value, unit }) => ({ id, value, unit }));
     if (role === "PRODUCT") {
@@ -149,30 +152,41 @@ export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged
     if (!selected[0]) return;
     await run(async () => {
       const pinout = await window.circuitInspector.importSchematic({ path: selected[0]!, role, ...(revision.trim() ? { revision: revision.trim() } : {}) });
-      applyPinout(role, pinout);
+      applySchematic(role, pinout);
       onCatalogChanged();
     });
   }
 
   async function loadPinout(role: "PRODUCT" | "WIB", id: string) {
     if (!id) return;
-    await run(async () => applyPinout(role, await window.circuitInspector.readPinout(id)));
+    await run(async () => applySchematic(role, await window.circuitInspector.readSchematic(id)));
   }
 
-  function requestPinoutConfirmation(role: "PRODUCT" | "WIB") {
-    const pinout = role === "PRODUCT" ? product : wib;
-    const pins = role === "PRODUCT" ? productPins : wibPins;
-    const metrics = role === "PRODUCT" ? productMetrics : wibMetrics;
-    const revision = role === "PRODUCT" ? productRevision : wibRevision;
-    const errors = [...validatePinRows(pins, chinese), ...validateMetricRows(metrics, chinese)];
-    setTableErrors(errors);
-    if (!pinout || errors.length) return;
+  async function traceSchematic(role: "PRODUCT" | "WIB", candidateId: string) {
+    const document = role === "PRODUCT" ? product : wib;
+    if (!document) return;
+    await run(async () => applySchematic(role, await window.circuitInspector.traceSchematic({ schematic_id: document.id, candidate_id: candidateId })));
+  }
+
+  async function correctSchematic(role: "PRODUCT" | "WIB", corrections: SchematicCorrectionInput[], candidateId?: string) {
+    const document = role === "PRODUCT" ? product : wib;
+    if (!document || !approver.trim()) return;
+    await run(async () => {
+      const corrected = await window.circuitInspector.correctSchematic({ schematic_id: document.id, corrected_by: approver.trim(), ...(candidateId ? { candidate_id: candidateId } : {}), corrections });
+      applySchematic(role, corrected);
+      onCatalogChanged();
+    });
+  }
+
+  function requestPathConfirmation(role: "PRODUCT" | "WIB", candidateId: string, pathIds: string[]) {
+    const document = role === "PRODUCT" ? product : wib;
+    if (!document || !pathIds.length) return;
     setConfirmation({
-      title: chinese ? `确认 ${role} 引脚证据` : `Confirm ${role} pinout evidence`,
-      body: chinese ? `将确认 ${pins.length} 条引脚、${metrics.length} 项设计指标与修订 ${revision || "未提供"}。确认后的内容哈希可支持正式判定。` : `This confirms ${pins.length} pin rows, ${metrics.length} design metrics, and revision ${revision || "not supplied"}. The resulting content hash can support formal verdicts.`,
+      title: chinese ? `确认 ${role} 分析路径` : `Confirm ${role} analysis paths`,
+      body: chinese ? `只确认当前选择的 ${pathIds.length} 条接口路径及其跨页证据，不会把整份 PDF 标记为完全可信。歧义路径即使确认也不会被猜测为 PASS。` : `This confirms only ${pathIds.length} selected interface path(s) and their cross-page evidence. It does not mark the complete PDF as authoritative, and ambiguous paths are never guessed into PASS.`,
       run: async (identity) => {
-        const confirmed = await window.circuitInspector.confirmPinout({ pinout_id: pinout.id, confirmed_by: identity, ...(revision.trim() ? { revision: revision.trim() } : {}), pins, design_metrics: metrics });
-        applyPinout(role, confirmed);
+        const confirmed = await window.circuitInspector.confirmSchematicPaths({ schematic_id: document.id, candidate_id: candidateId, path_ids: pathIds, confirmed_by: identity });
+        applySchematic(role, confirmed);
         onCatalogChanged();
       }
     });
@@ -243,6 +257,8 @@ export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged
       step,
       product_pinout_id: product?.id ?? null,
       wib_pinout_id: wib?.id ?? null,
+      product_schematic_id: product?.id ?? null,
+      wib_schematic_id: wib?.id ?? null,
       product_edits: { pins: productPins, design_metrics: productMetrics, revision: productRevision },
       wib_edits: { pins: wibPins, design_metrics: wibMetrics, revision: wibRevision },
       connector_mappings: connectorMappings,
@@ -339,9 +355,9 @@ export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged
             {error && <InlineError text={error} />}
             {tableErrors.length > 0 && <div role="alert" className="mb-5 rounded-xl border border-[#9b7a45]/35 bg-[#2c261a]/85 px-4 py-3 text-[11px] text-[#e0bd7c]"><div className="mb-1 flex items-center gap-2 font-semibold"><WarningCircleIcon size={15} />{chinese ? "请修正表格问题" : "Fix table issues"}</div>{tableErrors.slice(0, 8).map((item) => <div key={item} className="font-mono text-[9px] leading-5">{item}</div>)}</div>}
 
-            {step === 1 && <PinoutStep role="PRODUCT" locale={locale} pinout={product} rows={productPins} metrics={productMetrics} revision={productRevision} artifacts={pinoutArtifacts.filter((item) => item.title.startsWith("PRODUCT"))} busy={busy} onRevision={setProductRevision} onRows={setProductPins} onMetrics={setProductMetrics} onImport={() => void chooseAndImport("PRODUCT", productRevision)} onLoad={(id) => void loadPinout("PRODUCT", id)} onConfirm={() => requestPinoutConfirmation("PRODUCT")} onImportTable={(kind) => void importTable(kind, "PRODUCT")} onExportTable={(kind, rows) => void exportTable(kind, rows)} onPaste={(kind) => setPasteTarget({ kind, role: "PRODUCT" })} />}
-            {step === 2 && <PinoutStep role="WIB" locale={locale} pinout={wib} rows={wibPins} metrics={wibMetrics} revision={wibRevision} artifacts={pinoutArtifacts.filter((item) => item.title.startsWith("WIB"))} busy={busy} onRevision={setWibRevision} onRows={setWibPins} onMetrics={setWibMetrics} onImport={() => void chooseAndImport("WIB", wibRevision)} onLoad={(id) => void loadPinout("WIB", id)} onConfirm={() => requestPinoutConfirmation("WIB")} onImportTable={(kind) => void importTable(kind, "WIB")} onExportTable={(kind, rows) => void exportTable(kind, rows)} onPaste={(kind) => setPasteTarget({ kind, role: "WIB" })} />}
-            {step === 3 && <MappingStep locale={locale} product={product} wib={wib} mappingRows={mappingRows} aliases={aliases} caseSensitive={caseSensitive} wiring={wiring} busy={busy} onMappingRows={setMappingRows} onAliases={setAliases} onCaseSensitive={setCaseSensitive} onSuggest={() => setMappingRows(suggestMappings(product, wib))} onCompare={() => void compare()} onOpenAnalysis={onOpenAnalysis} onImport={(kind) => void importTable(kind)} onExport={(kind, rows) => void exportTable(kind, rows)} onPaste={(kind) => setPasteTarget({ kind })} />}
+            {step === 1 && <PinoutStep role="PRODUCT" locale={locale} document={product} metrics={productMetrics} revision={productRevision} artifacts={pinoutArtifacts.filter((item) => item.title.includes("PRODUCT"))} operator={approver} focusPathId={focusedPath?.role === "PRODUCT" ? focusedPath.id : null} busy={busy} onOperator={setApprover} onRevision={setProductRevision} onImport={() => void chooseAndImport("PRODUCT", productRevision)} onLoad={(id) => void loadPinout("PRODUCT", id)} onTrace={(candidateId) => traceSchematic("PRODUCT", candidateId)} onCorrect={(corrections, candidateId) => correctSchematic("PRODUCT", corrections, candidateId)} onConfirm={(candidateId, pathIds) => requestPathConfirmation("PRODUCT", candidateId, pathIds)} />}
+            {step === 2 && <PinoutStep role="WIB" locale={locale} document={wib} metrics={wibMetrics} revision={wibRevision} artifacts={pinoutArtifacts.filter((item) => item.title.includes("WIB"))} operator={approver} focusPathId={focusedPath?.role === "WIB" ? focusedPath.id : null} busy={busy} onOperator={setApprover} onRevision={setWibRevision} onImport={() => void chooseAndImport("WIB", wibRevision)} onLoad={(id) => void loadPinout("WIB", id)} onTrace={(candidateId) => traceSchematic("WIB", candidateId)} onCorrect={(corrections, candidateId) => correctSchematic("WIB", corrections, candidateId)} onConfirm={(candidateId, pathIds) => requestPathConfirmation("WIB", candidateId, pathIds)} />}
+            {step === 3 && <MappingStep locale={locale} product={product} wib={wib} mappingRows={mappingRows} aliases={aliases} caseSensitive={caseSensitive} wiring={wiring} busy={busy} onMappingRows={setMappingRows} onAliases={setAliases} onCaseSensitive={setCaseSensitive} onSuggest={() => setMappingRows(suggestMappings(product, wib))} onCompare={() => void compare()} onOpenPath={(role, id) => { setFocusedPath({ role, id }); setStep(role === "PRODUCT" ? 1 : 2); }} onOpenAnalysis={onOpenAnalysis} onImport={(kind) => void importTable(kind)} onExport={(kind, rows) => void exportTable(kind, rows)} onPaste={(kind) => setPasteTarget({ kind })} />}
             {step === 4 && <RecommendationStep locale={locale} product={product} plan={testPlan} busy={busy} onGenerate={() => void recommend()} onOpenAnalysis={onOpenAnalysis} />}
             {step === 5 && <ConstraintStep locale={locale} rows={constraints} set={constraintSet} title={constraintTitle} revision={constraintRevision} artifacts={constraintArtifacts} busy={busy} onRows={setConstraints} onTitle={setConstraintTitle} onRevision={setConstraintRevision} onApprove={requestConstraintApproval} onLoad={(id) => void loadConstraintSet(id)} onImport={() => void importTable("CONSTRAINT")} onExport={() => void exportTable("CONSTRAINT", constraints as unknown as Array<Record<string, unknown>>)} onPaste={() => setPasteTarget({ kind: "CONSTRAINT" })} />}
             {step === 6 && <QualificationStep locale={locale} product={product} wib={wib} constraintSet={constraintSet} qualification={qualification} busy={busy} onRun={() => void qualify()} onOpenAnalysis={onOpenAnalysis} />}
@@ -356,42 +372,27 @@ export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged
   );
 }
 
-function PinoutStep({ role, locale, pinout, rows, metrics, revision, artifacts, busy, onRevision, onRows, onMetrics, onImport, onLoad, onConfirm, onImportTable, onExportTable, onPaste }: {
-  role: "PRODUCT" | "WIB"; locale: Locale; pinout: SchematicPinout | null; rows: PinRow[]; metrics: MetricRow[]; revision: string; artifacts: ArtifactCatalog["artifacts"]; busy: boolean;
-  onRevision(value: string): void; onRows(rows: PinRow[]): void; onMetrics(rows: MetricRow[]): void; onImport(): void; onLoad(id: string): void; onConfirm(): void; onImportTable(kind: TableKind): void; onExportTable(kind: TableKind, rows: Array<Record<string, unknown>>): void; onPaste(kind: TableKind): void;
+function PinoutStep({ role, locale, document, metrics, revision, artifacts, operator, focusPathId, busy, onOperator, onRevision, onImport, onLoad, onTrace, onCorrect, onConfirm }: {
+  role: "PRODUCT" | "WIB"; locale: Locale; document: SchematicDocument | null; metrics: MetricRow[]; revision: string; artifacts: ArtifactCatalog["artifacts"]; operator: string; focusPathId: string | null; busy: boolean;
+  onOperator(value: string): void; onRevision(value: string): void; onImport(): void; onLoad(id: string): void; onTrace(candidateId: string): Promise<void>; onCorrect(corrections: SchematicCorrectionInput[], candidateId?: string): Promise<void>; onConfirm(candidateId: string, pathIds: string[]): void;
 }) {
   const chinese = locale === "zh-CN";
   return <section>
-    <StepHeading eyebrow={`${role} · CONTROLLED INPUT`} title={role === "PRODUCT" ? chinese ? "导入并确认产品接口" : "Import and confirm the product interface" : chinese ? "导入并确认实际 WIB 设计" : "Import and confirm the actual WIB design"} description={chinese ? "导入只产生候选内容。请在表格中核对完整引脚、NET NAME、修订和设计指标，再以姓名或工号确认。" : "Import creates candidates only. Verify the complete pinout, NET NAME values, revision, and design metrics before confirming with a name or employee ID."} />
+    <StepHeading eyebrow={`${role} · SCHEMATIC GRAPH V2`} title={role === "PRODUCT" ? chinese ? "导入、追踪并确认产品接口" : "Import, trace, and confirm the product interface" : chinese ? "导入、追踪并确认实际 WIB 设计" : "Import, trace, and confirm the actual WIB design"} description={chinese ? "完整 PDF 会在本地构建页面、器件、引脚、网络与跨页证据图。先确认接口锚点，再审查 WIB 引脚到最终芯片引脚的路径；只确认参与分析的路径。" : "Complete PDFs are converted locally into pages, components, pins, nets, and cross-page evidence. Select the interface anchor, then review each WIB-to-chip path and confirm only the paths used by analysis."} />
     <div className="mt-6 grid grid-cols-[minmax(0,1fr)_220px_auto] items-end gap-3">
-      <label><span className="form-label">{chinese ? "恢复已有引脚表" : "Resume an existing pinout"}</span><select className="workbench-input" value={pinout?.id ?? ""} onChange={(event) => onLoad(event.target.value)}><option value="">{chinese ? "选择本地产物" : "Choose local artifact"}</option>{artifacts.map((artifact) => <option key={artifact.id} value={artifact.id}>{artifact.title} · {artifact.status}</option>)}</select></label>
+      <label><span className="form-label">{chinese ? "恢复已有原理图" : "Resume an existing schematic"}</span><select className="workbench-input" value={document?.id ?? ""} onChange={(event) => onLoad(event.target.value)}><option value="">{chinese ? "选择本地产物" : "Choose local artifact"}</option>{artifacts.map((artifact) => <option key={artifact.id} value={artifact.id}>{artifact.title} · {artifact.status}</option>)}</select></label>
       <label><span className="form-label">{chinese ? "受控修订" : "Controlled revision"}</span><input className="workbench-input" value={revision} onChange={(event) => onRevision(event.target.value)} placeholder="REV A" /></label>
       <button className="primary-button" onClick={onImport} disabled={busy}><FileArrowUpIcon size={15} />{chinese ? "导入文件" : "Import file"}</button>
     </div>
-    {pinout && <div className="mt-4 flex flex-wrap items-center gap-2 border-y border-white/[0.065] py-3"><span className={`status-chip status-${pinout.status.toLowerCase()}`}>{pinout.status}</span><span className="font-mono text-[9px] text-[#777a76]">{pinout.source_format} · {pinout.id}</span><span className="min-w-0 flex-1 truncate text-right font-mono text-[9px] text-[#656865]">SHA-256 {pinout.source_hash}</span></div>}
-    <EditablePinTable locale={locale} rows={rows} onRows={onRows} onImport={() => onImportTable("PINOUT")} onExport={() => onExportTable("PINOUT", rows as unknown as Array<Record<string, unknown>>)} onPaste={() => onPaste("PINOUT")} />
-    <EditableMetricTable locale={locale} rows={metrics} onRows={onMetrics} onImport={() => onImportTable("DESIGN_METRIC")} onExport={() => onExportTable("DESIGN_METRIC", metrics as unknown as Array<Record<string, unknown>>)} onPaste={() => onPaste("DESIGN_METRIC")} />
-    <div className="mt-6 flex justify-end"><button className="primary-button" disabled={!pinout || !rows.length || busy} onClick={onConfirm}><ShieldCheckIcon size={15} />{pinout?.status === "CONFIRMED" ? chinese ? "重新确认当前内容" : "Reconfirm current content" : chinese ? "确认完整引脚证据" : "Confirm complete pinout"}</button></div>
+    {document && <div className="mt-4 flex flex-wrap items-center gap-2 border-y border-white/[0.065] py-3"><span className={`status-chip status-${document.status.toLowerCase().replaceAll("_", "-")}`}>{document.status}</span><span className="font-mono text-[9px] text-[#777a76]">{document.source_format} · {document.pages.length} PAGE(S) · {document.components.length} COMPONENT(S)</span><span className="min-w-0 flex-1 truncate text-right font-mono text-[9px] text-[#656865]">SHA-256 {document.source_hash}</span></div>}
+    {document ? <SchematicReview locale={locale} document={document} operator={operator} focusPathId={focusPathId} busy={busy} onOperator={onOperator} onTrace={onTrace} onCorrect={onCorrect} onConfirm={onConfirm} /> : <EmptyStep text={chinese ? "导入产品/WIB 完整 PDF，或兼容的 JSON/CSV 引脚映射。所有处理均在本机完成。" : "Import a complete product/WIB PDF or a compatible JSON/CSV pin mapping. Processing stays local."} />}
+    {metrics.length > 0 && <div className="mt-5 rounded-xl border border-white/[0.08] bg-[#141719] p-4"><div className="font-mono text-[9px] text-[#777a76]">DESIGN METRICS · {metrics.length}</div><div className="mt-2 flex flex-wrap gap-2">{metrics.map((metric) => <span key={metric.id} className="rounded-md border border-white/[0.07] px-2 py-1 font-mono text-[9px] text-[#aaa9a4]">{metric.id}={String(metric.value)} {metric.unit ?? ""}</span>)}</div></div>}
   </section>;
 }
 
-function EditablePinTable({ locale, rows, onRows, onImport, onExport, onPaste }: { locale: Locale; rows: PinRow[]; onRows(rows: PinRow[]): void; onImport(): void; onExport(): void; onPaste(): void }) {
-  const chinese = locale === "zh-CN";
-  return <TableSection title={chinese ? "连接器引脚与 NET NAME" : "Connector pins and NET NAME values"} count={rows.length} onAdd={() => onRows([...rows, { connector: "", pin: "", net_name: "" }])} onImport={onImport} onExport={onExport} onPaste={onPaste}>
-    <table className="editable-table"><thead><tr><th>CONNECTOR</th><th>PIN</th><th>NET NAME</th><th /></tr></thead><tbody>{rows.map((row, index) => <tr key={index}><td><input value={row.connector} onChange={(event) => onRows(updateRow(rows, index, { connector: event.target.value }))} /></td><td><input value={row.pin} onChange={(event) => onRows(updateRow(rows, index, { pin: event.target.value }))} /></td><td><input value={row.net_name} onChange={(event) => onRows(updateRow(rows, index, { net_name: event.target.value }))} /></td><td><DeleteButton label={chinese ? "删除引脚" : "Delete pin"} onClick={() => onRows(rows.filter((_, rowIndex) => rowIndex !== index))} /></td></tr>)}</tbody></table>
-  </TableSection>;
-}
-
-function EditableMetricTable({ locale, rows, onRows, onImport, onExport, onPaste }: { locale: Locale; rows: MetricRow[]; onRows(rows: MetricRow[]): void; onImport(): void; onExport(): void; onPaste(): void }) {
-  const chinese = locale === "zh-CN";
-  return <TableSection title={chinese ? "设计指标" : "Design metrics"} count={rows.length} onAdd={() => onRows([...rows, { id: "", value: "", unit: null }])} onImport={onImport} onExport={onExport} onPaste={onPaste}>
-    <table className="editable-table"><thead><tr><th>ID</th><th>{chinese ? "数值" : "VALUE"}</th><th>{chinese ? "单位" : "UNIT"}</th><th /></tr></thead><tbody>{rows.map((row, index) => <tr key={index}><td><input value={row.id} onChange={(event) => onRows(updateRow(rows, index, { id: event.target.value }))} /></td><td><input value={String(row.value)} onChange={(event) => onRows(updateRow(rows, index, { value: numericOrText(event.target.value) }))} /></td><td><input value={row.unit ?? ""} onChange={(event) => onRows(updateRow(rows, index, { unit: event.target.value || null }))} /></td><td><DeleteButton label={chinese ? "删除指标" : "Delete metric"} onClick={() => onRows(rows.filter((_, rowIndex) => rowIndex !== index))} /></td></tr>)}</tbody></table>
-  </TableSection>;
-}
-
-function MappingStep({ locale, product, wib, mappingRows, aliases, caseSensitive, wiring, busy, onMappingRows, onAliases, onCaseSensitive, onSuggest, onCompare, onOpenAnalysis, onImport, onExport, onPaste }: {
-  locale: Locale; product: SchematicPinout | null; wib: SchematicPinout | null; mappingRows: MappingRow[]; aliases: AliasRow[]; caseSensitive: boolean; wiring: WiringAnalysis | null; busy: boolean;
-  onMappingRows(rows: MappingRow[]): void; onAliases(rows: AliasRow[]): void; onCaseSensitive(value: boolean): void; onSuggest(): void; onCompare(): void; onOpenAnalysis(id: string): void; onImport(kind: TableKind): void; onExport(kind: TableKind, rows: Array<Record<string, unknown>>): void; onPaste(kind: TableKind): void;
+function MappingStep({ locale, product, wib, mappingRows, aliases, caseSensitive, wiring, busy, onMappingRows, onAliases, onCaseSensitive, onSuggest, onCompare, onOpenPath, onOpenAnalysis, onImport, onExport, onPaste }: {
+  locale: Locale; product: SchematicDocument | null; wib: SchematicDocument | null; mappingRows: MappingRow[]; aliases: AliasRow[]; caseSensitive: boolean; wiring: WiringAnalysis | null; busy: boolean;
+  onMappingRows(rows: MappingRow[]): void; onAliases(rows: AliasRow[]): void; onCaseSensitive(value: boolean): void; onSuggest(): void; onCompare(): void; onOpenPath(role: "PRODUCT" | "WIB", id: string): void; onOpenAnalysis(id: string): void; onImport(kind: TableKind): void; onExport(kind: TableKind, rows: Array<Record<string, unknown>>): void; onPaste(kind: TableKind): void;
 }) {
   const chinese = locale === "zh-CN";
   return <section><StepHeading eyebrow="DOCUMENT_BACKED · WIRING" title={chinese ? "定义连接范围并逐引脚比较" : "Define the connection scope and compare every pin"} description={chinese ? "连接器名称不一致或引脚编号发生转换时必须显式映射。NET 别名只接受一对一声明，不会自动模糊匹配。" : "Explicit mappings are required when connector names or pin numbers differ. NET aliases are one-to-one declarations; no fuzzy matching is applied."} />
@@ -403,11 +404,11 @@ function MappingStep({ locale, product, wib, mappingRows, aliases, caseSensitive
       <table className="editable-table"><thead><tr><th>PRODUCT NET</th><th>WIB NET</th><th /></tr></thead><tbody>{aliases.map((row, index) => <tr key={index}><td><input value={row.product_net} onChange={(event) => onAliases(updateRow(aliases, index, { product_net: event.target.value }))} /></td><td><input value={row.wib_net} onChange={(event) => onAliases(updateRow(aliases, index, { wib_net: event.target.value }))} /></td><td><DeleteButton label={chinese ? "删除别名" : "Delete alias"} onClick={() => onAliases(aliases.filter((_, rowIndex) => rowIndex !== index))} /></td></tr>)}</tbody></table>
     </TableSection>
     <div className="mt-6 flex items-center justify-between border-t border-white/[0.065] pt-5"><label className="flex items-center gap-2 text-[11px] text-[#858681]"><input type="checkbox" checked={caseSensitive} onChange={(event) => onCaseSensitive(event.target.checked)} />{chinese ? "NET NAME 区分大小写" : "NET NAME is case-sensitive"}</label><button className="primary-button" disabled={!product || !wib || busy} onClick={onCompare}><ShieldCheckIcon size={15} />{chinese ? "运行接线比较" : "Run wiring comparison"}</button></div>
-    {wiring && <ResultStrip locale={locale} verdict={wiring.verdict} counts={[wiring.pass_count, wiring.fail_count, wiring.review_count]} reportPath={wiring.report_path} onOpen={() => onOpenAnalysis(wiring.id)} />}
+    {wiring && <><ResultStrip locale={locale} verdict={wiring.verdict} counts={[wiring.pass_count, wiring.fail_count, wiring.review_count]} reportPath={wiring.report_path} onOpen={() => onOpenAnalysis(wiring.id)} /><div className="mt-3 overflow-x-auto rounded-xl border border-white/[0.08]"><table className="workbench-table min-w-[960px]"><thead><tr><th>STATUS</th><th>PRODUCT PATH</th><th>PRODUCT ENDPOINT</th><th>WIB PATH</th><th>WIB ENDPOINT</th><th>{chinese ? "诊断" : "DIAGNOSTIC"}</th></tr></thead><tbody>{wiring.connections.map((connection) => <tr key={connection.id} className={connection.verdict.toLowerCase()}><td><span className={`status-chip status-${connection.verdict.toLowerCase()}`}>{connection.verdict}</span></td><td>{connection.product_path_id ? <button className="font-mono text-[9px] text-[#c5a063] underline-offset-2 hover:underline" onClick={() => onOpenPath("PRODUCT", connection.product_path_id!)}>{connection.product_connector}.{connection.product_pin}</button> : `${connection.product_connector}.${connection.product_pin}`}</td><td className="font-mono text-[9px]">{connection.product_endpoint_refs?.join(", ") || "-"}</td><td>{connection.wib_path_id ? <button className="font-mono text-[9px] text-[#c5a063] underline-offset-2 hover:underline" onClick={() => onOpenPath("WIB", connection.wib_path_id!)}>{connection.wib_connector}.{connection.wib_pin}</button> : `${connection.wib_connector}.${connection.wib_pin}`}</td><td className="font-mono text-[9px]">{connection.wib_endpoint_refs?.join(", ") || "-"}</td><td className="max-w-[360px] text-[9px] leading-4 text-[#888b87]">{connection.message}</td></tr>)}</tbody></table></div></>}
   </section>;
 }
 
-function RecommendationStep({ locale, product, plan, busy, onGenerate, onOpenAnalysis }: { locale: Locale; product: SchematicPinout | null; plan: TestRecommendationAnalysis | null; busy: boolean; onGenerate(): void; onOpenAnalysis(id: string): void }) {
+function RecommendationStep({ locale, product, plan, busy, onGenerate, onOpenAnalysis }: { locale: Locale; product: SchematicDocument | null; plan: TestRecommendationAnalysis | null; busy: boolean; onGenerate(): void; onOpenAnalysis(id: string): void }) {
   const chinese = locale === "zh-CN";
   return <section><StepHeading eyebrow="DOCUMENT_BACKED · TEST PLANNING" title={chinese ? "生成制造测试与 WIB 设计建议" : "Generate manufacturing-test and WIB design recommendations"} description={chinese ? "建议来自已导入接口 NET NAME；内部原理图、测试机数值、治具能力和产线验收不会被自动推断。" : "Recommendations derive from imported interface NET NAME values. Internal schematics, tester limits, fixture capability, and line acceptance are not inferred."} />
     <div className="mt-6 flex items-center justify-between border-y border-white/[0.065] py-5"><SourceSummary label="PRODUCT" pinout={product} /><button className="primary-button" disabled={!product || busy} onClick={onGenerate}><PlusIcon size={15} />{chinese ? "生成建议" : "Generate recommendations"}</button></div>
@@ -423,14 +424,14 @@ function ConstraintStep({ locale, rows, set, title, revision, artifacts, busy, o
   return <section><StepHeading eyebrow="APPROVED · HARD CONSTRAINTS" title={chinese ? "建立受控 WIB 约束集" : "Build a controlled WIB constraint set"} description={chinese ? "只有具有明确比较器、必需值、单位和来源的约束才能批准。MANUAL_FACTORY_CONFIRMATION 会被保存，但最终始终保持 REVIEW。" : "Only constraints with explicit comparators, required values, units, and authorities can be approved. MANUAL_FACTORY_CONFIRMATION rows are stored but remain REVIEW."} />
     <div className="mt-6 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_180px] gap-3"><label><span className="form-label">{chinese ? "约束集标题" : "Constraint-set title"}</span><input className="workbench-input" value={title} onChange={(event) => onTitle(event.target.value)} /></label><label><span className="form-label">{chinese ? "恢复已批准约束集" : "Resume approved set"}</span><select className="workbench-input" value={set?.id ?? ""} onChange={(event) => onLoad(event.target.value)}><option value="">{chinese ? "选择本地产物" : "Choose local artifact"}</option>{artifacts.map((artifact) => <option key={artifact.id} value={artifact.id}>{artifact.title}</option>)}</select></label><label><span className="form-label">{chinese ? "修订" : "Revision"}</span><input className="workbench-input" value={revision} onChange={(event) => onRevision(event.target.value)} placeholder="REV A" /></label></div>
     <TableSection title={chinese ? "硬约束定义" : "Hard-constraint definitions"} count={rows.length} onAdd={() => onRows([...rows, blankConstraint(rows.length + 1)])} onImport={onImport} onExport={onExport} onPaste={onPaste}>
-      <div className="overflow-x-auto"><table className="editable-table min-w-[1500px]"><thead><tr><th>ID</th><th>AREA</th><th>{chinese ? "要求" : "REQUIREMENT"}</th><th>CHECK</th><th>METRIC ID</th><th>COMPARATOR</th><th>{chinese ? "必需值" : "REQUIRED"}</th><th>UNIT</th><th>VERIFICATION</th><th>{chinese ? "来源权威" : "SOURCE AUTHORITY"}</th><th /></tr></thead><tbody>{rows.map((row, index) => <tr key={index}><td><input value={row.id} onChange={(event) => onRows(updateRow(rows, index, { id: event.target.value }))} /></td><td><input value={row.area} onChange={(event) => onRows(updateRow(rows, index, { area: event.target.value }))} /></td><td><input value={row.requirement} onChange={(event) => onRows(updateRow(rows, index, { requirement: event.target.value }))} /></td><td><select value={row.check} onChange={(event) => onRows(updateRow(rows, index, { check: event.target.value as WibConstraintDefinition["check"] }))}>{["WIRING_ONE_TO_ONE", "NET_IDENTITY", "COMPLETE_PIN_COVERAGE", "NO_UNINTENDED_INTERCONNECT", "NC_ISOLATION", "DESIGN_METRIC"].map((value) => <option key={value}>{value}</option>)}</select></td><td><input value={row.metric_id ?? ""} onChange={(event) => onRows(updateRow(rows, index, { metric_id: event.target.value || null }))} /></td><td><select value={row.comparator} onChange={(event) => onRows(updateRow(rows, index, { comparator: event.target.value as WibConstraintDefinition["comparator"], required_value: event.target.value === "RANGE" ? { min: 0, max: 0 } : row.required_value }))}>{["EXACT", "ALL", "NONE", "MAXIMUM", "MINIMUM", "RANGE"].map((value) => <option key={value}>{value}</option>)}</select></td><td>{row.comparator === "RANGE" && typeof row.required_value === "object" ? <div className="grid grid-cols-2 gap-1"><input value={row.required_value.min} onChange={(event) => onRows(updateRow(rows, index, { required_value: { ...row.required_value as { min: number; max: number }, min: Number(event.target.value) } }))} /><input value={row.required_value.max} onChange={(event) => onRows(updateRow(rows, index, { required_value: { ...row.required_value as { min: number; max: number }, max: Number(event.target.value) } }))} /></div> : <input value={String(row.required_value)} onChange={(event) => onRows(updateRow(rows, index, { required_value: numericOrText(event.target.value) }))} />}</td><td><input value={row.unit ?? ""} onChange={(event) => onRows(updateRow(rows, index, { unit: event.target.value || null }))} /></td><td><select value={row.verification_mode} onChange={(event) => onRows(updateRow(rows, index, { verification_mode: event.target.value as WibConstraintDefinition["verification_mode"] }))}><option>DOCUMENT_BACKED</option><option>MANUAL_FACTORY_CONFIRMATION</option></select></td><td><input value={row.source_authority} onChange={(event) => onRows(updateRow(rows, index, { source_authority: event.target.value }))} /></td><td><DeleteButton label={chinese ? "删除约束" : "Delete constraint"} onClick={() => onRows(rows.filter((_, rowIndex) => rowIndex !== index))} /></td></tr>)}</tbody></table></div>
+      <div className="overflow-x-auto"><table className="editable-table min-w-[1880px]"><thead><tr><th>ID</th><th>AREA</th><th>{chinese ? "要求" : "REQUIREMENT"}</th><th>CHECK</th><th>SCOPE CONNECTOR/PIN/NET</th><th>PATH POLICY / ENDPOINTS</th><th>METRIC ID</th><th>COMPARATOR</th><th>{chinese ? "必需值" : "REQUIRED"}</th><th>UNIT</th><th>VERIFICATION</th><th>{chinese ? "来源权威" : "SOURCE AUTHORITY"}</th><th /></tr></thead><tbody>{rows.map((row, index) => <tr key={index}><td><input value={row.id} onChange={(event) => onRows(updateRow(rows, index, { id: event.target.value }))} /></td><td><input value={row.area} onChange={(event) => onRows(updateRow(rows, index, { area: event.target.value }))} /></td><td><input value={row.requirement} onChange={(event) => onRows(updateRow(rows, index, { requirement: event.target.value }))} /></td><td><select value={row.check} onChange={(event) => onRows(updateRow(rows, index, { check: event.target.value as WibConstraintDefinition["check"] }))}>{["WIRING_ONE_TO_ONE", "NET_IDENTITY", "COMPLETE_PIN_COVERAGE", "NO_UNINTENDED_INTERCONNECT", "NC_ISOLATION", "DESIGN_METRIC", "ENDPOINT_UNIQUENESS", "NO_UNRESOLVED_BRANCH", "PATH_COMPONENT_POLICY", "ENDPOINT_PIN_MATCH"].map((value) => <option key={value}>{value}</option>)}</select></td><td><input value={[row.scope?.connector ?? "", row.scope?.pin ?? "", row.scope?.net_name ?? ""].join("/")} onChange={(event) => { const [connector, pin, net_name] = event.target.value.split("/"); onRows(updateRow(rows, index, { scope: { ...(connector ? { connector } : {}), ...(pin ? { pin } : {}), ...(net_name ? { net_name } : {}) } })); }} placeholder="P1/12/WIB_SCL" /></td><td><input value={row.check === "ENDPOINT_PIN_MATCH" ? (row.expected_endpoint_refs ?? []).join(",") : row.check === "PATH_COMPONENT_POLICY" ? [...(row.allowed_component_kinds ?? []), ...(row.forbidden_component_refs ?? []).map((item) => `!${item}`)].join(",") : ""} disabled={row.check !== "ENDPOINT_PIN_MATCH" && row.check !== "PATH_COMPONENT_POLICY"} onChange={(event) => { const values = event.target.value.split(",").map((item) => item.trim()).filter(Boolean); onRows(updateRow(rows, index, row.check === "ENDPOINT_PIN_MATCH" ? { expected_endpoint_refs: values } : { allowed_component_kinds: values.filter((item) => !item.startsWith("!")) as WibConstraintDefinition["allowed_component_kinds"], forbidden_component_refs: values.filter((item) => item.startsWith("!")).map((item) => item.slice(1)) })); }} placeholder={row.check === "ENDPOINT_PIN_MATCH" ? "U7.36" : "PASSIVE,!U99"} /></td><td><input value={row.metric_id ?? ""} onChange={(event) => onRows(updateRow(rows, index, { metric_id: event.target.value || null }))} /></td><td><select value={row.comparator} onChange={(event) => onRows(updateRow(rows, index, { comparator: event.target.value as WibConstraintDefinition["comparator"], required_value: event.target.value === "RANGE" ? { min: 0, max: 0 } : row.required_value }))}>{["EXACT", "ALL", "NONE", "MAXIMUM", "MINIMUM", "RANGE"].map((value) => <option key={value}>{value}</option>)}</select></td><td>{row.comparator === "RANGE" && typeof row.required_value === "object" ? <div className="grid grid-cols-2 gap-1"><input value={row.required_value.min} onChange={(event) => onRows(updateRow(rows, index, { required_value: { ...row.required_value as { min: number; max: number }, min: Number(event.target.value) } }))} /><input value={row.required_value.max} onChange={(event) => onRows(updateRow(rows, index, { required_value: { ...row.required_value as { min: number; max: number }, max: Number(event.target.value) } }))} /></div> : <input value={String(row.required_value)} onChange={(event) => onRows(updateRow(rows, index, { required_value: numericOrText(event.target.value) }))} />}</td><td><input value={row.unit ?? ""} onChange={(event) => onRows(updateRow(rows, index, { unit: event.target.value || null }))} /></td><td><select value={row.verification_mode} onChange={(event) => onRows(updateRow(rows, index, { verification_mode: event.target.value as WibConstraintDefinition["verification_mode"] }))}><option>DOCUMENT_BACKED</option><option>MANUAL_FACTORY_CONFIRMATION</option></select></td><td><input value={row.source_authority} onChange={(event) => onRows(updateRow(rows, index, { source_authority: event.target.value }))} /></td><td><DeleteButton label={chinese ? "删除约束" : "Delete constraint"} onClick={() => onRows(rows.filter((_, rowIndex) => rowIndex !== index))} /></td></tr>)}</tbody></table></div>
     </TableSection>
     {set && <div className="mt-4 rounded-xl border border-[#779166]/25 bg-[#779166]/[0.055] px-4 py-3"><div className="flex items-center gap-2 text-[11px] text-[#a9c595]"><CheckCircleIcon size={15} />APPROVED · {set.title} · {set.revision}</div><div className="mt-1 font-mono text-[8px] text-[#697366]">SHA-256 {set.content_hash}</div></div>}
     <div className="mt-6 flex justify-end"><button className="primary-button" disabled={!rows.length || !title.trim() || !revision.trim() || busy} onClick={onApprove}><ShieldCheckIcon size={15} />{chinese ? "审查并批准约束集" : "Review and approve constraint set"}</button></div>
   </section>;
 }
 
-function QualificationStep({ locale, product, wib, constraintSet, qualification, busy, onRun, onOpenAnalysis }: { locale: Locale; product: SchematicPinout | null; wib: SchematicPinout | null; constraintSet: WibConstraintSet | null; qualification: WibQualificationAnalysis | null; busy: boolean; onRun(): void; onOpenAnalysis(id: string): void }) {
+function QualificationStep({ locale, product, wib, constraintSet, qualification, busy, onRun, onOpenAnalysis }: { locale: Locale; product: SchematicDocument | null; wib: SchematicDocument | null; constraintSet: WibConstraintSet | null; qualification: WibQualificationAnalysis | null; busy: boolean; onRun(): void; onOpenAnalysis(id: string): void }) {
   const chinese = locale === "zh-CN";
   return <section><StepHeading eyebrow="CLOSED LOOP · FINAL QUALIFICATION" title={chinese ? "执行最终 WIB 设计验证" : "Run final WIB design qualification"} description={chinese ? "PASS 要求产品与 WIB 接线通过，并且约束集中的每条适用约束都有受支持证据且通过。遗漏范围不会被默认视为通过。" : "PASS requires clean product-to-WIB wiring and supported passing evidence for every applicable constraint. Omitted scope is never assumed to pass."} />
     <div className="mt-6 divide-y divide-white/[0.065] border-y border-white/[0.065]"><QualificationInput label="PRODUCT PINOUT" value={product?.id} status={product?.status} /><QualificationInput label="WIB PINOUT" value={wib?.id} status={wib?.status} /><QualificationInput label="CONSTRAINT SET" value={constraintSet?.id} status={constraintSet?.status} /></div>
@@ -447,7 +448,7 @@ function StepHeading({ eyebrow, title, description }: { eyebrow: string; title: 
   return <div className="border-b border-white/[0.07] pb-6"><div className="font-mono text-[9px] uppercase tracking-[0.14em] text-[#a58655]">{eyebrow}</div><h1 className="mt-3 text-[23px] font-semibold tracking-[-0.035em] text-[#ebe9e4]">{title}</h1><p className="mt-2 max-w-[78ch] text-[11px] leading-5 text-[#7e807d]">{description}</p></div>;
 }
 
-function SourceSummary({ label, pinout }: { label: string; pinout: SchematicPinout | null }) {
+function SourceSummary({ label, pinout }: { label: string; pinout: SchematicDocument | null }) {
   return <div className="rounded-xl border border-white/[0.08] bg-[#141719] px-4 py-3"><div className="flex items-center justify-between"><span className="font-mono text-[9px] text-[#9a8159]">{label}</span>{pinout && <span className={`status-chip status-${pinout.status.toLowerCase()}`}>{pinout.status}</span>}</div><div className="mt-2 truncate text-[11px] text-[#c8c6c1]">{pinout?.source_path ?? "-"}</div><div className="mt-1 font-mono text-[9px] text-[#686a67]">{pinout ? `${pinout.pins.length} PINS · ${pinout.revision ?? "NO REVISION"}` : "NO INPUT"}</div></div>;
 }
 
@@ -490,31 +491,6 @@ function updateRow<T>(rows: T[], index: number, patch: Partial<T>): T[] {
   return rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row);
 }
 
-function validatePinRows(rows: PinRow[], chinese: boolean): string[] {
-  const errors: string[] = [];
-  const seen = new Map<string, number>();
-  rows.forEach((row, index) => {
-    if (!row.connector.trim() || !row.pin.trim() || !row.net_name.trim()) errors.push(chinese ? `第 ${index + 1} 行缺少连接器、引脚或 NET NAME。` : `Row ${index + 1} is missing connector, pin, or NET NAME.`);
-    const key = `${row.connector}\u0000${row.pin}`.toLocaleUpperCase("en-US");
-    if (seen.has(key)) errors.push(chinese ? `第 ${index + 1} 行与第 ${seen.get(key)! + 1} 行引脚重复。` : `Row ${index + 1} duplicates the pin on row ${seen.get(key)! + 1}.`);
-    else seen.set(key, index);
-  });
-  return errors;
-}
-
-function validateMetricRows(rows: MetricRow[], chinese: boolean): string[] {
-  const errors: string[] = [];
-  const seen = new Set<string>();
-  rows.forEach((row, index) => {
-    if (!row.id.trim() || row.value === "") errors.push(chinese ? `第 ${index + 1} 行设计指标缺少 ID 或数值。` : `Design metric row ${index + 1} is missing ID or value.`);
-    if (!row.unit?.trim()) errors.push(chinese ? `第 ${index + 1} 行设计指标缺少单位。` : `Design metric row ${index + 1} is missing a unit.`);
-    const key = row.id.toLocaleUpperCase("en-US");
-    if (seen.has(key)) errors.push(chinese ? `设计指标 ID ${row.id} 重复。` : `Duplicate design metric ID ${row.id}.`);
-    else seen.add(key);
-  });
-  return errors;
-}
-
 function validateMappingRows(rows: MappingRow[], aliases: AliasRow[], chinese: boolean): string[] {
   const errors: string[] = [];
   const mappings = new Set<string>();
@@ -545,6 +521,8 @@ function validateConstraintRows(rows: WibConstraintDefinition[], chinese: boolea
     if (!row.id.trim() || !row.area.trim() || !row.requirement.trim() || !row.source_authority.trim()) errors.push(chinese ? `第 ${index + 1} 条约束缺少 ID、领域、要求或来源权威。` : `Constraint ${index + 1} is missing ID, area, requirement, or source authority.`);
     if (row.check === "DESIGN_METRIC" && !row.metric_id?.trim()) errors.push(chinese ? `约束 ${row.id || index + 1} 的 DESIGN_METRIC 缺少 metric_id。` : `Constraint ${row.id || index + 1} requires metric_id for DESIGN_METRIC.`);
     if (row.check === "DESIGN_METRIC" && !row.unit?.trim()) errors.push(chinese ? `约束 ${row.id || index + 1} 的 DESIGN_METRIC 缺少单位。` : `Constraint ${row.id || index + 1} requires a unit for DESIGN_METRIC.`);
+    if (row.check === "ENDPOINT_PIN_MATCH" && !row.expected_endpoint_refs?.length) errors.push(chinese ? `约束 ${row.id || index + 1} 缺少预期芯片端点。` : `Constraint ${row.id || index + 1} requires expected chip endpoints.`);
+    if (row.check === "PATH_COMPONENT_POLICY" && !row.allowed_component_kinds?.length && !row.forbidden_component_refs?.length) errors.push(chinese ? `约束 ${row.id || index + 1} 缺少允许器件类型或禁止位号。` : `Constraint ${row.id || index + 1} requires allowed component kinds or forbidden references.`);
     if (row.comparator === "RANGE" && (typeof row.required_value !== "object" || !Number.isFinite(row.required_value.min) || !Number.isFinite(row.required_value.max) || row.required_value.min > row.required_value.max)) errors.push(chinese ? `约束 ${row.id || index + 1} 的范围无效。` : `Constraint ${row.id || index + 1} has an invalid range.`);
     const key = row.id.toLocaleUpperCase("en-US");
     if (seen.has(key)) errors.push(chinese ? `约束 ID ${row.id} 重复。` : `Duplicate constraint ID ${row.id}.`);
@@ -570,7 +548,7 @@ function flattenMappings(mappings: ConnectorMapping[]): MappingRow[] {
   return mappings.flatMap((mapping) => mapping.pin_map?.length ? mapping.pin_map.map((pins) => ({ product_connector: mapping.product_connector, wib_connector: mapping.wib_connector, product_pin: pins.product_pin, wib_pin: pins.wib_pin })) : [{ product_connector: mapping.product_connector, wib_connector: mapping.wib_connector, product_pin: "", wib_pin: "" }]);
 }
 
-function suggestMappings(product: SchematicPinout | null, wib: SchematicPinout | null): MappingRow[] {
+function suggestMappings(product: SchematicDocument | null, wib: SchematicDocument | null): MappingRow[] {
   if (!product || !wib) return [];
   const productConnectors = [...new Set(product.pins.map((pin) => pin.connector))];
   const wibConnectors = [...new Set(wib.pins.map((pin) => pin.connector))];

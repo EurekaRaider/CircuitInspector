@@ -214,7 +214,10 @@ Results are deliberately broader than PASS/FAIL:
 | Tool | Purpose |
 |---|---|
 | `import_design` | Detect and stream-import an ODB++ or Gerber manufacturing package; return semantic coverage and diagnostics |
-| `import_schematic` | Import product or WIB connector/pin/NET NAME evidence from JSON, CSV/TSV, text, or text-bearing PDF |
+| `import_schematic` | Build a local `SchematicDocument v2` graph from a complete vector/scanned PDF, or adapt JSON/CSV/TSV/text pin mappings |
+| `trace_schematic_interface` | Rank connector candidates and trace selected interface pins through named nets and permitted passthrough devices to IC pins |
+| `apply_schematic_corrections` | Apply audited component, pin, NET, wire, junction, off-page, and passthrough corrections; invalidate stale confirmations |
+| `confirm_schematic_paths` | Confirm only selected cross-page interface paths after evidence review |
 | `confirm_schematic_pinout` | Confirm or correct the complete pinout and optional structured WIB design metrics before formal comparison |
 | `compare_fixture_wiring` | Compare confirmed product and WIB pins one-to-one, report swaps/missing/extra pins, and return PASS only for a clean confirmed scope |
 | `recommend_manufacturing_tests` | Generate manufacturing-line test advice, corresponding WIB design guidance, and a hard-constraint/TBD matrix |
@@ -228,7 +231,7 @@ Results are deliberately broader than PASS/FAIL:
 
 Resources expose analysis summaries, individual findings, evidence files, and full reports. A violation includes source format, semantic confidence, NET name, reference designator, layer, coordinates, measured value, threshold, rule citation, and an evidence URI.
 
-Schematic PDF extraction produces candidates, not an automatic electrical truth source. Product and WIB pinouts must be explicitly confirmed before a mismatch can become formal `FAIL` or a clean comparison can become `PASS`. Closed-loop WIB qualification returns `PASS` only when all applicable constraints in the approved set have supported actual evidence and pass; missing metrics, unit conflicts, or factory-dependent evidence remain `REVIEW`.
+Schematic PDF extraction produces a candidate graph, not an automatic electrical truth source. Vector text/drawing operations and packaged offline OCR/image processing preserve page and bounding-box evidence; no cloud OCR or external component database is used. A clean comparison becomes `PASS` only when every relevant path is selected, resolved to one chip pin, explicitly confirmed, conflict-free, and compliant with the applicable approved constraints. OCR uncertainty, unresolved branches, unknown MUX/translator behavior, source conflicts, and missing device models remain `REVIEW`.
 
 The MCP never opens the Viewer on its own. A client can present a result link; the user chooses whether to open the independent Viewer window focused on that analysis and issue.
 
@@ -244,6 +247,8 @@ Implemented interaction paths include:
 - Issue list, next/previous navigation, and one-click focus
 - Violation outlines, distance lines, thresholds, NET names, references, and issue IDs
 - Product-to-WIB pin-line annotations for matches, swaps, missing pins, and unconfirmed rows
+- Embedded schematic reviewer with page thumbnails, pointer-centered wheel zoom, drag-to-pan, fit-page/fit-width, cross-page path navigation, component/pin/NET/OCR overlays, and audited graphical correction controls
+- Per-channel product/WIB path breadcrumbs and actual chip endpoints; selecting a `FAIL`/`REVIEW` path returns to its PDF page and evidence boxes
 - Manufacturing-test recommendations, WIB design guidance, hard-constraint matrices, and final qualification results opened by analysis deep link
 - Gerber dark/clear polarity, macro, region, drill, and layer-stack rendering paths
 
@@ -258,7 +263,8 @@ flowchart LR
   Viewer["Electron Viewer"] <-->|"IPC + transferable ArrayBuffer"| Core
   Core --> Cache["Versioned local cache"]
   Core --> Evidence["SVG / PNG / HTML evidence"]
-  Schematics["Product + WIB schematics"] --> DocAnalysis["Confirmed pinout + document-backed checks"]
+  Schematics["Product + WIB PDF / structured mappings"] --> Graph["SchematicDocument v2 + local OCR"]
+  Graph --> DocAnalysis["Confirmed interface paths + document-backed checks"]
   Constraints["Approved WIB constraints"] --> DocAnalysis
   DocAnalysis --> Evidence
   DocAnalysis --> Viewer
@@ -276,7 +282,7 @@ Read the [architecture](docs/architecture.md) and [security model](docs/security
 ### Validated in the current workspace
 
 - 15 Rust tests passing; the Ucamco conformance test is present and explicitly ignored without external fixtures
-- 14 TypeScript integration, schematic/WIB, qualification, and localization tests passing
+- TypeScript integration, schematic/OCR, path-tracing, qualification, security, and localization tests passing
 - TypeScript typecheck and production builds passing
 - Packaged macOS arm64 Viewer launched against the real Rust core
 - SVG, PNG, HTML report, binary tile, package manifest, SBOM, and third-party notice generation exercised locally

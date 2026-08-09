@@ -1,14 +1,29 @@
 import { build } from "esbuild";
+import { copyFile } from "node:fs/promises";
 
-await build({
-  entryPoints: ["src/index.ts"],
-  outfile: "dist/index.js",
-  bundle: true,
-  platform: "node",
-  target: "node22",
-  format: "esm",
-  sourcemap: true,
-  banner: {
-    js: "#!/usr/bin/env node\nimport { createRequire as __circuitInspectorCreateRequire } from 'node:module';\nconst require = __circuitInspectorCreateRequire(import.meta.url);"
-  }
-});
+await Promise.all([
+  build({
+    entryPoints: ["src/index.ts"],
+    outfile: "dist/index.js",
+    bundle: true,
+    platform: "node",
+    target: "node22",
+    format: "esm",
+    sourcemap: true,
+    loader: { ".node": "copy" },
+    banner: {
+      js: "#!/usr/bin/env node\nimport { createRequire as __circuitInspectorCreateRequire } from 'node:module';\nconst require = __circuitInspectorCreateRequire(import.meta.url);"
+    },
+    external: ["@napi-rs/canvas", "@napi-rs/canvas-*"]
+  }),
+  build({
+    entryPoints: ["../../node_modules/tesseract.js/src/worker-script/node/index.js"],
+    outfile: "dist/ocr-worker.cjs",
+    bundle: true,
+    platform: "node",
+    target: "node22",
+    format: "cjs",
+    sourcemap: true
+  })
+]);
+await copyFile("../../node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs", "dist/pdf.worker.mjs");

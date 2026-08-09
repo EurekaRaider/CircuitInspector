@@ -7,6 +7,7 @@ export async function listWorkflowArtifacts(cacheDir: string): Promise<ArtifactC
   const groups = await Promise.all([
     scanJsonDirectory(path.join(cacheDir, "rules"), diagnostics, ruleArtifact),
     scanJsonDirectory(path.join(cacheDir, "pinouts"), diagnostics, pinoutArtifact),
+    scanSchematicDirectory(path.join(cacheDir, "schematics"), diagnostics),
     scanJsonDirectory(path.join(cacheDir, "wib-constraints"), diagnostics, constraintArtifact),
     scanAnalysisDirectory(path.join(cacheDir, "evidence"), diagnostics),
     scanJsonDirectory(path.join(cacheDir, "workflow-drafts"), diagnostics, draftArtifact)
@@ -15,6 +16,31 @@ export async function listWorkflowArtifacts(cacheDir: string): Promise<ArtifactC
     artifacts: groups.flat().sort((left, right) => right.updated_at.localeCompare(left.updated_at)),
     diagnostics
   };
+}
+
+async function scanSchematicDirectory(directory: string, diagnostics: Diagnostic[]): Promise<ArtifactSummary[]> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const artifacts: ArtifactSummary[] = [];
+  for (const name of names) {
+    const file = path.join(directory, name, "document.json");
+    try {
+      const [value, metadata] = await Promise.all([
+        readFile(file, "utf8").then((content) => JSON.parse(content) as Record<string, unknown>),
+        stat(file)
+      ]);
+      const artifact = schematicArtifact(value, metadata.mtime.toISOString());
+      if (artifact) artifacts.push(artifact);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") diagnostics.push({ code: "INVALID_CACHED_SCHEMATIC", severity: "WARNING", message: String(error), source: file });
+    }
+  }
+  return artifacts;
 }
 
 export async function saveWibWorkflowDraft(cacheDir: string, draft: WibWorkflowDraft): Promise<WibWorkflowDraft> {
@@ -97,6 +123,22 @@ function pinoutArtifact(value: Record<string, unknown>, updatedAt: string): Arti
     kind: "PINOUT",
     title: `${value.role} · ${sourcePath ? path.basename(sourcePath) : value.id}`,
     subtitle: `${String(value.source_format ?? "DOCUMENT")} · ${Array.isArray(value.pins) ? value.pins.length : 0} pin(s)`,
+    status: typeof value.status === "string" ? value.status : null,
+    verdict: null,
+    analysis_kind: null,
+    source_path: sourcePath,
+    updated_at: updatedAt
+  };
+}
+
+function schematicArtifact(value: Record<string, unknown>, updatedAt: string): ArtifactSummary | null {
+  if (value.schema_version !== 2 || typeof value.id !== "string" || (value.role !== "PRODUCT" && value.role !== "WIB")) return null;
+  const sourcePath = typeof value.source_path === "string" ? value.source_path : null;
+  return {
+    id: value.id,
+    kind: "SCHEMATIC",
+    title: `${value.role} schematic · ${sourcePath ? path.basename(sourcePath) : value.id}`,
+    subtitle: `${String(value.source_format ?? "DOCUMENT")} · ${Array.isArray(value.pages) ? value.pages.length : 0} page(s) · ${Array.isArray(value.paths) ? value.paths.length : 0} traced path(s)`,
     status: typeof value.status === "string" ? value.status : null,
     verdict: null,
     analysis_kind: null,

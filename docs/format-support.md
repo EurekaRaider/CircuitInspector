@@ -7,11 +7,14 @@
 | Gerber + IPC-356 | 合并网络、器件和测试点关系 | 标记 `SUPPLEMENTED`；冲突生成 `DATA_CONFLICT` |
 | 纯 Gerber X1 | 准确图形解析路径与基础 DFM | NET/器件/测试点通常 `MISSING`，相关规则 `NOT_APPLICABLE` |
 | `.gbrjob` | 文件清单与 layer function 辅助 | 只补充 Job 明确声明的元数据 |
-| 原理图 pinout JSON | `connectors[].pins[]`、可选 `design_metrics[]` | 明确字段作为候选证据；确认后为 `EXPLICIT`，可参与正式 WIB 比较 |
-| 原理图 CSV/TSV/TXT | `connector`、`pin`、`net_name` 行 | 需确认完整性和版本；不从缺失行推断 pin |
-| 文本型原理图 PDF | 仅识别明确的 connector/pin/NET NAME 文本行，并保留页码与 bbox | 始终先作为 `INFERRED` 候选；未经确认只能 `REVIEW` |
+| 原理图 pinout JSON | `connectors[].pins[]` 或 `pins[]`、可选 `design_metrics[]` | 通过兼容适配器进入 `SchematicDocument v2`；完整候选接口仍需确认 |
+| 原理图 CSV/TSV/TXT | `connector`、`pin`、`net_name` 行 | 通过兼容适配器进入 v2；不从缺失行推断 pin |
+| 矢量/文本原理图 PDF | 逐页提取文字和绘图操作，识别位号、引脚、NET label、正交导线、连接点、元件框和证据 bbox | 构建候选图与接口排名；只有相关路径确认后才能参与确定性裁决 |
+| 扫描原理图 PDF | 逐页本地渲染，使用随包分发的英文/数字 OCR 和图像连线检测资源 | OCR、线段和连接点保留置信度；歧义、冲突和缺失模型保持 `REVIEW`，不访问云服务 |
 
-当前不解析 Altium、OrCAD、KiCad 等原生原理图数据库，也不把任意 PDF 图形连线自动还原为完整电气网表。扫描 PDF OCR、内部非连接器网络、器件额定值和布局/机械指标若没有受控结构化导出，必须保持 `REVIEW`。
+当前不解析 Altium、OrCAD、KiCad 等原生原理图数据库。任意 PDF 并不天然等同于权威网表：相接线段会合并，交叉线仅在检测到连接点时连通，同作用域 NET label 按名称合并；跨页/层级标签、总线成员、MUX、level shifter 或多芯片端点无法唯一解释时保持 `REVIEW`。自动追踪的 `Ux.pin` 只代表候选图中的实际连通端点；若批准约束或黄金参考没有规定预期芯片/引脚，报告不会额外宣称其符合产品功能意图。
+
+PDF 与同修订结构化映射在连接器引脚上冲突时，两者均不会获得静默优先级。冲突诊断会阻止路径确认，直到用户在 Viewer 中执行带操作人、时间、before/after 和内容哈希的图校正。缓存按源文件 SHA-256 与解析器版本失效；大 PDF 按页处理并只通过受限 IPC 返回页面图像与覆盖层。
 
 闭环 WIB qualification 的结构化 JSON 可在 `design_metrics` 中提供实际设计值：
 

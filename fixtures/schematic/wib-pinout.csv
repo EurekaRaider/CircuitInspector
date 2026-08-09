@@ -1,0 +1,3 @@
+connector,pin,net_name
+P1,1,WIB_SCL
+P1,2,GND

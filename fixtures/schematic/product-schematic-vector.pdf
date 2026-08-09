@@ -1,0 +1,172 @@
+%PDF-1.3
+%“Œ‹ž ReportLab Generated PDF document (opensource)
+1 0 obj
+<<
+/F1 2 0 R /F2 3 0 R /F3 4 0 R
+>>
+endobj
+2 0 obj
+<<
+/BaseFont /Helvetica /Encoding /WinAnsiEncoding /Name /F1 /Subtype /Type1 /Type /Font
+>>
+endobj
+3 0 obj
+<<
+/BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /Name /F2 /Subtype /Type1 /Type /Font
+>>
+endobj
+4 0 obj
+<<
+/BaseFont /Courier /Encoding /WinAnsiEncoding /Name /F3 /Subtype /Type1 /Type /Font
+>>
+endobj
+5 0 obj
+<<
+/Contents 10 0 R /MediaBox [ 0 0 792 612 ] /Parent 9 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+6 0 obj
+<<
+/Contents 11 0 R /MediaBox [ 0 0 792 612 ] /Parent 9 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+7 0 obj
+<<
+/PageMode /UseNone /Pages 9 0 R /Type /Catalog
+>>
+endobj
+8 0 obj
+<<
+/Author (anonymous) /CreationDate (D:20260809005221+08'00') /Creator (anonymous) /Keywords () /ModDate (D:20260809005221+08'00') /Producer (ReportLab PDF Library - \(opensource\)) 
+  /Subject (unspecified) /Title (CircuitInspector product schematic fixture) /Trapped /False
+>>
+endobj
+9 0 obj
+<<
+/Count 2 /Kids [ 5 0 R 6 0 R ] /Type /Pages
+>>
+endobj
+10 0 obj
+<<
+/Length 1456
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+BT /F2 10 Tf 12 TL ET
+BT 1 0 0 1 34 575 Tm (CONTROLLED PIN EVIDENCE) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+BT 1 0 0 1 34 557 Tm (J1 PIN 1 NET WIB_SCL) Tj T* ET
+BT 1 0 0 1 34 545 Tm (J1 PIN 2 NET GND) Tj T* ET
+BT 1 0 0 1 34 533 Tm (R104 PIN 1 NET WIB_SCL) Tj T* ET
+BT 1 0 0 1 34 521 Tm (R104 PIN 2 NET MCU_SCL) Tj T* ET
+1.2 w
+n 100 250 105 120 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 146.384 352 Tm (J1) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 58 328 m 100 328 l S
+BT 1 0 0 1 90.2 325 Tm (1) Tj T* ET
+BT 1 0 0 1 107 325 Tm (WIB_SCL) Tj T* ET
+n 58 300 m 100 300 l S
+BT 1 0 0 1 90.2 297 Tm (2) Tj T* ET
+BT 1 0 0 1 107 297 Tm (GND) Tj T* ET
+1.2 w
+n 345 285 82 70 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 372.855 337 Tm (R104) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 303 313 m 345 313 l S
+BT 1 0 0 1 335.2 310 Tm (1) Tj T* ET
+BT 1 0 0 1 352 310 Tm (WIB_SCL) Tj T* ET
+n 303 285 m 345 285 l S
+BT 1 0 0 1 335.2 282 Tm (2) Tj T* ET
+BT 1 0 0 1 352 282 Tm (MCU_SCL) Tj T* ET
+1.4 w
+n 205 328 m 345 328 l S
+BT 1 0 0 1 230 336 Tm (WIB_SCL) Tj T* ET
+n 427 313 m 700 313 l S
+BT 1 0 0 1 500 321 Tm (TO_MCU_SCL) Tj T* ET
+n
+463 313 m
+463 314.6569 461.6569 316 460 316 c
+458.3431 316 457 314.6569 457 313 c
+457 311.3431 458.3431 310 460 310 c
+461.6569 310 463 311.3431 463 313 c
+B*
+n 460 313 m 460 230 l S
+n 460 230 m 590 230 l S
+BT 1 0 0 1 595 227 Tm (TEST_BRANCH) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 34 25 Tm (PAGE 1 / PRODUCT INTERFACE) Tj T* ET
+ 
+endstream
+endobj
+11 0 obj
+<<
+/Length 775
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+BT /F2 10 Tf 12 TL ET
+BT 1 0 0 1 34 575 Tm (CONTROLLED PIN EVIDENCE) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+BT 1 0 0 1 34 557 Tm (U7 PIN 36 NET MCU_SCL) Tj T* ET
+BT 1 0 0 1 34 545 Tm (U7 PIN 12 NET GND) Tj T* ET
+1.2 w
+n 460 220 150 190 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 527.971 392 Tm (U7) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 418 368 m 460 368 l S
+BT 1 0 0 1 445.4 365 Tm (36) Tj T* ET
+BT 1 0 0 1 467 365 Tm (MCU_SCL) Tj T* ET
+n 418 340 m 460 340 l S
+BT 1 0 0 1 445.4 337 Tm (12) Tj T* ET
+BT 1 0 0 1 467 337 Tm (GND) Tj T* ET
+1.4 w
+n 140 368 m 460 368 l S
+BT 1 0 0 1 150 376 Tm (FROM_MCU_SCL) Tj T* ET
+n 140 340 m 460 340 l S
+BT 1 0 0 1 150 348 Tm (GND) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 34 25 Tm (PAGE 2 / PRODUCT MCU) Tj T* ET
+ 
+endstream
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000061 00000 n 
+0000000112 00000 n 
+0000000219 00000 n 
+0000000331 00000 n 
+0000000436 00000 n 
+0000000630 00000 n 
+0000000824 00000 n 
+0000000892 00000 n 
+0000001187 00000 n 
+0000001252 00000 n 
+0000002760 00000 n 
+trailer
+<<
+/ID 
+[<32d449d55118acc80f480bad4641f638><32d449d55118acc80f480bad4641f638>]
+% ReportLab generated PDF document -- digest (opensource)
+
+/Info 8 0 R
+/Root 7 0 R
+/Size 12
+>>
+startxref
+3586
+%%EOF

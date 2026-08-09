@@ -11,7 +11,21 @@ files:
 extraResources:
   - from: target/release/${env.CIRCUIT_INSPECTOR_CORE_BINARY}
     to: bin/${env.CIRCUIT_INSPECTOR_CORE_BINARY}
+  - from: apps/viewer/dist/ocr-worker.cjs
+    to: ocr/ocr-worker.cjs
+  - from: node_modules/tesseract.js-core
+    to: ocr/tesseract.js-core
+  - from: node_modules/@tesseract.js-data/eng/4.0.0_best_int
+    to: ocr/lang
+  - from: node_modules/pdfjs-dist/standard_fonts
+    to: pdfjs/standard_fonts
+  - from: node_modules/pdfjs-dist/cmaps
+    to: pdfjs/cmaps
+  - from: node_modules/pdfjs-dist/wasm
+    to: pdfjs/wasm
 asar: true
+asarUnpack:
+  - node_modules/@napi-rs/**/*.node
 npmRebuild: false
 mac:
   target: zip

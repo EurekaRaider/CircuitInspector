@@ -97,7 +97,7 @@ export function App() {
 
   return (
     <main className="app-shell grid h-[100dvh] min-w-[1080px] grid-cols-[64px_minmax(0,1fr)] overflow-hidden text-[#ecebe7]">
-      <nav className="title-drag flex min-h-0 flex-col items-center border-r border-white/[0.07] bg-[#151719] py-3" aria-label={locale === "zh-CN" ? "工作区导航" : "Workspace navigation"}>
+      <nav className={`title-drag flex min-h-0 flex-col items-center border-r border-white/[0.07] bg-[#151719] pb-3 ${window.circuitInspector.platform === "darwin" ? "pt-[52px]" : "pt-3"}`} aria-label={locale === "zh-CN" ? "工作区导航" : "Workspace navigation"}>
         <button className="title-no-drag brand-emblem mb-7 size-9" onClick={() => navigate("HOME")} aria-label="CircuitInspector">
           <img src={brandMark} alt="" aria-hidden="true" className="size-8" />
         </button>

@@ -4,3 +4,5 @@ export * from "./test-recommendations.js";
 export * from "./wib-qualification.js";
 export * from "./artifacts.js";
 export * from "./tables.js";
+export * from "./schematic.js";
+export * from "./schematic-graph.js";

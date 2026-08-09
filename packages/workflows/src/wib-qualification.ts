@@ -3,7 +3,6 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   compareFixtureWiring,
-  readPinout,
   type ConnectorMapping,
   type DesignMetric,
   type NetAlias,
@@ -12,7 +11,7 @@ import {
 } from "./wiring.js";
 
 export type ConstraintComparator = "EXACT" | "ALL" | "NONE" | "MAXIMUM" | "MINIMUM" | "RANGE";
-export type ConstraintCheck = "WIRING_ONE_TO_ONE" | "NET_IDENTITY" | "COMPLETE_PIN_COVERAGE" | "NO_UNINTENDED_INTERCONNECT" | "NC_ISOLATION" | "DESIGN_METRIC";
+export type ConstraintCheck = "WIRING_ONE_TO_ONE" | "NET_IDENTITY" | "COMPLETE_PIN_COVERAGE" | "NO_UNINTENDED_INTERCONNECT" | "NC_ISOLATION" | "DESIGN_METRIC" | "ENDPOINT_UNIQUENESS" | "NO_UNRESOLVED_BRANCH" | "PATH_COMPONENT_POLICY" | "ENDPOINT_PIN_MATCH";
 
 export interface WibConstraintDefinition {
   id: string;
@@ -25,6 +24,10 @@ export interface WibConstraintDefinition {
   unit: string | null;
   verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
   source_authority: string;
+  scope?: { connector?: string; pin?: string; net_name?: string } | undefined;
+  allowed_component_kinds?: Array<"CONNECTOR" | "IC" | "PASSIVE" | "PROTECTION" | "POWER" | "UNKNOWN"> | undefined;
+  forbidden_component_refs?: string[] | undefined;
+  expected_endpoint_refs?: string[] | undefined;
 }
 
 export interface WibConstraintSet {
@@ -119,15 +122,15 @@ export async function qualifyWibDesign(
   options: { connectorMappings?: ConnectorMapping[]; netAliases?: NetAlias[]; caseSensitive?: boolean } = {}
 ): Promise<WibQualification> {
   const started = performance.now();
-  const [product, wib, constraintSet] = await Promise.all([
-    readPinout(productPinoutId, cacheDir),
-    readPinout(wibPinoutId, cacheDir),
+  const [wiring, constraintSet] = await Promise.all([
+    compareFixtureWiring(productPinoutId, wibPinoutId, cacheDir, options),
     readWibConstraintSet(constraintSetId, cacheDir)
   ]);
+  const product = wiring.product;
+  const wib = wiring.wib;
   if (product.status !== "CONFIRMED" || wib.status !== "CONFIRMED") {
     // The comparison still runs to provide evidence, but the final verdict will remain REVIEW.
   }
-  const wiring = await compareFixtureWiring(productPinoutId, wibPinoutId, cacheDir, options);
   const wiringClosure: WibConstraintResult = {
     id: "qualification-mandatory-wiring",
     constraint_id: "MANDATORY-PRODUCT-WIB-WIRING",
@@ -206,8 +209,8 @@ function evaluateConstraint(constraint: WibConstraintDefinition, wiring: WiringA
   if (constraint.verification_mode === "MANUAL_FACTORY_CONFIRMATION") {
     return { ...base, status: "REVIEW", actual_value: null, message: "This hard constraint depends on real tester, fixture, safety, mechanical, measurement-system, or production evidence and cannot be closed from schematics alone." };
   }
-  if (!wibConfirmed) {
-    return { ...base, status: "REVIEW", actual_value: null, message: "The WIB schematic evidence is not CONFIRMED." };
+  if (["ENDPOINT_UNIQUENESS", "NO_UNRESOLVED_BRANCH", "PATH_COMPONENT_POLICY", "ENDPOINT_PIN_MATCH"].includes(constraint.check)) {
+    return evaluatePathConstraint(constraint, wiring, base);
   }
   if (constraint.check !== "DESIGN_METRIC") {
     const status = wiring.verdict === "PASS" ? "PASS" : wiring.verdict === "FAIL" ? "FAIL" : "REVIEW";
@@ -220,6 +223,9 @@ function evaluateConstraint(constraint: WibConstraintDefinition, wiring: WiringA
         : `Product-to-WIB wiring analysis is ${wiring.verdict}; see ${wiring.id}.`,
       evidence: [...base.evidence, `circuit://analysis/${wiring.id}/report`]
     };
+  }
+  if (!wibConfirmed) {
+    return { ...base, status: "REVIEW", actual_value: null, message: "The WIB schematic design metric evidence is not CONFIRMED." };
   }
   if (!constraint.metric_id) return { ...base, status: "REVIEW", actual_value: null, message: "DESIGN_METRIC constraint has no metric_id." };
   const metric = metrics.find((candidate) => candidate.id.toLocaleUpperCase("en-US") === constraint.metric_id!.toLocaleUpperCase("en-US"));
@@ -238,6 +244,64 @@ function evaluateConstraint(constraint: WibConstraintDefinition, wiring: WiringA
   };
 }
 
+function evaluatePathConstraint(
+  constraint: WibConstraintDefinition,
+  wiring: WiringAnalysis,
+  base: Omit<WibConstraintResult, "status" | "actual_value" | "message">
+): WibConstraintResult {
+  const connections = scopedConnections(constraint, wiring);
+  const evidence = [...base.evidence, `circuit://analysis/${wiring.id}/report`];
+  if (!connections.length) return { ...base, status: "REVIEW", actual_value: null, message: "No compared interface path matches this constraint scope.", evidence };
+  const hasUnresolvedInput = connections.some((connection) => connection.verdict === "REVIEW");
+
+  if (constraint.check === "ENDPOINT_UNIQUENESS" || constraint.check === "NO_UNRESOLVED_BRANCH") {
+    const pathSides = connections.flatMap((connection) => [
+      connection.product_path_id ? connection.product_endpoint_refs ?? [] : null,
+      connection.wib_path_id ? connection.wib_endpoint_refs ?? [] : null
+    ]).filter((item): item is string[] => item !== null);
+    if (!pathSides.length) return { ...base, status: "REVIEW", actual_value: null, message: "No traced schematic path metadata is available for this constraint.", evidence };
+    const unique = pathSides.every((endpoints) => endpoints.length === 1);
+    if (!unique || hasUnresolvedInput) {
+      return { ...base, status: "REVIEW", actual_value: pathSides.map((endpoints) => endpoints.length).join(","), message: "At least one path has zero, multiple, or otherwise unresolved chip endpoints; no endpoint was guessed.", evidence };
+    }
+    return { ...base, status: "PASS", actual_value: pathSides.length, message: `${pathSides.length} confirmed path side(s) each resolve to exactly one chip endpoint.`, evidence };
+  }
+
+  if (constraint.check === "PATH_COMPONENT_POLICY") {
+    const refs = connections.flatMap((connection) => [...(connection.product_path_component_refs ?? []), ...(connection.wib_path_component_refs ?? [])]);
+    const kinds = connections.flatMap((connection) => [...(connection.product_path_component_kinds ?? []), ...(connection.wib_path_component_kinds ?? [])]);
+    if (!refs.length || hasUnresolvedInput) return { ...base, status: "REVIEW", actual_value: refs.join(", ") || null, message: "Path component evidence is missing or unresolved.", evidence };
+    const forbidden = new Set((constraint.forbidden_component_refs ?? []).map(key));
+    const forbiddenHits = refs.filter((ref) => forbidden.has(key(ref)));
+    const allowed = new Set<string>(constraint.allowed_component_kinds ?? []);
+    const disallowedKinds = allowed.size ? kinds.filter((kind) => kind !== "CONNECTOR" && kind !== "IC" && !allowed.has(kind)) : [];
+    const violations = [...forbiddenHits, ...disallowedKinds];
+    return violations.length
+      ? { ...base, status: "FAIL", actual_value: violations.join(", "), message: `Confirmed path contains forbidden or non-allowed path elements: ${violations.join(", ")}.`, evidence }
+      : { ...base, status: "PASS", actual_value: refs.join(", "), message: "Confirmed paths satisfy the allowed and forbidden path-component policy.", evidence };
+  }
+
+  const expected = [...new Set(constraint.expected_endpoint_refs ?? [])].sort(naturalCompare);
+  if (!expected.length) return { ...base, status: "REVIEW", actual_value: null, message: "ENDPOINT_PIN_MATCH requires expected_endpoint_refs.", evidence };
+  if (hasUnresolvedInput) return { ...base, status: "REVIEW", actual_value: null, message: "Endpoint matching cannot be adjudicated while a relevant path remains REVIEW.", evidence };
+  const actual = [...new Set(connections.flatMap((connection) => connection.wib_endpoint_refs?.length ? connection.wib_endpoint_refs : connection.product_endpoint_refs ?? []))].sort(naturalCompare);
+  if (!actual.length) return { ...base, status: "REVIEW", actual_value: null, message: "No resolved chip endpoint is available for matching.", evidence };
+  const matches = actual.length === expected.length && actual.every((value, index) => key(value) === key(expected[index]!));
+  return matches
+    ? { ...base, status: "PASS", actual_value: actual.join(", "), message: `Confirmed chip endpoint set matches ${expected.join(", ")}.`, evidence }
+    : { ...base, status: "FAIL", actual_value: actual.join(", "), message: `Confirmed chip endpoints ${actual.join(", ")} do not match expected ${expected.join(", ")}.`, evidence };
+}
+
+function scopedConnections(constraint: WibConstraintDefinition, wiring: WiringAnalysis) {
+  if (!constraint.scope) return wiring.connections;
+  return wiring.connections.filter((connection) => {
+    const connectorMatches = !constraint.scope?.connector || [connection.product_connector, connection.wib_connector].some((value) => key(value) === key(constraint.scope!.connector!));
+    const pinMatches = !constraint.scope?.pin || [connection.product_pin, connection.wib_pin].some((value) => key(value) === key(constraint.scope!.pin!));
+    const netMatches = !constraint.scope?.net_name || [connection.product_net, connection.wib_net].some((value) => value != null && key(value) === key(constraint.scope!.net_name!));
+    return connectorMatches && pinMatches && netMatches;
+  });
+}
+
 function compareValues(actual: string | number, required: WibConstraintDefinition["required_value"], comparator: ConstraintComparator): boolean | null {
   if (comparator === "EXACT" || comparator === "ALL") return scalarKey(actual) === scalarKey(required);
   if (comparator === "NONE") return typeof actual === "number" ? actual === 0 : /^(0|none|no|false)$/i.test(actual.trim());
@@ -250,7 +314,7 @@ function compareValues(actual: string | number, required: WibConstraintDefinitio
 
 function validateConstraints(constraints: WibConstraintDefinition[]) {
   const seen = new Set<string>();
-  const checks: ConstraintCheck[] = ["WIRING_ONE_TO_ONE", "NET_IDENTITY", "COMPLETE_PIN_COVERAGE", "NO_UNINTENDED_INTERCONNECT", "NC_ISOLATION", "DESIGN_METRIC"];
+  const checks: ConstraintCheck[] = ["WIRING_ONE_TO_ONE", "NET_IDENTITY", "COMPLETE_PIN_COVERAGE", "NO_UNINTENDED_INTERCONNECT", "NC_ISOLATION", "DESIGN_METRIC", "ENDPOINT_UNIQUENESS", "NO_UNRESOLVED_BRANCH", "PATH_COMPONENT_POLICY", "ENDPOINT_PIN_MATCH"];
   const comparators: ConstraintComparator[] = ["EXACT", "ALL", "NONE", "MAXIMUM", "MINIMUM", "RANGE"];
   return constraints.map((constraint) => {
     if (!constraint.id.trim() || !constraint.area.trim() || !constraint.requirement.trim() || !constraint.source_authority.trim()) throw new Error("Every constraint needs id, area, requirement, and source_authority");
@@ -262,11 +326,28 @@ function validateConstraints(constraints: WibConstraintDefinition[]) {
     if (!(["DOCUMENT_BACKED", "MANUAL_FACTORY_CONFIRMATION"] as const).includes(constraint.verification_mode)) throw new Error(`${constraint.id} has an invalid verification_mode`);
     if (constraint.check === "DESIGN_METRIC" && !constraint.metric_id?.trim()) throw new Error(`${constraint.id} requires metric_id`);
     if (constraint.check === "DESIGN_METRIC" && !constraint.unit?.trim()) throw new Error(`${constraint.id} requires unit`);
+    if (constraint.check === "ENDPOINT_PIN_MATCH" && !constraint.expected_endpoint_refs?.length) throw new Error(`${constraint.id} requires expected_endpoint_refs`);
+    if (constraint.check === "PATH_COMPONENT_POLICY" && !constraint.allowed_component_kinds?.length && !constraint.forbidden_component_refs?.length) throw new Error(`${constraint.id} requires allowed_component_kinds or forbidden_component_refs`);
     if ((constraint.comparator === "MINIMUM" || constraint.comparator === "MAXIMUM") && (typeof constraint.required_value !== "number" || !Number.isFinite(constraint.required_value))) throw new Error(`${constraint.id} requires a finite numeric value`);
     if (constraint.comparator === "RANGE") {
       if (typeof constraint.required_value !== "object" || !Number.isFinite(constraint.required_value.min) || !Number.isFinite(constraint.required_value.max) || constraint.required_value.min > constraint.required_value.max) throw new Error(`${constraint.id} requires a valid {min,max} range`);
     }
-    return { ...constraint, id: constraint.id.trim(), area: constraint.area.trim(), requirement: constraint.requirement.trim(), metric_id: constraint.metric_id?.trim() || null, unit: constraint.unit?.trim() || null, source_authority: constraint.source_authority.trim() };
+    return {
+      ...constraint,
+      id: constraint.id.trim(),
+      area: constraint.area.trim(),
+      requirement: constraint.requirement.trim(),
+      metric_id: constraint.metric_id?.trim() || null,
+      unit: constraint.unit?.trim() || null,
+      source_authority: constraint.source_authority.trim(),
+      ...(constraint.scope ? { scope: {
+        ...(constraint.scope.connector?.trim() ? { connector: constraint.scope.connector.trim() } : {}),
+        ...(constraint.scope.pin?.trim() ? { pin: constraint.scope.pin.trim() } : {}),
+        ...(constraint.scope.net_name?.trim() ? { net_name: constraint.scope.net_name.trim() } : {})
+      } } : {}),
+      ...(constraint.forbidden_component_refs ? { forbidden_component_refs: constraint.forbidden_component_refs.map((value) => value.trim()).filter(Boolean) } : {}),
+      ...(constraint.expected_endpoint_refs ? { expected_endpoint_refs: constraint.expected_endpoint_refs.map((value) => value.trim()).filter(Boolean) } : {})
+    };
   });
 }
 
@@ -281,6 +362,14 @@ function css() {
 
 function scalarKey(value: unknown) {
   return typeof value === "string" || typeof value === "number" ? String(value).trim().toLocaleUpperCase("en-US") : "";
+}
+
+function key(value: string) {
+  return value.trim().toLocaleUpperCase("en-US");
+}
+
+function naturalCompare(left: string, right: string) {
+  return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
 }
 
 function formatRequired(value: WibConstraintDefinition["required_value"], unit: string | null) {

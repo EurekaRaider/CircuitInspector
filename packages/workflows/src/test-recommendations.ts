@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { readPinout, type PinoutDocument } from "./wiring.js";
+import { readAnalysisPinout, type PinoutDocument } from "./wiring.js";
 
 export interface ManufacturingTestRecommendation {
   id: string;
@@ -182,7 +182,7 @@ const templates: RecommendationTemplate[] = [
 
 export async function recommendManufacturingTests(productPinoutId: string, cacheDir: string): Promise<ManufacturingTestPlan> {
   const started = performance.now();
-  const product = await readPinout(productPinoutId, cacheDir);
+  const product = await readAnalysisPinout(productPinoutId, cacheDir);
   if (product.role !== "PRODUCT") throw new Error(`${product.id} is not a PRODUCT schematic pinout`);
   const nets = new Map<string, typeof product.pins>();
   for (const pin of product.pins) {

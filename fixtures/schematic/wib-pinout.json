@@ -1,0 +1,7 @@
+{
+  "revision": "fixture-a",
+  "pins": [
+    { "connector": "P1", "pin": "1", "net_name": "WIB_SCL" },
+    { "connector": "P1", "pin": "2", "net_name": "GND" }
+  ]
+}

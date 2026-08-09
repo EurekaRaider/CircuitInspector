@@ -155,6 +155,181 @@ export interface SchematicPinout {
   confirmation: { confirmed_by: string; confirmed_at: string; content_hash: string } | null;
 }
 
+export type SchematicExtractionMethod = "STRUCTURED" | "PDF_TEXT" | "PDF_VECTOR" | "OCR" | "USER";
+export type SchematicComponentKind = "CONNECTOR" | "IC" | "PASSIVE" | "PROTECTION" | "POWER" | "UNKNOWN";
+
+export interface SchematicBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SchematicEvidence {
+  source_path: string;
+  source_hash: string;
+  page: number | null;
+  bbox: SchematicBox | null;
+  excerpt: string;
+  method: SchematicExtractionMethod;
+  confidence: number;
+}
+
+export interface SchematicPage {
+  number: number;
+  width: number;
+  height: number;
+  render_path: string;
+  thumbnail_path: string;
+  extraction: "VECTOR_TEXT" | "OCR";
+}
+
+export interface SchematicComponent {
+  id: string;
+  refdes: string;
+  value: string | null;
+  kind: SchematicComponentKind;
+  page: number | null;
+  bbox: SchematicBox | null;
+  pin_ids: string[];
+  passthrough_pin_pairs: Array<[string, string]>;
+  evidence: SchematicEvidence[];
+}
+
+export interface SchematicGraphPin {
+  id: string;
+  component_id: string;
+  number: string;
+  name: string | null;
+  net_id: string | null;
+  page: number | null;
+  x: number | null;
+  y: number | null;
+  evidence: SchematicEvidence[];
+}
+
+export interface SchematicNet {
+  id: string;
+  name: string | null;
+  pin_ids: string[];
+  wire_ids: string[];
+  label_ids: string[];
+  page_numbers: number[];
+  confidence: number;
+  evidence: SchematicEvidence[];
+}
+
+export interface SchematicWire {
+  id: string;
+  page: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  net_id: string | null;
+  evidence: SchematicEvidence;
+}
+
+export interface SchematicJunction {
+  id: string;
+  page: number;
+  x: number;
+  y: number;
+  connected_wire_ids: string[];
+  evidence: SchematicEvidence;
+}
+
+export interface SchematicLabel {
+  id: string;
+  page: number;
+  text: string;
+  kind: "NET" | "OFF_PAGE" | "HIERARCHICAL";
+  x: number;
+  y: number;
+  net_id: string | null;
+  evidence: SchematicEvidence;
+}
+
+export interface SchematicGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  kind: "WIRE" | "NET_LABEL" | "OFF_PAGE" | "PASSTHROUGH" | "USER";
+  evidence: SchematicEvidence[];
+}
+
+export interface SchematicInterfaceCandidate {
+  id: string;
+  component_id: string;
+  score: number;
+  reasons: string[];
+  confirmed: boolean;
+}
+
+export interface SchematicPath {
+  id: string;
+  anchor_pin_id: string;
+  node_ids: string[];
+  edge_ids: string[];
+  component_ids: string[];
+  endpoint_pin_ids: string[];
+  status: "RESOLVED" | "REVIEW";
+  confidence: number;
+  diagnostics: Diagnostic[];
+  evidence: SchematicEvidence[];
+}
+
+export interface SchematicCorrection {
+  id: string;
+  operation: "UPDATE" | "ADD" | "DELETE" | "MERGE_NETS" | "SPLIT_NET" | "SET_JUNCTION" | "SET_OFF_PAGE" | "SET_PASSTHROUGH";
+  entity_kind: "COMPONENT" | "PIN" | "NET" | "WIRE" | "JUNCTION" | "LABEL";
+  entity_id: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  corrected_by: string;
+  corrected_at: string;
+  content_hash: string;
+}
+
+export interface SchematicConfirmedScope {
+  id: string;
+  anchor_candidate_id: string;
+  path_ids: string[];
+  confirmed_by: string;
+  confirmed_at: string;
+  content_hash: string;
+}
+
+export interface SchematicDocument {
+  schema_version: 2;
+  parser_version: string;
+  id: string;
+  role: "PRODUCT" | "WIB";
+  source_path: string;
+  source_hash: string;
+  source_format: "JSON" | "CSV" | "TSV" | "TEXT" | "PDF";
+  revision: string | null;
+  status: "DRAFT" | "PARTIALLY_CONFIRMED" | "CONFIRMED";
+  pages: SchematicPage[];
+  components: SchematicComponent[];
+  graph_pins: SchematicGraphPin[];
+  nets: SchematicNet[];
+  wires: SchematicWire[];
+  junctions: SchematicJunction[];
+  labels: SchematicLabel[];
+  edges: SchematicGraphEdge[];
+  interface_candidates: SchematicInterfaceCandidate[];
+  paths: SchematicPath[];
+  corrections: SchematicCorrection[];
+  confirmed_scopes: SchematicConfirmedScope[];
+  pins: SchematicPin[];
+  design_metrics: SchematicDesignMetric[];
+  diagnostics: Diagnostic[];
+  confirmation: { confirmed_by: string; confirmed_at: string; content_hash: string } | null;
+}
+
+export type SchematicArtifact = SchematicPinout | SchematicDocument;
+
 export interface ConnectorMapping {
   product_connector: string;
   wib_connector: string;
@@ -169,6 +344,14 @@ export interface WiringConnection {
   wib_connector: string;
   wib_pin: string;
   wib_net: string | null;
+  product_endpoint_refs?: string[];
+  wib_endpoint_refs?: string[];
+  product_path_component_refs?: string[];
+  wib_path_component_refs?: string[];
+  product_path_component_kinds?: SchematicComponentKind[];
+  wib_path_component_kinds?: SchematicComponentKind[];
+  product_path_id?: string | null;
+  wib_path_id?: string | null;
   verdict: Verdict;
   message: string;
 }
@@ -217,13 +400,17 @@ export interface WibConstraintDefinition {
   id: string;
   area: string;
   requirement: string;
-  check: "WIRING_ONE_TO_ONE" | "NET_IDENTITY" | "COMPLETE_PIN_COVERAGE" | "NO_UNINTENDED_INTERCONNECT" | "NC_ISOLATION" | "DESIGN_METRIC";
+  check: "WIRING_ONE_TO_ONE" | "NET_IDENTITY" | "COMPLETE_PIN_COVERAGE" | "NO_UNINTENDED_INTERCONNECT" | "NC_ISOLATION" | "DESIGN_METRIC" | "ENDPOINT_UNIQUENESS" | "NO_UNRESOLVED_BRANCH" | "PATH_COMPONENT_POLICY" | "ENDPOINT_PIN_MATCH";
   metric_id: string | null;
   comparator: "EXACT" | "ALL" | "NONE" | "MAXIMUM" | "MINIMUM" | "RANGE";
   required_value: string | number | { min: number; max: number };
   unit: string | null;
   verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
   source_authority: string;
+  scope?: { connector?: string; pin?: string; net_name?: string };
+  allowed_component_kinds?: SchematicComponentKind[] | undefined;
+  forbidden_component_refs?: string[];
+  expected_endpoint_refs?: string[];
 }
 
 export interface WibConstraintSet {
@@ -261,7 +448,7 @@ export interface WibQualification {
 export type DocumentAnalysis = WiringAnalysis | ManufacturingTestPlan | WibQualification;
 export type AnyAnalysis = AnalysisSummary | DocumentAnalysis;
 
-export type ArtifactKind = "DESIGN" | "RULE_PACK" | "PINOUT" | "CONSTRAINT_SET" | "ANALYSIS" | "WORKFLOW_DRAFT";
+export type ArtifactKind = "DESIGN" | "RULE_PACK" | "PINOUT" | "SCHEMATIC" | "CONSTRAINT_SET" | "ANALYSIS" | "WORKFLOW_DRAFT";
 
 export interface ArtifactSummary {
   id: string;
@@ -287,6 +474,10 @@ export interface WibWorkflowDraft {
   step: 1 | 2 | 3 | 4 | 5 | 6;
   product_pinout_id: string | null;
   wib_pinout_id: string | null;
+  product_schematic_id?: string | null;
+  wib_schematic_id?: string | null;
+  product_interface_candidate_id?: string | null;
+  wib_interface_candidate_id?: string | null;
   product_edits?: WibDraftPinoutEdits;
   wib_edits?: WibDraftPinoutEdits;
   connector_mappings: ConnectorMapping[];

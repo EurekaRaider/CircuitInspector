@@ -1,6 +1,12 @@
 import type {
   ArtifactCatalog,
   ConnectorMapping,
+  SchematicComponent,
+  SchematicDocument,
+  SchematicGraphPin,
+  SchematicJunction,
+  SchematicLabel,
+  SchematicWire,
   TableFormat,
   TableImportResult,
   TableKind,
@@ -9,7 +15,7 @@ import type {
   WibWorkflowDraft
 } from "@circuit-inspector/contracts";
 
-export type { ArtifactCatalog, ConnectorMapping, TableFormat, TableImportResult, TableKind, WibConstraintDefinition, WibConstraintSet, WibWorkflowDraft };
+export type { ArtifactCatalog, ConnectorMapping, SchematicDocument, TableFormat, TableImportResult, TableKind, WibConstraintDefinition, WibConstraintSet, WibWorkflowDraft };
 
 export type CoverageLevel = "EXPLICIT" | "SUPPLEMENTED" | "INFERRED" | "MISSING";
 
@@ -106,8 +112,23 @@ export interface WiringConnection {
   wib_connector: string;
   wib_pin: string;
   wib_net: string | null;
+  product_endpoint_refs?: string[];
+  wib_endpoint_refs?: string[];
+  product_path_id?: string | null;
+  wib_path_id?: string | null;
   verdict: Violation["verdict"];
   message: string;
+}
+
+export interface SchematicPagePayload {
+  page: SchematicDocument["pages"][number];
+  bytes: ArrayBuffer;
+  thumbnailBytes: ArrayBuffer;
+  components: SchematicComponent[];
+  pins: SchematicGraphPin[];
+  wires: SchematicWire[];
+  junctions: SchematicJunction[];
+  labels: SchematicLabel[];
 }
 
 export interface WiringAnalysis {
@@ -271,7 +292,18 @@ export interface ViewerApi {
   chooseWorkbenchInput(kind: "RULE_DOCUMENT" | "SCHEMATIC" | "TABLE", multiple: boolean, locale: "zh-CN" | "en-US"): Promise<string[]>;
   listArtifacts(): Promise<ArtifactCatalog>;
   extractRulePack(input: { paths: string[]; title?: string }): Promise<{ rule_pack: RulePack; passage_count: number; rule_count: number; rag_index_path: string }>;
-  importSchematic(input: { path: string; role: "PRODUCT" | "WIB"; revision?: string }): Promise<SchematicPinout>;
+  importSchematic(input: { path: string; role: "PRODUCT" | "WIB"; revision?: string }): Promise<SchematicDocument>;
+  readSchematic(id: string): Promise<SchematicDocument>;
+  traceSchematic(input: { schematic_id: string; candidate_id: string }): Promise<SchematicDocument>;
+  correctSchematic(input: {
+    schematic_id: string;
+    corrected_by: string;
+    candidate_id?: string;
+    corrections: Array<{ operation: "UPDATE" | "ADD" | "DELETE" | "MERGE_NETS" | "SPLIT_NET" | "SET_JUNCTION" | "SET_OFF_PAGE" | "SET_PASSTHROUGH"; entity_kind: "COMPONENT" | "PIN" | "NET" | "WIRE" | "JUNCTION" | "LABEL"; entity_id: string; after?: Record<string, unknown> | null }>;
+  }): Promise<SchematicDocument>;
+  confirmSchematicPaths(input: { schematic_id: string; candidate_id: string; path_ids: string[]; confirmed_by: string }): Promise<SchematicDocument>;
+  getSchematicPage(input: { schematic_id: string; page: number }): Promise<SchematicPagePayload>;
+  getSchematicThumbnail(input: { schematic_id: string; page: number }): Promise<{ page: number; bytes: ArrayBuffer }>;
   readPinout(id: string): Promise<SchematicPinout>;
   confirmPinout(input: {
     pinout_id: string;

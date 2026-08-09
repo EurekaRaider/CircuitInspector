@@ -15,12 +15,14 @@ describe("shared local artifact catalog", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "circuit-workbench-catalog-"));
     roots.push(root);
     const pinoutDir = path.join(root, "pinouts");
+    const schematicDir = path.join(root, "schematics", "schematic-product");
     const evidenceDir = path.join(root, "evidence", "wiring-abc");
-    await Promise.all([mkdir(pinoutDir, { recursive: true }), mkdir(evidenceDir, { recursive: true })]);
+    await Promise.all([mkdir(pinoutDir, { recursive: true }), mkdir(schematicDir, { recursive: true }), mkdir(evidenceDir, { recursive: true })]);
     const pinoutPath = path.join(pinoutDir, "pinout-product.json");
     const pinout = { schema_version: 1, id: "pinout-product", role: "PRODUCT", source_path: "/inputs/product.json", source_format: "JSON", status: "DRAFT", pins: [{ connector: "J1", pin: "1", net_name: "VDD" }] };
     await writeFile(pinoutPath, JSON.stringify(pinout), "utf8");
     await writeFile(path.join(pinoutDir, "broken.json"), "{not-json", "utf8");
+    await writeFile(path.join(schematicDir, "document.json"), JSON.stringify({ schema_version: 2, id: "schematic-product", role: "PRODUCT", source_path: "/inputs/product.pdf", source_format: "PDF", status: "PARTIALLY_CONFIRMED", pages: [{ number: 1 }], paths: [{ id: "path-1" }] }), "utf8");
     await writeFile(path.join(evidenceDir, "analysis.json"), JSON.stringify({ schema_version: 1, kind: "WIRING_COMPARISON", id: "wiring-abc", verdict: "REVIEW", report_path: path.join(evidenceDir, "report.html") }), "utf8");
 
     const saved = await saveWibWorkflowDraft(root, {
@@ -46,7 +48,7 @@ describe("shared local artifact catalog", () => {
     });
     const catalog = await listWorkflowArtifacts(root);
 
-    expect(catalog.artifacts.map((artifact) => artifact.kind)).toEqual(expect.arrayContaining(["PINOUT", "ANALYSIS", "WORKFLOW_DRAFT"]));
+    expect(catalog.artifacts.map((artifact) => artifact.kind)).toEqual(expect.arrayContaining(["PINOUT", "SCHEMATIC", "ANALYSIS", "WORKFLOW_DRAFT"]));
     expect(catalog.diagnostics.some((diagnostic) => diagnostic.code === "INVALID_CACHED_ARTIFACT")).toBe(true);
     expect(await readWibWorkflowDraft(root, saved.id)).toMatchObject({
       title: "Fixture rev B",

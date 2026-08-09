@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { SchematicDocument, SchematicPath } from "@circuit-inspector/contracts";
 
 export type WiringVerdict = "PASS" | "FAIL" | "REVIEW" | "NOT_APPLICABLE";
 export type PinoutRole = "PRODUCT" | "WIB";
@@ -68,6 +69,14 @@ export interface WiringConnection {
   wib_connector: string;
   wib_pin: string;
   wib_net: string | null;
+  product_endpoint_refs?: string[];
+  wib_endpoint_refs?: string[];
+  product_path_component_refs?: string[];
+  wib_path_component_refs?: string[];
+  product_path_component_kinds?: string[];
+  wib_path_component_kinds?: string[];
+  product_path_id?: string | null;
+  wib_path_id?: string | null;
   verdict: WiringVerdict;
   message: string;
 }
@@ -275,8 +284,9 @@ export async function compareFixtureWiring(
   } = {}
 ): Promise<WiringAnalysis> {
   const started = performance.now();
-  const product = await readPinout(productPinoutId, cacheDir);
-  const wib = await readPinout(wibPinoutId, cacheDir);
+  const loaded = await loadComparisonInputs(productPinoutId, wibPinoutId, cacheDir);
+  const product = loaded.product;
+  const wib = loaded.wib;
   if (product.role !== "PRODUCT") throw new Error(`${product.id} is not a PRODUCT pinout`);
   if (wib.role !== "WIB") throw new Error(`${wib.id} is not a WIB pinout`);
 
@@ -286,8 +296,8 @@ export async function compareFixtureWiring(
   const mappings = mappingResolution.mappings;
   const aliases = validateAliases(options.netAliases ?? []);
   const comparisonIdentity = JSON.stringify({
-    product: product.confirmation?.content_hash ?? product.source_hash,
-    wib: wib.confirmation?.content_hash ?? wib.source_hash,
+    product: loaded.productDocument ? schematicIdentity(loaded.productDocument) : product.confirmation?.content_hash ?? product.source_hash,
+    wib: loaded.wibDocument ? schematicIdentity(loaded.wibDocument) : wib.confirmation?.content_hash ?? wib.source_hash,
     mappings,
     aliases,
     caseSensitive: options.caseSensitive ?? false
@@ -300,7 +310,9 @@ export async function compareFixtureWiring(
     diagnostics.push({
       code: "UNCONFIRMED_PINOUT",
       severity: "WARNING",
-      message: "Both product and WIB pinouts must be CONFIRMED before mismatches can be adjudicated as PASS or FAIL."
+      message: loaded.productDocument || loaded.wibDocument
+        ? "Only selected, resolved schematic paths can support PASS or FAIL; unconfirmed or ambiguous paths remain REVIEW."
+        : "Both product and WIB pinouts must be CONFIRMED before mismatches can be adjudicated as PASS or FAIL."
     });
   }
 
@@ -312,7 +324,15 @@ export async function compareFixtureWiring(
       const productPin = productPins.get(normalizedKey(pair.product_pin));
       const wibPin = wibPins.get(normalizedKey(pair.wib_pin));
       const id = connectionId(mapping, pair.product_pin, pair.wib_pin);
-      const isConfirmed = product.status === "CONFIRMED" && wib.status === "CONFIRMED";
+      const productState = loaded.productDocument ? schematicPinState(loaded.productDocument, mapping.product_connector, pair.product_pin) : null;
+      const wibState = loaded.wibDocument ? schematicPinState(loaded.wibDocument, mapping.wib_connector, pair.wib_pin) : null;
+      const productConfirmed = loaded.productDocument
+        ? productPin ? productState?.confirmed === true : interfaceFullyConfirmed(loaded.productDocument, mapping.product_connector)
+        : product.status === "CONFIRMED";
+      const wibConfirmed = loaded.wibDocument
+        ? wibPin ? wibState?.confirmed === true : interfaceFullyConfirmed(loaded.wibDocument, mapping.wib_connector)
+        : wib.status === "CONFIRMED";
+      const isConfirmed = productConfirmed && wibConfirmed;
       let verdict: WiringVerdict;
       let message: string;
       let ruleId: string | null = null;
@@ -324,6 +344,10 @@ export async function compareFixtureWiring(
         verdict = isConfirmed ? "FAIL" : "REVIEW";
         ruleId = "PRODUCT_PIN_MISSING_ON_WIB";
         message = `Product ${mapping.product_connector}.${pair.product_pin} (${productPin.net_name}) is missing on WIB ${mapping.wib_connector}.${pair.wib_pin}.`;
+      } else if ((productState && !productState.resolved) || (wibState && !wibState.resolved)) {
+        verdict = "REVIEW";
+        ruleId = "UNRESOLVED_SCHEMATIC_PATH";
+        message = `Path evidence is unresolved: product ${productState?.summary ?? "structured mapping"}; WIB ${wibState?.summary ?? "structured mapping"}.`;
       } else if (!netsMatch(productPin.net_name, wibPin.net_name, aliases, options.caseSensitive ?? false)) {
         verdict = isConfirmed ? "FAIL" : "REVIEW";
         ruleId = "NET_NAME_MISMATCH";
@@ -344,6 +368,10 @@ export async function compareFixtureWiring(
         wib_connector: mapping.wib_connector,
         wib_pin: pair.wib_pin,
         wib_net: wibPin?.net_name ?? null,
+        ...(productState ? { product_endpoint_refs: productState.endpointRefs, product_path_id: productState.path?.id ?? null } : {}),
+        ...(wibState ? { wib_endpoint_refs: wibState.endpointRefs, wib_path_id: wibState.path?.id ?? null } : {}),
+        ...(productState ? { product_path_component_refs: productState.componentRefs, product_path_component_kinds: productState.componentKinds } : {}),
+        ...(wibState ? { wib_path_component_refs: wibState.componentRefs, wib_path_component_kinds: wibState.componentKinds } : {}),
         verdict,
         message
       });
@@ -417,6 +445,11 @@ export async function readWiringAnalysis(analysisId: string, cacheDir: string): 
 export async function readPinout(pinoutId: string, cacheDir: string): Promise<PinoutDocument> {
   const file = path.join(cacheDir, "pinouts", `${safeSegment(pinoutId)}.json`);
   return JSON.parse(await readFile(file, "utf8")) as PinoutDocument;
+}
+
+export async function readAnalysisPinout(id: string, cacheDir: string): Promise<PinoutDocument> {
+  const schematic = await tryReadCurrentSchematic(id, cacheDir);
+  return schematic ? projectSchematicPinout(schematic) : readPinout(id, cacheDir);
 }
 
 async function savePinout(document: PinoutDocument, cacheDir: string) {
@@ -756,12 +789,12 @@ function makeScopeFinding(analysisId: string, message: string): WiringFinding {
 }
 
 function renderWiringReport(analysis: WiringAnalysis, overviewName: string) {
-  const rows = analysis.connections.map((connection) => `<tr class="${connection.verdict.toLowerCase()}"><td>${html(connection.verdict)}</td><td>${html(`${connection.product_connector}.${connection.product_pin}`)}</td><td>${html(connection.product_net ?? "-")}</td><td>${html(`${connection.wib_connector}.${connection.wib_pin}`)}</td><td>${html(connection.wib_net ?? "-")}</td><td>${html(connection.message)}</td></tr>`).join("");
+  const rows = analysis.connections.map((connection) => `<tr class="${connection.verdict.toLowerCase()}"><td>${html(connection.verdict)}</td><td>${html(`${connection.product_connector}.${connection.product_pin}`)}</td><td>${html(connection.product_net ?? "-")}</td><td>${html(connection.product_endpoint_refs?.join(", ") || "-")}</td><td>${html(`${connection.wib_connector}.${connection.wib_pin}`)}</td><td>${html(connection.wib_net ?? "-")}</td><td>${html(connection.wib_endpoint_refs?.join(", ") || "-")}</td><td>${html(connection.message)}</td></tr>`).join("");
   const inputRows = [analysis.product, analysis.wib].map((document) => `<tr><td>${html(document.role)}</td><td>${html(document.source_path)}</td><td>${html(document.revision ?? "-")}</td><td>${html(document.status)}</td><td>${html(document.source_hash)}</td></tr>`).join("");
   const diagnostics = analysis.diagnostics.length
     ? `<ul>${analysis.diagnostics.map((diagnostic) => `<li><strong>${html(diagnostic.code)}</strong> — ${html(diagnostic.message)}</li>`).join("")}</ul>`
     : "<p>None.</p>";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WIB wiring ${html(analysis.verdict)}</title><style>${reportCss()}</style></head><body><main><header><div><p class="eyebrow">CircuitInspector · DOCUMENT_BACKED</p><h1>Product ↔ WIB wiring comparison</h1><p class="muted">Analysis ${html(analysis.id)}</p></div><span class="verdict ${analysis.verdict.toLowerCase()}">${html(analysis.verdict)}</span></header><section class="metrics"><div><strong>${analysis.pass_count}</strong><span>PASS</span></div><div><strong>${analysis.fail_count}</strong><span>FAIL</span></div><div><strong>${analysis.review_count}</strong><span>REVIEW</span></div></section><section><h2>Inputs and evidence state</h2><table><thead><tr><th>Role</th><th>Source</th><th>Revision</th><th>Status</th><th>SHA-256</th></tr></thead><tbody>${inputRows}</tbody></table></section><section><h2>Annotated wiring</h2><img class="diagram" src="${html(overviewName)}" alt="Annotated product to WIB pin mapping"></section><section><h2>Pin-by-pin result</h2><table><thead><tr><th>Status</th><th>Product pin</th><th>Product NET</th><th>WIB pin</th><th>WIB NET</th><th>Details</th></tr></thead><tbody>${rows || "<tr><td colspan=\"6\">No pins were evaluated.</td></tr>"}</tbody></table></section><section><h2>Diagnostics and unresolved evidence</h2>${diagnostics}</section><footer>PASS applies only to the confirmed connector and pin mappings listed in this report. It does not establish fixture contact reliability or production-line acceptance.</footer></main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WIB wiring ${html(analysis.verdict)}</title><style>${reportCss()}</style></head><body><main><header><div><p class="eyebrow">CircuitInspector · DOCUMENT_BACKED</p><h1>Product ↔ WIB wiring comparison</h1><p class="muted">Analysis ${html(analysis.id)}</p></div><span class="verdict ${analysis.verdict.toLowerCase()}">${html(analysis.verdict)}</span></header><section class="metrics"><div><strong>${analysis.pass_count}</strong><span>PASS</span></div><div><strong>${analysis.fail_count}</strong><span>FAIL</span></div><div><strong>${analysis.review_count}</strong><span>REVIEW</span></div></section><section><h2>Inputs and evidence state</h2><table><thead><tr><th>Role</th><th>Source</th><th>Revision</th><th>Status</th><th>SHA-256</th></tr></thead><tbody>${inputRows}</tbody></table></section><section><h2>Annotated wiring</h2><img class="diagram" src="${html(overviewName)}" alt="Annotated product to WIB pin mapping"></section><section><h2>Pin-by-pin result</h2><table><thead><tr><th>Status</th><th>Product pin</th><th>Product NET</th><th>Product chip endpoint</th><th>WIB pin</th><th>WIB NET</th><th>WIB chip endpoint</th><th>Details</th></tr></thead><tbody>${rows || "<tr><td colspan=\"8\">No pins were evaluated.</td></tr>"}</tbody></table></section><section><h2>Diagnostics and unresolved evidence</h2>${diagnostics}</section><footer>PASS applies only to the confirmed connector paths listed in this report. Automatically traced chip endpoints describe actual graph connectivity; they do not establish functional intent unless an approved constraint or golden reference names the expected endpoint.</footer></main></body></html>`;
 }
 
 function renderWiringSvg(analysis: WiringAnalysis, activeFindingId: string | null) {
@@ -782,6 +815,158 @@ function renderWiringSvg(analysis: WiringAnalysis, activeFindingId: string | nul
 
 function reportCss() {
   return `:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui;background:#111416;color:#ecebe7}body{margin:0}main{max-width:1320px;margin:auto;padding:38px}header{display:flex;justify-content:space-between;gap:24px;align-items:start;border-bottom:1px solid #2b3032;padding-bottom:24px}h1{margin:.15rem 0;font-size:30px}h2{font-size:16px;margin:0 0 14px}.eyebrow,.muted,footer{color:#858b89}.eyebrow{font:11px ui-monospace;letter-spacing:.12em}.verdict{padding:10px 18px;border-radius:999px;font:700 14px ui-monospace}.pass{color:#a9c994}.fail{color:#f09884}.review{color:#e1bb73}.verdict.pass{background:#263423}.verdict.fail{background:#422720}.verdict.review{background:#3b321f}.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metrics div{background:#171b1d;border:1px solid #2a3032;border-radius:12px;padding:18px}.metrics strong{display:block;font-size:26px}.metrics span{font:10px ui-monospace;color:#7d8381}section{margin-top:28px}.diagram{display:block;width:100%;border:1px solid #2a3032;border-radius:12px;background:#111416}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:11px 12px;text-align:left;border-bottom:1px solid #292e30;vertical-align:top}th{font:10px ui-monospace;color:#8f9694;text-transform:uppercase}td:nth-child(-n+5){font-family:ui-monospace,monospace}tr.fail{background:#2b1d1a}tr.review{background:#292418}ul{line-height:1.7}footer{margin-top:34px;padding-top:20px;border-top:1px solid #2b3032;font-size:11px;line-height:1.6;word-break:break-word}`;
+}
+
+interface ComparisonInputs {
+  product: PinoutDocument;
+  wib: PinoutDocument;
+  productDocument: SchematicDocument | null;
+  wibDocument: SchematicDocument | null;
+}
+
+async function loadComparisonInputs(productId: string, wibId: string, cacheDir: string): Promise<ComparisonInputs> {
+  const [currentProduct, currentWib] = await Promise.all([
+    tryReadCurrentSchematic(productId, cacheDir),
+    tryReadCurrentSchematic(wibId, cacheDir)
+  ]);
+  if (!currentProduct && !currentWib) {
+    const [product, wib] = await Promise.all([readPinout(productId, cacheDir), readPinout(wibId, cacheDir)]);
+    return { product, wib, productDocument: null, wibDocument: null };
+  }
+  const { readSchematicDocument } = await import("./schematic.js");
+  const [productDocument, wibDocument] = await Promise.all([
+    currentProduct ?? readSchematicDocument(productId, cacheDir),
+    currentWib ?? readSchematicDocument(wibId, cacheDir)
+  ]);
+  return {
+    product: projectSchematicPinout(productDocument),
+    wib: projectSchematicPinout(wibDocument),
+    productDocument,
+    wibDocument
+  };
+}
+
+async function tryReadCurrentSchematic(id: string, cacheDir: string): Promise<SchematicDocument | null> {
+  const file = path.join(cacheDir, "schematics", safeSegment(id), "document.json");
+  try {
+    const value = JSON.parse(await readFile(file, "utf8")) as SchematicDocument;
+    return value.schema_version === 2 ? value : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function projectSchematicPinout(document: SchematicDocument): PinoutDocument {
+  return {
+    schema_version: 1,
+    id: document.id,
+    role: document.role,
+    source_path: document.source_path,
+    source_hash: document.source_hash,
+    source_format: document.source_format,
+    revision: document.revision,
+    status: document.source_format !== "PDF" && document.status === "CONFIRMED" ? "CONFIRMED" : "DRAFT",
+    pins: document.pins.map((pin) => ({
+      connector: pin.connector,
+      pin: pin.pin,
+      net_name: pin.net_name,
+      confidence: pin.confidence,
+      evidence: {
+        source_path: pin.evidence?.source_path ?? document.source_path,
+        source_hash: pin.evidence?.source_hash ?? document.source_hash,
+        page: pin.evidence?.page ?? null,
+        line: pin.evidence?.line ?? null,
+        bbox: null,
+        excerpt: pin.evidence?.excerpt ?? `${pin.connector} ${pin.pin} ${pin.net_name}`
+      }
+    })),
+    design_metrics: document.design_metrics.map((metric, index) => {
+      const evidence = (metric as DesignMetric).evidence;
+      return {
+        id: metric.id,
+        value: metric.value,
+        unit: metric.unit,
+        confidence: metric.confidence,
+        evidence: evidence ?? {
+          source_path: document.source_path,
+          source_hash: document.source_hash,
+          page: null,
+          line: index + 1,
+          bbox: null,
+          excerpt: `${metric.id}=${metric.value}`
+        }
+      };
+    }),
+    diagnostics: document.diagnostics,
+    confirmation: document.confirmation
+  };
+}
+
+function schematicIdentity(document: SchematicDocument) {
+  return {
+    source_hash: document.source_hash,
+    parser_version: document.parser_version,
+    confirmations: document.confirmed_scopes.map((scope) => scope.content_hash).sort(),
+    corrections: document.corrections.map((correction) => correction.content_hash).sort()
+  };
+}
+
+function schematicPinState(document: SchematicDocument, connector: string, number: string) {
+  const component = document.components.find((item) => normalizedKey(item.refdes) === normalizedKey(connector));
+  const pin = component
+    ? document.graph_pins.find((item) => item.component_id === component.id && normalizedKey(item.number) === normalizedKey(number))
+    : undefined;
+  const pathResult = pin ? document.paths.find((item) => item.anchor_pin_id === pin.id) : undefined;
+  const endpointRefs = pathResult ? schematicEndpointRefs(document, pathResult) : [];
+  const pathComponents = pathResult?.component_ids.flatMap((id) => {
+    const item = document.components.find((component) => component.id === id);
+    return item ? [item] : [];
+  }) ?? [];
+  if (document.source_format !== "PDF") {
+    return {
+      path: pathResult,
+      endpointRefs,
+      componentRefs: pathComponents.map((item) => item.refdes),
+      componentKinds: pathComponents.map((item) => item.kind),
+      confirmed: document.status === "CONFIRMED",
+      resolved: true,
+      summary: document.status === "CONFIRMED" ? "confirmed structured mapping" : "unconfirmed structured mapping"
+    };
+  }
+  const confirmed = Boolean(pathResult && document.confirmed_scopes.some((scope) => scope.path_ids.includes(pathResult.id)));
+  const resolved = pathResult?.status === "RESOLVED" && pathResult.endpoint_pin_ids.length === 1;
+  return {
+    path: pathResult,
+    endpointRefs,
+    componentRefs: pathComponents.map((item) => item.refdes),
+    componentKinds: pathComponents.map((item) => item.kind),
+    confirmed,
+    resolved,
+    summary: pathResult ? `${pathResult.status}, ${endpointRefs.length} chip endpoint(s), ${confirmed ? "confirmed" : "unconfirmed"}` : "missing traced path"
+  };
+}
+
+function interfaceFullyConfirmed(document: SchematicDocument, connector: string) {
+  if (document.source_format !== "PDF") return document.status === "CONFIRMED";
+  const component = document.components.find((item) => normalizedKey(item.refdes) === normalizedKey(connector));
+  if (!component?.pin_ids.length) return false;
+  return component.pin_ids.every((pinId) => {
+    const pathResult = document.paths.find((item) => item.anchor_pin_id === pinId);
+    return pathResult?.status === "RESOLVED"
+      && pathResult.endpoint_pin_ids.length === 1
+      && document.confirmed_scopes.some((scope) => scope.path_ids.includes(pathResult.id));
+  });
+}
+
+function schematicEndpointRefs(document: SchematicDocument, pathResult: SchematicPath) {
+  const components = new Map(document.components.map((component) => [component.id, component]));
+  const pins = new Map(document.graph_pins.map((pin) => [pin.id, pin]));
+  return pathResult.endpoint_pin_ids.flatMap((id) => {
+    const pin = pins.get(id);
+    const component = pin ? components.get(pin.component_id) : undefined;
+    return pin && component ? [`${component.refdes}.${pin.number}`] : [];
+  });
 }
 
 function connectorNames(document: PinoutDocument) {

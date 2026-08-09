@@ -14,19 +14,25 @@ import type {
 } from "@circuit-inspector/contracts";
 import {
   compareFixtureWiring,
+  applySchematicCorrections,
+  confirmSchematicPaths,
   confirmSchematicPinout,
   createWibConstraintSet,
   extractRulePack,
-  importSchematicPinout,
+  importSchematicDocument,
   listWorkflowArtifacts,
   parseTable,
   qualifyWibDesign,
+  readSchematicDocument,
+  readSchematicPage,
+  readSchematicThumbnail,
   readPinout,
   readWibConstraintSet,
   readWibWorkflowDraft,
   recommendManufacturingTests,
   saveWibWorkflowDraft,
-  serializeTable
+  serializeTable,
+  traceSchematicInterface
 } from "@circuit-inspector/workflows";
 import { CoreClient } from "./core-client.js";
 import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, withArtifactId } from "./security.js";
@@ -36,6 +42,10 @@ const iconPath = path.resolve(directory, "../assets/icon.png");
 const cacheDir = path.resolve(
   process.env.CIRCUIT_INSPECTOR_CACHE_DIR ?? path.join(os.homedir(), ".circuit-inspector", "cache")
 );
+if (app.isPackaged) {
+  process.env.CIRCUIT_INSPECTOR_OCR_DIR = path.join(process.resourcesPath, "ocr");
+  process.env.CIRCUIT_INSPECTOR_PDF_ASSET_DIR = path.join(process.resourcesPath, "pdfjs");
+}
 const core = new CoreClient();
 const grantedInputPaths = new Set<string>();
 let window: BrowserWindow | undefined;
@@ -218,10 +228,33 @@ ipcMain.handle("workbench:extract-rules", async (_event, input: { paths: string[
 ipcMain.handle("workbench:import-schematic", async (_event, input: { path: string; role: "PRODUCT" | "WIB"; revision?: string }) => {
   const sourcePath = assertGrantedPath(grantedInputPaths, input.path);
   const role = assertOneOf(input.role, ["PRODUCT", "WIB"] as const, "schematic role");
-  sendWorkbenchProgress("SCHEMATIC_IMPORT", 8, "Extracting connector, pin, and NET NAME evidence");
-  const pinout = await importSchematicPinout(sourcePath, role, cacheDir, input.revision);
-  sendWorkbenchProgress("SCHEMATIC_IMPORT", 100, "Pinout candidate is ready for review");
-  return pinout;
+  const document = await importSchematicDocument(sourcePath, role, cacheDir, input.revision, (progress, message) => sendWorkbenchProgress("SCHEMATIC_IMPORT", progress, message));
+  return document;
+});
+ipcMain.handle("workbench:read-schematic", (_event, id: string) => readSchematicDocument(assertArtifactId(id), cacheDir));
+ipcMain.handle("workbench:trace-schematic", (_event, input: { schematic_id: string; candidate_id: string }) =>
+  traceSchematicInterface(assertArtifactId(input.schematic_id), assertArtifactId(input.candidate_id), cacheDir));
+ipcMain.handle("workbench:correct-schematic", (_event, input: {
+  schematic_id: string;
+  corrected_by: string;
+  candidate_id?: string;
+  corrections: Array<{ operation: "UPDATE" | "ADD" | "DELETE" | "MERGE_NETS" | "SPLIT_NET" | "SET_JUNCTION" | "SET_OFF_PAGE" | "SET_PASSTHROUGH"; entity_kind: "COMPONENT" | "PIN" | "NET" | "WIRE" | "JUNCTION" | "LABEL"; entity_id: string; after?: Record<string, unknown> | null }>;
+}) => applySchematicCorrections(assertArtifactId(input.schematic_id), input.corrections, input.corrected_by, cacheDir, input.candidate_id));
+ipcMain.handle("workbench:confirm-schematic-paths", (_event, input: { schematic_id: string; candidate_id: string; path_ids: string[]; confirmed_by: string }) =>
+  confirmSchematicPaths(assertArtifactId(input.schematic_id), assertArtifactId(input.candidate_id), input.path_ids.map(assertArtifactId), input.confirmed_by, cacheDir));
+ipcMain.handle("workbench:schematic-page", async (_event, input: { schematic_id: string; page: number }) => {
+  if (!Number.isSafeInteger(input.page) || input.page < 1) throw new Error("Invalid schematic page number");
+  const result = await readSchematicPage(assertArtifactId(input.schematic_id), input.page, cacheDir);
+  return {
+    ...result,
+    bytes: result.bytes.buffer.slice(result.bytes.byteOffset, result.bytes.byteOffset + result.bytes.byteLength),
+    thumbnailBytes: result.thumbnailBytes.buffer.slice(result.thumbnailBytes.byteOffset, result.thumbnailBytes.byteOffset + result.thumbnailBytes.byteLength)
+  };
+});
+ipcMain.handle("workbench:schematic-thumbnail", async (_event, input: { schematic_id: string; page: number }) => {
+  if (!Number.isSafeInteger(input.page) || input.page < 1) throw new Error("Invalid schematic page number");
+  const result = await readSchematicThumbnail(assertArtifactId(input.schematic_id), input.page, cacheDir);
+  return { page: result.page, bytes: result.bytes.buffer.slice(result.bytes.byteOffset, result.bytes.byteOffset + result.bytes.byteLength) };
 });
 ipcMain.handle("workbench:read-pinout", (_event, id: string) => readPinout(assertArtifactId(id), cacheDir));
 ipcMain.handle("workbench:confirm-pinout", (_event, input: {
