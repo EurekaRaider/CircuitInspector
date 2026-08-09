@@ -319,7 +319,7 @@ npm run package:mac  # macOS arm64
 npm run package:win  # Windows x64
 ```
 
-Engineering packages include platform/CPU-specific Viewer and MCP archives, a pinned Node runtime for the MCP, an SPDX 2.3 SBOM, third-party notices, and `SHA256SUMS`. Generated packages live under `release/` and are intentionally excluded from Git.
+The macOS package includes a platform/CPU-specific DMG installer and Viewer ZIP archive. Engineering packages also include a platform/CPU-specific MCP archive, a pinned Node runtime for the MCP, an SPDX 2.3 SBOM, third-party notices, and `SHA256SUMS`. Generated packages live under `release/` and are intentionally excluded from Git.
 
 Apple notarization, Developer ID signing, and Windows Authenticode are not promised by this baseline.
 

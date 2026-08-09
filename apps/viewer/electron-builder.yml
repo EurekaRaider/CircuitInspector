@@ -28,7 +28,9 @@ asarUnpack:
   - node_modules/@napi-rs/**/*.node
 npmRebuild: false
 mac:
-  target: zip
+  target:
+    - dmg
+    - zip
   category: public.app-category.developer-tools
   artifactName: CircuitInspector-macOS-${arch}-${version}.${ext}
   icon: icon.icns

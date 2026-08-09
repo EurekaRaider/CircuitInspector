@@ -11,7 +11,7 @@ if (process.platform !== expectedHost) {
 }
 const executable = platform === "win" ? "circuit-inspector-core.exe" : "circuit-inspector-core";
 const builder = path.resolve("node_modules", ".bin", process.platform === "win32" ? "electron-builder.cmd" : "electron-builder");
-const args = ["--config", "apps/viewer/electron-builder.yml", `--${platform}`, "zip", `--${arch}`, "--publish", "never"];
+const args = ["--config", "apps/viewer/electron-builder.yml", `--${platform}`, `--${arch}`, "--publish", "never"];
 
 await new Promise((resolve, reject) => {
   const child = spawn(builder, args, {
