@@ -35,6 +35,7 @@ import {
   traceSchematicInterface
 } from "@circuit-inspector/workflows";
 import { CoreClient } from "./core-client.js";
+import { circuitInspectorMcpLaunch, configureOpenCodeMcp } from "./opencode-integration.js";
 import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, withArtifactId } from "./security.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -76,6 +77,19 @@ app.on("open-url", (event, url) => {
 });
 
 app.whenReady().then(async () => {
+  try {
+    const result = await configureOpenCodeMcp({
+      launch: circuitInspectorMcpLaunch({
+        packaged: app.isPackaged,
+        executablePath: process.execPath,
+        resourcesPath: process.resourcesPath,
+        moduleDirectory: directory
+      })
+    });
+    if (result === "configured") process.stderr.write("CircuitInspector MCP configured for OpenCode.\n");
+  } catch (error) {
+    process.stderr.write(`OpenCode MCP configuration skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
   if (process.platform === "darwin") app.dock?.setIcon(iconPath);
   createWindow();
   app.on("activate", () => {

@@ -19,6 +19,7 @@
     "@circuit-inspector/contracts": "0.1.0",
     "@circuit-inspector/workflows": "0.1.0",
     "@phosphor-icons/react": "2.1.10",
+    "json5": "2.2.3",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   }

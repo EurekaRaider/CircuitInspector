@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 const [platform, arch] = process.argv.slice(2);
@@ -12,6 +13,13 @@ if (process.platform !== expectedHost) {
 const executable = platform === "win" ? "circuit-inspector-core.exe" : "circuit-inspector-core";
 const builder = path.resolve("node_modules", ".bin", process.platform === "win32" ? "electron-builder.cmd" : "electron-builder");
 const args = ["--config", "apps/viewer/electron-builder.yml", `--${platform}`, `--${arch}`, "--publish", "never"];
+
+const embeddedMcpDirectory = path.resolve("apps/viewer/dist/mcp");
+await mkdir(embeddedMcpDirectory, { recursive: true });
+await Promise.all([
+  copyFile(path.resolve("apps/mcp/dist/index.js"), path.join(embeddedMcpDirectory, "index.js")),
+  copyFile(path.resolve("apps/mcp/dist/pdf.worker.mjs"), path.join(embeddedMcpDirectory, "pdf.worker.mjs"))
+]);
 
 await new Promise((resolve, reject) => {
   const child = spawn(builder, args, {

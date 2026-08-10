@@ -169,6 +169,8 @@ Packaged MCP client configuration:
 }
 ```
 
+When the packaged Viewer starts, it detects a local OpenCode installation or existing OpenCode configuration and merges an enabled `circuit-inspector` local MCP entry into the global `opencode.jsonc`, `opencode.json`, or legacy `config.json`. The entry launches the MCP embedded in the installed App; unrelated OpenCode settings and MCP servers are preserved. Opening the App again refreshes its absolute paths after an install or move.
+
 > [!NOTE]
 > `extract_rule_pack` always produces a `DRAFT`. Open the Viewer and verify the object type, scope, distance definition, comparator, threshold, unit, filters, severity, and source citation before approving it for analysis.
 
