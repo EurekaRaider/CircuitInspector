@@ -95,6 +95,7 @@ pub fn dispatch(method: &str, params: Value) -> CoreResult<Value> {
         "save_rule_pack" => save_rule_pack_request(params),
         "update_rule_pack" => update_rule_pack_request(params),
         "list_rule_packs" => list_rule_packs_request(params),
+        "delete_rule_pack" => delete_rule_pack_request(params),
         "approve_rule_pack" => approve_rule_pack_request(params),
         "analyze_design" => analyze_request(params),
         "list_analyses" => list_analyses_request(params),
@@ -443,6 +444,25 @@ fn list_rule_packs_request(params: Value) -> CoreResult<Value> {
             .then(left.version.cmp(&right.version))
     });
     Ok(json!({ "rule_packs": packs }))
+}
+
+fn delete_rule_pack_request(params: Value) -> CoreResult<Value> {
+    #[derive(Deserialize)]
+    struct Params {
+        cache_dir: PathBuf,
+        rule_pack_id: String,
+    }
+    let params: Params = serde_json::from_value(params)?;
+    let cache = CacheStore::new(&params.cache_dir)?;
+    let path = rule_path(&cache, &params.rule_pack_id);
+    let pack: RulePack = cache.load_json(&path)?;
+    if pack.id != params.rule_pack_id {
+        return Err(CoreError::Rule(
+            "rule pack identifier does not match the cached artifact".into(),
+        ));
+    }
+    fs::remove_file(path)?;
+    Ok(json!({ "id": pack.id, "deleted": true }))
 }
 
 fn approve_rule_pack_request(params: Value) -> CoreResult<Value> {
@@ -824,6 +844,48 @@ mod tests {
         .unwrap();
         assert_eq!(approved["status"], "APPROVED");
         assert_eq!(approved["rules"][0]["severity"], "ERROR");
+    }
+
+    #[test]
+    fn local_rule_pack_can_be_deleted_without_removing_other_packs() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cache_dir = temporary.path();
+        for id in ["keep-draft", "delete-draft"] {
+            dispatch(
+                "save_rule_pack",
+                json!({
+                    "cache_dir": cache_dir,
+                    "rule_pack": {
+                        "id": id,
+                        "version": "0.2.0-draft",
+                        "title": id,
+                        "status": "DRAFT",
+                        "rules": [],
+                        "review_items": [],
+                        "approval": null
+                    }
+                }),
+            )
+            .unwrap();
+        }
+
+        let deleted = dispatch(
+            "delete_rule_pack",
+            json!({ "cache_dir": cache_dir, "rule_pack_id": "delete-draft" }),
+        )
+        .unwrap();
+        assert_eq!(deleted, json!({ "id": "delete-draft", "deleted": true }));
+
+        let listed = dispatch("list_rule_packs", json!({ "cache_dir": cache_dir })).unwrap();
+        assert_eq!(listed["rule_packs"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["rule_packs"][0]["id"], "keep-draft");
+        assert!(
+            dispatch(
+                "delete_rule_pack",
+                json!({ "cache_dir": cache_dir, "rule_pack_id": "delete-draft" })
+            )
+            .is_err()
+        );
     }
 }
 

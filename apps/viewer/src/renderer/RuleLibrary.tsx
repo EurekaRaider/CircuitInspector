@@ -8,7 +8,7 @@ import {
   WarningCircleIcon,
   XIcon
 } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Locale } from "./i18n";
 import type { RuleDefinition, RulePack } from "./types";
 
@@ -25,9 +25,11 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
   const [title, setTitle] = useState("");
   const [approver, setApprover] = useState(() => window.localStorage.getItem(APPROVER_KEY) ?? "");
   const [approvalOpen, setApprovalOpen] = useState(false);
+  const [deleting, setDeleting] = useState<RulePack | null>(null);
   const [dirtyIds, setDirtyIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const rulesTableRef = useRef<HTMLDivElement>(null);
 
   const selected = packs.find((pack) => pack.id === selectedId) ?? packs[0];
 
@@ -76,6 +78,27 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
       await window.circuitInspector.approveRulePack(selected.id, approver.trim());
       setApprovalOpen(false);
       await loadRules(selected.id);
+      onCatalogChanged();
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deletePack() {
+    if (!deleting) return;
+    setBusy(true);
+    setError("");
+    try {
+      await window.circuitInspector.deleteRulePack(deleting.id);
+      const remaining = packs.filter((pack) => pack.id !== deleting.id);
+      setPacks(remaining);
+      setSelectedId((current) => remaining.some((pack) => pack.id === current)
+        ? current
+        : remaining.find((pack) => pack.status === "DRAFT")?.id ?? remaining[0]?.id ?? "");
+      setDirtyIds((current) => current.filter((id) => id !== deleting.id));
+      setDeleting(null);
       onCatalogChanged();
     } catch (cause) {
       setError(message(cause));
@@ -139,6 +162,8 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
 
   const blockers = selected ? approvalBlockers(selected) : [];
   const selectedIsDirty = selected ? dirtyIds.includes(selected.id) : false;
+  const acknowledgedReviewCount = selected?.review_items.filter((item) => item.acknowledged).length ?? 0;
+  const reviewItemsComplete = Boolean(selected?.review_items.length) && acknowledgedReviewCount === selected?.review_items.length;
 
   return (
     <div className="grid h-full grid-rows-[64px_minmax(0,1fr)] overflow-hidden">
@@ -168,10 +193,13 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
           <div className="p-3">
             <div className="px-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#747672]">{chinese ? "本地规则包" : "Local rule packs"}</div>
             {packs.length ? packs.map((pack) => (
-              <button key={pack.id} className={`w-full rounded-lg border-l-2 px-3 py-3 text-left transition-colors ${selected?.id === pack.id ? "border-l-[#c5a063] bg-[#c5a063]/[0.055]" : "border-l-transparent hover:bg-white/[0.03]"}`} onClick={() => setSelectedId(pack.id)}>
-                <div className="flex items-center gap-2"><span className={`status-chip status-${pack.status.toLowerCase()}`}>{pack.status}</span><span className="min-w-0 flex-1 truncate text-[11px] text-[#d5d3ce]">{pack.title}</span></div>
-                <div className="mt-1.5 font-mono text-[9px] text-[#666966]">{pack.version} · {pack.rules.length} RULES</div>
-              </button>
+              <div key={pack.id} className={`group mb-1 grid grid-cols-[minmax(0,1fr)_32px] items-center rounded-lg border-l-2 transition-colors ${selected?.id === pack.id ? "border-l-[#c5a063] bg-[#c5a063]/[0.055]" : "border-l-transparent hover:bg-white/[0.03]"}`}>
+                <button className="min-w-0 px-3 py-3 text-left" onClick={() => setSelectedId(pack.id)}>
+                  <div className="flex items-center gap-2"><span className={`status-chip status-${pack.status.toLowerCase()}`}>{pack.status}</span><span className="min-w-0 flex-1 truncate text-[11px] text-[#d5d3ce]">{pack.title}</span></div>
+                  <div className="mt-1.5 font-mono text-[9px] text-[#666966]">{pack.version} · {pack.rules.length} RULES</div>
+                </button>
+                <button className="mr-1 rounded-md p-1.5 text-[#8f6961] opacity-65 transition hover:bg-[#5b2924]/35 hover:text-[#db8f80] focus:opacity-100 group-hover:opacity-100" aria-label={`${chinese ? "删除规则包" : "Delete rule pack"} ${pack.title}`} title={chinese ? "删除本地规则包" : "Delete local rule pack"} onClick={() => setDeleting(pack)}><TrashIcon size={14} /></button>
+              </div>
             )) : <div className="px-3 py-10 text-[11px] leading-5 text-[#70726f]">{chinese ? "尚无规则包。先从受控文档抽取候选规则。" : "No rule packs yet. Extract candidates from a controlled document."}</div>}
           </div>
         </aside>
@@ -192,9 +220,44 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
               {selected.status === "DRAFT" && blockers.length > 0 && <div role="status" className="mt-5 rounded-xl border border-[#9b7a45]/35 bg-[#2c261a]/75 px-4 py-3 text-[11px] leading-5 text-[#d9b777]">{approvalMessage(blockers, locale)}</div>}
               {selected.status === "APPROVED" && selected.version === "0.1.0-draft" && <div role="alert" className="mt-5 rounded-xl border border-[#b76755]/35 bg-[#35231f]/75 px-4 py-3 text-[11px] leading-5 text-[#efc1b6]">{chinese ? "此规则包由旧版抽取器生成，严重度可能来自自动默认值。请从原文重新抽取并审核新草稿；现有已批准内容未被静默修改。" : "This pack came from the legacy extractor and may contain automatically defaulted severities. Re-extract and review a new draft; the approved content was not silently changed."}</div>}
 
-              {selected.review_items.length > 0 && <div className="mt-5 rounded-xl border border-white/[0.08] bg-[#111315] p-4"><div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8c8e89]">{chinese ? "抽取复核项" : "Extraction review items"}</div><div className="space-y-3">{selected.review_items.map((item) => <label key={item.id} className="flex items-start gap-3 text-[10px] leading-5 text-[#aaa9a4]"><input type="checkbox" className="mt-1" checked={item.acknowledged} disabled={selected.status !== "DRAFT"} onChange={(event) => acknowledgeReviewItem(item.id, event.target.checked)} /><span><strong className="text-[#d3ad6d]">{item.code}</strong> · {reviewMessage(item.code, item.message, locale)}<small className="mt-1 block font-mono text-[9px] text-[#666966]">{item.citation.excerpt}</small></span></label>)}</div></div>}
+              {selected.review_items.length > 0 && (
+                <div className="mt-5 rounded-xl border border-white/[0.08] bg-[#111315] p-4">
+                  <div className="flex items-start justify-between gap-5">
+                    <div><div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8c8e89]">{chinese ? "抽取复核项" : "Extraction review items"}</div><p className="mt-1 text-[10px] leading-5 text-[#6f726e]">{chinese ? "勾选表示你已按建议决定如何处理该段原文；勾选不会自动生成或修改规则。" : "Checking an item means you handled the passage as suggested; it does not create or modify a rule automatically."}</p></div>
+                    <div className="shrink-0 font-mono text-[10px] text-[#b99a65]">{acknowledgedReviewCount}/{selected.review_items.length} {chinese ? "已处理" : "handled"}</div>
+                  </div>
+                  <div className="mt-4 space-y-3">{selected.review_items.map((item) => {
+                    const inputId = `review-item-${item.id}`;
+                    return (
+                      <div key={item.id} className={`flex items-start gap-3 rounded-lg border px-3 py-3 ${item.acknowledged ? "border-[#7f925b]/25 bg-[#24301d]/20" : "border-white/[0.055] bg-white/[0.012]"}`}>
+                        <input id={inputId} type="checkbox" className="mt-1" checked={item.acknowledged} disabled={selected.status !== "DRAFT"} onChange={(event) => acknowledgeReviewItem(item.id, event.target.checked)} />
+                        <label htmlFor={inputId} className="min-w-0 flex-1 cursor-pointer text-[10px] leading-5 text-[#aaa9a4]">
+                          <span><strong className="text-[#d3ad6d]">{item.code}</strong> · {reviewMessage(item.code, item.message, locale)}</span>
+                          <small className="mt-1 block font-mono text-[9px] text-[#666966]">{item.citation.excerpt}</small>
+                          <span className="mt-2 block rounded-md border border-[#c5a063]/15 bg-[#c5a063]/[0.045] px-2.5 py-2 text-[#b8aa91]"><strong className="text-[#d4b77f]">{chinese ? "建议：" : "Suggestion: "}</strong>{reviewSuggestion(item.code, locale)}</span>
+                          <span className="mt-2 block text-[#858883]">{item.acknowledged ? chinese ? "已标记为按建议处理" : "Marked as handled" : chinese ? "我已按建议处理" : "I handled this as suggested"}</span>
+                        </label>
+                      </div>
+                    );
+                  })}</div>
+                  {selected.status === "DRAFT" && (
+                    <div className="mt-4 flex items-center justify-between gap-5 border-t border-white/[0.07] pt-4">
+                      <p className="max-w-[76ch] text-[10px] leading-5 text-[#777a76]">{reviewItemsComplete
+                        ? chinese ? "复核项已全部处理。下一步核对下方可执行规则的对象、阈值和违规严重度，然后审查并批准。" : "All review items are handled. Next, verify each executable rule's entities, threshold, and violation severity, then review and approve."
+                        : chinese ? "逐项阅读原文和建议；如果需要可执行规则，请在下方规则表中人工确认或编辑。" : "Review each source passage and suggestion. If it should become executable, confirm or edit it manually in the rule table below."}</p>
+                      {selectedIsDirty
+                        ? <button className="primary-button shrink-0" disabled={busy} onClick={() => void saveDraft()}>{chinese ? "保存复核进度" : "Save review progress"}</button>
+                        : reviewItemsComplete && blockers.length === 0
+                          ? <button className="primary-button shrink-0" disabled={busy} onClick={() => setApprovalOpen(true)}><ShieldCheckIcon size={14} />{chinese ? "审查并批准" : "Review and approve"}</button>
+                          : reviewItemsComplete
+                            ? <button className="secondary-button shrink-0" onClick={() => rulesTableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>{chinese ? "继续核对规则" : "Continue to rules"}</button>
+                            : null}
+                    </div>
+                  )}
+                </div>
+              )}
 
-              <div className="mt-6 overflow-x-auto rounded-xl border border-white/[0.08]">
+              <div ref={rulesTableRef} className="mt-6 scroll-mt-5 overflow-x-auto rounded-xl border border-white/[0.08]">
                 <table className={`${selected.status === "DRAFT" ? "editable-table" : "workbench-table"} min-w-[1280px]`}>
                   <thead><tr><th>{chinese ? "规则" : "Rule"}</th><th>{chinese ? "对象与目标" : "Source / target"}</th><th>{chinese ? "距离定义" : "Metric"}</th><th>{chinese ? "阈值" : "Threshold"}</th><th>{chinese ? "过滤" : "Filters"}</th><th>{chinese ? "违规严重度（命中后）" : "Violation severity (when hit)"}</th><th>{chinese ? "引用证据" : "Citation"}</th>{selected.status === "DRAFT" && <th>{chinese ? "操作" : "Action"}</th>}</tr></thead>
                   <tbody>{selected.rules.map((rule) => (
@@ -223,6 +286,16 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
             <label className="mt-5 block text-[11px] text-[#c8c6c1]" htmlFor="rule-approver">{chinese ? "批准人姓名或工号" : "Approver name or employee ID"}</label>
             <input id="rule-approver" className="workbench-input mt-2" value={approver} onChange={(event) => setApprover(event.target.value)} />
             <div className="mt-6 flex justify-end gap-2"><button className="secondary-button" onClick={() => setApprovalOpen(false)}>{chinese ? "取消" : "Cancel"}</button><button className="primary-button" disabled={!approver.trim() || busy} onClick={() => void approve()}>{busy ? <CircleNotchIcon size={14} className="animate-spin" /> : <ShieldCheckIcon size={14} />}{chinese ? "确认批准" : "Approve"}</button></div>
+          </div>
+        </div>
+      )}
+
+      {deleting && (
+        <div className="fixed inset-0 grid place-items-center bg-[#0d0f10]/82 p-6 backdrop-blur-md">
+          <div role="dialog" aria-modal="true" aria-labelledby="rule-delete-title" className="popover-surface w-full max-w-[560px] rounded-2xl p-6">
+            <div className="flex items-start justify-between gap-6"><div><h2 id="rule-delete-title" className="text-[16px] font-semibold text-[#efc1b6]">{chinese ? "删除本地规则包？" : "Delete local rule pack?"}</h2><p className="mt-2 text-[11px] leading-5 text-[#858681]"><strong className="text-[#d5d3ce]">{deleting.title}</strong> · {deleting.version}</p></div><button className="rounded-lg p-1.5 text-[#777875] hover:bg-white/5" disabled={busy} onClick={() => setDeleting(null)} aria-label={chinese ? "关闭删除确认" : "Close delete confirmation"}><XIcon size={16} /></button></div>
+            <div className="mt-5 rounded-xl border border-[#b76755]/30 bg-[#35231f]/65 px-4 py-3 text-[11px] leading-5 text-[#dca99c]">{chinese ? "此操作只删除本机缓存中的规则包，无法撤销。已有分析结果与证据不会被删除，但之后不能再用这个规则包运行新分析。" : "This permanently removes the rule pack from the local cache. Existing analyses and evidence remain, but this pack can no longer run new analyses."}{dirtyIds.includes(deleting.id) ? <strong className="mt-2 block text-[#efc1b6]">{chinese ? "该草稿还有未保存的修改，也会一并丢失。" : "This draft also has unsaved changes that will be lost."}</strong> : null}</div>
+            <div className="mt-6 flex justify-end gap-2"><button className="secondary-button" disabled={busy} onClick={() => setDeleting(null)}>{chinese ? "取消" : "Cancel"}</button><button className="flex h-9 items-center justify-center gap-2 rounded-lg border border-[#b76755]/45 bg-[#6b3128]/55 px-4 text-[11px] font-medium text-[#f0c0b5] transition hover:bg-[#7b382e]/70 disabled:opacity-40" disabled={busy} onClick={() => void deletePack()}>{busy ? <CircleNotchIcon size={14} className="animate-spin" /> : <TrashIcon size={14} />}{chinese ? "确认删除" : "Delete"}</button></div>
           </div>
         </div>
       )}
@@ -284,4 +357,21 @@ function reviewMessage(code: string, fallback: string, locale: Locale): string {
     LEGACY_AUTO_SEVERITY: "此严重度来自旧版自动默认值，必须重新确认。"
   };
   return labels[code] ?? fallback;
+}
+
+export function reviewSuggestion(code: RulePack["review_items"][number]["code"], locale: Locale): string {
+  const suggestions = locale === "zh-CN" ? {
+    RELATIVE_THRESHOLD: "先确认相对公式引用的直径及适用范围。当前引擎不能执行公式；只有能从受控文档得到唯一固定值时，才在下方创建或保留对应规则，否则作为非执行性指导留档。",
+    AMBIGUOUS_THRESHOLD: "结合产品类型、章节和适用条件人工选择唯一尺寸，并在下方规则中核对阈值；若原文无法唯一判断，不要猜选，保持为复核记录。",
+    NON_EXECUTABLE_GUIDANCE: "把它作为设计或设备选型参考，不转换成自动 PASS/FAIL 规则；确认下方没有因这段文字误生成规则。",
+    UNSUPPORTED_TARGET: "当前引擎无法可靠表示该目标。先人工检查并保留为 REVIEW；不要用相近实体替代，待几何模型支持后再建立规则。",
+    LEGACY_AUTO_SEVERITY: "在下方规则表中根据违规后的工程影响重新选择严重度，不要沿用旧版自动默认值。"
+  } : {
+    RELATIVE_THRESHOLD: "Confirm the referenced diameter and scope first. The engine cannot execute the relative formula; create or keep a fixed rule only when the controlled source yields one unambiguous value.",
+    AMBIGUOUS_THRESHOLD: "Use product type, section, and applicability to choose one value, then verify it in the rule table. If the source is not decisive, do not guess; keep it as a review record.",
+    NON_EXECUTABLE_GUIDANCE: "Keep this as design or equipment guidance, not an automatic PASS/FAIL rule, and verify that no executable rule was created from it by mistake.",
+    UNSUPPORTED_TARGET: "The engine cannot represent this target reliably. Review it manually and keep it as REVIEW; do not substitute a similar entity while geometry support is absent.",
+    LEGACY_AUTO_SEVERITY: "Choose the violation severity again in the rule table based on engineering impact; do not retain the legacy automatic default."
+  };
+  return suggestions[code];
 }

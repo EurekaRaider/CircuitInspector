@@ -301,6 +301,7 @@ export interface ViewerApi {
   pickDesign(input: Record<string, unknown>): Promise<{ results: PickResult[] }>;
   listRulePacks(): Promise<{ rule_packs: RulePack[] }>;
   updateRulePack(input: { rule_pack_id: string; rules: RuleDefinition[]; acknowledged_review_item_ids: string[] }): Promise<RulePack>;
+  deleteRulePack(rulePackId: string): Promise<{ id: string; deleted: true }>;
   approveRulePack(rulePackId: string, approvedBy: string): Promise<RulePack>;
   runAnalysis(designId: string, rulePackId: string): Promise<AnalysisSummary>;
   queryViolations(input: Record<string, unknown>): Promise<{ analysis_id: string; total: number; offset: number; violations: Violation[] }>;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalBlockers, severityLabel } from "../src/renderer/RuleLibrary.js";
+import { approvalBlockers, reviewSuggestion, severityLabel } from "../src/renderer/RuleLibrary.js";
 import type { RulePack } from "../src/renderer/types.js";
 
 function draftPack(): RulePack {
@@ -47,5 +47,21 @@ describe("rule-library approval gate", () => {
     expect(severityLabel(null, "zh-CN")).toBe("待确认");
     expect(severityLabel("ERROR", "zh-CN")).toBe("高（ERROR）");
     expect(severityLabel("WARNING", "en-US")).toBe("Medium (WARNING)");
+  });
+
+  it("gives a concrete human action for every extraction review code", () => {
+    const codes: RulePack["review_items"][number]["code"][] = [
+      "RELATIVE_THRESHOLD",
+      "AMBIGUOUS_THRESHOLD",
+      "NON_EXECUTABLE_GUIDANCE",
+      "UNSUPPORTED_TARGET",
+      "LEGACY_AUTO_SEVERITY"
+    ];
+    for (const code of codes) {
+      expect(reviewSuggestion(code, "zh-CN").length).toBeGreaterThan(20);
+      expect(reviewSuggestion(code, "en-US").length).toBeGreaterThan(20);
+    }
+    expect(reviewSuggestion("AMBIGUOUS_THRESHOLD", "zh-CN")).toContain("不要猜选");
+    expect(reviewSuggestion("NON_EXECUTABLE_GUIDANCE", "zh-CN")).toContain("不转换成自动 PASS/FAIL 规则");
   });
 });

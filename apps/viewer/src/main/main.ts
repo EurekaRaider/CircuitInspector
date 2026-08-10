@@ -388,6 +388,9 @@ ipcMain.handle("rules:update-draft", (_event, value: unknown) => {
     acknowledged_review_item_ids: input.acknowledged_review_item_ids
   });
 });
+ipcMain.handle("rules:delete", (_event, rulePackId: string) =>
+  core.request("delete_rule_pack", { cache_dir: cacheDir, rule_pack_id: assertArtifactId(rulePackId) })
+);
 ipcMain.handle("rules:approve", (_event, rulePackId: string, approvedBy: string) =>
   core.request("approve_rule_pack", { cache_dir: cacheDir, rule_pack_id: assertArtifactId(rulePackId), approved_by: approvedBy })
 );
