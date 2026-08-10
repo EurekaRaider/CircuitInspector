@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { BoardRenderer, fitView, type ViewState } from "./board-renderer";
 import type { BoundsNm, TilePayload, Violation } from "./types";
 
@@ -19,7 +19,7 @@ interface Props {
   onPick(point: { xMm: number; yMm: number }): void;
 }
 
-export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCanvas(
+const BoardCanvasComponent = forwardRef<BoardCanvasHandle, Props>(function BoardCanvas(
   { bounds, tile, activeViolation, mirrored, measureMode, onViewportChange, onPointerWorld, onMeasure, onPick },
   ref
 ) {
@@ -28,6 +28,10 @@ export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCa
   const viewRef = useRef<ViewState>({ centerX: 0, centerY: 0, zoom: 20 });
   const dragRef = useRef<{ x: number; y: number; centerX: number; centerY: number } | undefined>(undefined);
   const measureRef = useRef<Array<{ x: number; y: number }>>([]);
+  const viewFrameRef = useRef<number | undefined>(undefined);
+  const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pointerTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pendingPointerRef = useRef<{ xMm: number; yMm: number; zoom: number } | undefined>(undefined);
   const [measure, setMeasure] = useState<[number, number, number, number] | undefined>(undefined);
 
   useImperativeHandle(ref, () => ({
@@ -52,6 +56,10 @@ export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCa
     fit();
     return () => {
       observer.disconnect();
+      if (viewFrameRef.current != null) cancelAnimationFrame(viewFrameRef.current);
+      if (viewportTimerRef.current != null) clearTimeout(viewportTimerRef.current);
+      if (pointerTimerRef.current != null) clearTimeout(pointerTimerRef.current);
+      renderer.dispose();
       rendererRef.current = undefined;
     };
   }, []);
@@ -72,7 +80,7 @@ export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCa
     measureRef.current = [];
     setMeasure(undefined);
     onMeasure(null);
-  }, [measureMode]);
+  }, [measureMode, onMeasure]);
 
   function fit() {
     const canvas = canvasRef.current;
@@ -82,9 +90,23 @@ export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCa
   }
 
   function applyView(notify: boolean) {
-    rendererRef.current?.setView(viewRef.current);
-    rendererRef.current?.setOverlay(activeViolation, measure);
-    if (!notify) return;
+    scheduleViewRender();
+    if (notify) notifyViewportChange();
+  }
+
+  function scheduleViewRender() {
+    if (viewFrameRef.current != null) return;
+    viewFrameRef.current = requestAnimationFrame(() => {
+      viewFrameRef.current = undefined;
+      rendererRef.current?.setView(viewRef.current);
+    });
+  }
+
+  function notifyViewportChange() {
+    if (viewportTimerRef.current != null) {
+      clearTimeout(viewportTimerRef.current);
+      viewportTimerRef.current = undefined;
+    }
     const canvas = canvasRef.current;
     if (!canvas) return;
     const halfWidthMm = canvas.clientWidth / viewRef.current.zoom / 2;
@@ -98,6 +120,25 @@ export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCa
       },
       viewRef.current.zoom
     );
+  }
+
+  function scheduleViewportChange() {
+    if (viewportTimerRef.current != null) clearTimeout(viewportTimerRef.current);
+    viewportTimerRef.current = setTimeout(() => {
+      viewportTimerRef.current = undefined;
+      notifyViewportChange();
+    }, 120);
+  }
+
+  function schedulePointerWorld(point: { xMm: number; yMm: number; zoom: number }) {
+    pendingPointerRef.current = point;
+    if (pointerTimerRef.current != null) return;
+    pointerTimerRef.current = setTimeout(() => {
+      pointerTimerRef.current = undefined;
+      const pending = pendingPointerRef.current;
+      pendingPointerRef.current = undefined;
+      if (pending) onPointerWorld(pending);
+    }, 50);
   }
 
   function worldPoint(clientX: number, clientY: number) {
@@ -132,7 +173,7 @@ export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCa
       }}
       onPointerMove={(event) => {
         const point = worldPoint(event.clientX, event.clientY);
-        onPointerWorld({ xMm: point.x, yMm: point.y, zoom: viewRef.current.zoom });
+        schedulePointerWorld({ xMm: point.x, yMm: point.y, zoom: viewRef.current.zoom });
         if (!dragRef.current) return;
         const deltaX = event.clientX - dragRef.current.x;
         const deltaY = event.clientY - dragRef.current.y;
@@ -158,6 +199,7 @@ export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCa
         dragRef.current = undefined;
       }}
       onPointerCancel={() => {
+        if (dragRef.current) applyView(true);
         dragRef.current = undefined;
       }}
       onWheel={(event) => {
@@ -168,8 +210,13 @@ export const BoardCanvas = forwardRef<BoardCanvasHandle, Props>(function BoardCa
         const after = worldPoint(event.clientX, event.clientY);
         viewRef.current.centerX += before.x - after.x;
         viewRef.current.centerY += before.y - after.y;
-        applyView(true);
+        schedulePointerWorld({ xMm: before.x, yMm: before.y, zoom: viewRef.current.zoom });
+        applyView(false);
+        scheduleViewportChange();
       }}
     />
   );
 });
+
+export const BoardCanvas = memo(BoardCanvasComponent);
+BoardCanvas.displayName = "BoardCanvas";

@@ -42,6 +42,11 @@ interface Props {
 export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesignId, onCatalogChanged }: Props) {
   const canvasRef = useRef<BoardCanvasHandle>(null);
   const tileRequest = useRef(0);
+  const lastTileRequestKey = useRef("");
+  const viewportRef = useRef<{ designId: string; viewport: BoundsNm; zoom: number } | undefined>(undefined);
+  const pointerRef = useRef({ xMm: 0, yMm: 0, zoom: 0 });
+  const pointerPositionElementRef = useRef<HTMLSpanElement>(null);
+  const pointerZoomElementRef = useRef<HTMLSpanElement>(null);
   const t = useMemo<Translator>(() => (key, variables) => translate(locale, key, variables), [locale]);
   const [design, setDesign] = useState<DesignSummary>();
   const [tile, setTile] = useState<TilePayload | null>(null);
@@ -62,7 +67,6 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const [measureMode, setMeasureMode] = useState(false);
   const [viewSide, setViewSide] = useState<"TOP" | "BOTTOM">("TOP");
   const [measureDistance, setMeasureDistance] = useState<number | null>(null);
-  const [pointer, setPointer] = useState({ xMm: 0, yMm: 0, zoom: 0 });
 
   const loadRules = useCallback(async () => {
     try {
@@ -94,7 +98,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       .then((summary) => {
         setDocumentAnalysis(undefined);
         setAnalysis(undefined);
-        setDesign(summary);
+        showDesign(summary);
       })
       .catch((cause) => setError(message(cause)))
       .finally(() => setBusy(false));
@@ -102,9 +106,15 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
 
   useEffect(() => {
     if (!design) return;
-    setEnabledLayers(design.layers.map((layer) => layer.id));
     queueMicrotask(() => canvasRef.current?.fit());
   }, [design?.id]);
+
+  function showDesign(summary: DesignSummary) {
+    lastTileRequestKey.current = "";
+    setTile(null);
+    setEnabledLayers(summary.layers.map((layer) => layer.id));
+    setDesign(summary);
+  }
 
   async function openDeepLink(url: string) {
     try {
@@ -123,7 +133,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       }
       const summary = await window.circuitInspector.getDesignSummary(loaded.design_id);
       setDocumentAnalysis(undefined);
-      setDesign(summary);
+      showDesign(summary);
       setAnalysis(loaded);
       setQueriedViolations(null);
       const issue = parsed.searchParams.get("issue");
@@ -147,7 +157,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     setDocumentAnalysis(undefined);
     setActiveViolation(null);
     try {
-      setDesign(await window.circuitInspector.importDesign(source));
+      showDesign(await window.circuitInspector.importDesign(source));
       onCatalogChanged?.();
     } catch (cause) {
       setError(message(cause));
@@ -159,27 +169,59 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const requestTile = useCallback(
     async (viewport: BoundsNm, zoom: number) => {
       if (!design) return;
+      const lod = zoom < 8 ? 2 : zoom < 30 ? 1 : 0;
+      const requestKey = [
+        design.id,
+        viewport.min_x,
+        viewport.min_y,
+        viewport.max_x,
+        viewport.max_y,
+        enabledLayers.join(","),
+        lod
+      ].join(":");
+      if (requestKey === lastTileRequestKey.current) return;
+      lastTileRequestKey.current = requestKey;
       const request = ++tileRequest.current;
       try {
         const payload = await window.circuitInspector.getTile({
           design_id: design.id,
           viewport,
           layer_ids: enabledLayers,
-          lod: zoom < 8 ? 2 : zoom < 30 ? 1 : 0,
+          lod,
           max_features: 500_000
         });
         if (request === tileRequest.current) setTile(payload);
       } catch (cause) {
-        if (request === tileRequest.current) setError(message(cause));
+        if (request === tileRequest.current) {
+          lastTileRequestKey.current = "";
+          setError(message(cause));
+        }
       }
     },
     [design, enabledLayers]
   );
 
+  const updatePointerStatus = useCallback((point: { xMm: number; yMm: number; zoom: number }) => {
+    pointerRef.current = point;
+    if (pointerPositionElementRef.current) {
+      pointerPositionElementRef.current.textContent = `X ${point.xMm.toFixed(3)} mm  Y ${point.yMm.toFixed(3)} mm`;
+    }
+    if (pointerZoomElementRef.current) {
+      pointerZoomElementRef.current.textContent = `${t("zoom")} ${point.zoom.toFixed(1)} px/mm`;
+    }
+  }, [t]);
+
+  const handleViewportChange = useCallback((viewport: BoundsNm, zoom: number) => {
+    if (design) viewportRef.current = { designId: design.id, viewport, zoom };
+    updatePointerStatus({ ...pointerRef.current, zoom });
+    void requestTile(viewport, zoom);
+  }, [design, requestTile, updatePointerStatus]);
+
   useEffect(() => {
-    if (!design) return;
-    void requestTile(design.bounds, 1);
-  }, [design?.id, enabledLayers]);
+    const current = viewportRef.current;
+    if (!design || !current || current.designId !== design.id) return;
+    void requestTile(current.viewport, current.zoom);
+  }, [design?.id, enabledLayers, requestTile]);
 
   async function runAnalysis() {
     if (!design || !selectedRulePack) return;
@@ -210,10 +252,10 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     }
   }
 
-  async function pickObject(point: { xMm: number; yMm: number }) {
+  const pickObject = useCallback(async (point: { xMm: number; yMm: number }) => {
     if (!design) return;
     try {
-      const toleranceNm = Math.round(Math.max(30_000, 8 / Math.max(pointer.zoom, 0.02) * 1_000_000));
+      const toleranceNm = Math.round(Math.max(30_000, 8 / Math.max(pointerRef.current.zoom, 0.02) * 1_000_000));
       const result = await window.circuitInspector.pickDesign({
         design_id: design.id,
         point: { x: Math.round(point.xMm * 1_000_000), y: Math.round(point.yMm * 1_000_000) },
@@ -223,7 +265,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     } catch (cause) {
       setError(message(cause));
     }
-  }
+  }, [design]);
 
   async function filterViolations() {
     if (!analysis) return;
@@ -393,13 +435,10 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
               activeViolation={activeViolation}
               mirrored={viewSide === "BOTTOM"}
               measureMode={measureMode}
-              onViewportChange={(viewport, zoom) => {
-                setPointer((current) => ({ ...current, zoom }));
-                void requestTile(viewport, zoom);
-              }}
-              onPointerWorld={setPointer}
+              onViewportChange={handleViewportChange}
+              onPointerWorld={updatePointerStatus}
               onMeasure={setMeasureDistance}
-              onPick={(point) => void pickObject(point)}
+              onPick={pickObject}
             />
           ) : (
             <EmptyCanvas onOpen={() => void chooseDesign()} t={t} />
@@ -551,9 +590,9 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       <footer className="grid grid-cols-[272px_minmax(0,1fr)_360px] items-center border-t border-white/[0.07] bg-[#131517] font-mono text-[9px] tracking-[0.02em] text-[#696a67]">
         <div className="truncate border-r border-white/[0.07] px-4">{statusLabel}</div>
         <div className="flex items-center justify-between px-4">
-          <span>X {pointer.xMm.toFixed(3)} mm&nbsp;&nbsp;Y {pointer.yMm.toFixed(3)} mm</span>
+          <span ref={pointerPositionElementRef}>X {pointerRef.current.xMm.toFixed(3)} mm&nbsp;&nbsp;Y {pointerRef.current.yMm.toFixed(3)} mm</span>
           <span className="text-[#b9965d]">{measureDistance == null ? "" : `${t("measurement")} ${measureDistance.toFixed(3)} mm`}</span>
-          <span>{t("zoom")} {pointer.zoom.toFixed(1)} px/mm</span>
+          <span ref={pointerZoomElementRef}>{t("zoom")} {pointerRef.current.zoom.toFixed(1)} px/mm</span>
         </div>
         <div className="border-l border-white/[0.07] px-4 text-right">{t("localOnly")}</div>
       </footer>

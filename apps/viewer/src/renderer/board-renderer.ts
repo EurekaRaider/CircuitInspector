@@ -3,6 +3,7 @@ import type { BoundsNm, TilePayload, Violation } from "./types";
 const HEADER_BYTES = 42;
 const RECORD_BYTES = 24;
 const FLOATS_PER_VERTEX = 6;
+const FLOATS_PER_TRIANGLE = FLOATS_PER_VERTEX * 3;
 
 const vertexSource = `#version 300 es
 precision highp float;
@@ -47,9 +48,18 @@ export class BoardRenderer {
   readonly #canvas: HTMLCanvasElement;
   readonly #gl: WebGL2RenderingContext;
   readonly #program: WebGLProgram;
-  readonly #buffer: WebGLBuffer;
-  #boardVertices: Float32Array<ArrayBufferLike> = new Float32Array();
-  #overlayVertices: Float32Array<ArrayBufferLike> = new Float32Array();
+  readonly #boardBuffer: WebGLBuffer;
+  readonly #overlayBuffer: WebGLBuffer;
+  readonly #uniforms: {
+    center: WebGLUniformLocation | null;
+    viewport: WebGLUniformLocation | null;
+    zoom: WebGLUniformLocation | null;
+    mirror: WebGLUniformLocation | null;
+  };
+  #boardVertexCount = 0;
+  #overlayVertexCount = 0;
+  #overlayViolation: Violation | null = null;
+  #measure: [number, number, number, number] | undefined;
   #view: ViewState = { centerX: 0, centerY: 0, zoom: 20 };
   #mirrored = false;
 
@@ -59,23 +69,30 @@ export class BoardRenderer {
     if (!gl) throw new Error("此设备不支持 WebGL2，无法启动 GPU PCB Viewer。");
     this.#gl = gl;
     this.#program = createProgram(gl, vertexSource, fragmentSource);
-    this.#buffer = gl.createBuffer() ?? throwError("无法创建 GPU 顶点缓冲区");
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.#buffer);
+    this.#boardBuffer = gl.createBuffer() ?? throwError("无法创建 GPU 板图缓冲区");
+    this.#overlayBuffer = gl.createBuffer() ?? throwError("无法创建 GPU 标注缓冲区");
+    this.#uniforms = {
+      center: gl.getUniformLocation(this.#program, "u_center"),
+      viewport: gl.getUniformLocation(this.#program, "u_viewport"),
+      zoom: gl.getUniformLocation(this.#program, "u_zoom"),
+      mirror: gl.getUniformLocation(this.#program, "u_mirror")
+    };
     gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * 4, 0);
     gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * 4, 2 * 4);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   }
 
   setTile(tile: TilePayload | null): void {
-    this.#boardVertices = tile ? decodeTile(tile.bytes) : new Float32Array();
+    const vertices = tile ? decodeTile(tile.bytes, tile.lod) : new Float32Array();
+    this.#boardVertexCount = vertices.length / FLOATS_PER_VERTEX;
+    this.#upload(this.#boardBuffer, vertices, this.#gl.STATIC_DRAW);
     this.draw();
   }
 
   setView(view: ViewState): void {
     this.#view = view;
+    this.#refreshOverlay();
     this.draw();
   }
 
@@ -85,30 +102,45 @@ export class BoardRenderer {
   }
 
   setOverlay(violation: Violation | null, measure?: [number, number, number, number]): void {
+    this.#overlayViolation = violation;
+    this.#measure = measure;
+    this.#refreshOverlay();
+    this.draw();
+  }
+
+  #refreshOverlay(): void {
+    const violation = this.#overlayViolation;
+    const measure = this.#measure;
+    if (!violation && !measure) {
+      this.#overlayVertexCount = 0;
+      return;
+    }
     const vertices: number[] = [];
+    const write = arrayVertexWriter(vertices);
     if (violation) {
       const x = violation.x_nm / 1_000_000;
       const y = violation.y_nm / 1_000_000;
       const radius = Math.max(0.5, 18 / this.#view.zoom);
-      addRing(vertices, x, y, radius, [0.88, 0.36, 0.27, 1]);
-      addLine(vertices, x - radius * 1.3, y, x + radius * 1.3, y, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
-      addLine(vertices, x, y - radius * 1.3, x, y + radius * 1.3, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
+      addRing(write, x, y, radius, [0.88, 0.36, 0.27, 1]);
+      addLine(write, x - radius * 1.3, y, x + radius * 1.3, y, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
+      addLine(write, x, y - radius * 1.3, x, y + radius * 1.3, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
       const [first, second] = violation.evidence_points ?? [];
       if (first && second) {
         const x0 = first.x / 1_000_000;
         const y0 = first.y / 1_000_000;
         const x1 = second.x / 1_000_000;
         const y1 = second.y / 1_000_000;
-        addLine(vertices, x0, y0, x1, y1, 2 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
-        addRing(vertices, x0, y0, 5 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
-        addRing(vertices, x1, y1, 5 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
+        addLine(write, x0, y0, x1, y1, 2 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
+        addRing(write, x0, y0, 5 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
+        addRing(write, x1, y1, 5 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
       }
     }
     if (measure) {
-      addLine(vertices, measure[0], measure[1], measure[2], measure[3], 2 / this.#view.zoom, [0.42, 0.73, 0.75, 1]);
+      addLine(write, measure[0], measure[1], measure[2], measure[3], 2 / this.#view.zoom, [0.42, 0.73, 0.75, 1]);
     }
-    this.#overlayVertices = new Float32Array(vertices);
-    this.draw();
+    const buffer = new Float32Array(vertices);
+    this.#overlayVertexCount = buffer.length / FLOATS_PER_VERTEX;
+    this.#upload(this.#overlayBuffer, buffer, this.#gl.DYNAMIC_DRAW);
   }
 
   resize(): void {
@@ -128,31 +160,57 @@ export class BoardRenderer {
     gl.clearColor(0.067, 0.078, 0.086, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(this.#program);
-    gl.uniform2f(gl.getUniformLocation(this.#program, "u_center"), this.#view.centerX, this.#view.centerY);
-    gl.uniform2f(gl.getUniformLocation(this.#program, "u_viewport"), this.#canvas.width, this.#canvas.height);
-    gl.uniform1f(gl.getUniformLocation(this.#program, "u_zoom"), this.#view.zoom * Math.min(window.devicePixelRatio || 1, 2));
-    gl.uniform1f(gl.getUniformLocation(this.#program, "u_mirror"), this.#mirrored ? -1 : 1);
-    this.#drawVertices(this.#boardVertices);
-    this.#drawVertices(this.#overlayVertices);
+    gl.uniform2f(this.#uniforms.center, this.#view.centerX, this.#view.centerY);
+    gl.uniform2f(this.#uniforms.viewport, this.#canvas.width, this.#canvas.height);
+    gl.uniform1f(this.#uniforms.zoom, this.#view.zoom * Math.min(window.devicePixelRatio || 1, 2));
+    gl.uniform1f(this.#uniforms.mirror, this.#mirrored ? -1 : 1);
+    this.#drawBuffer(this.#boardBuffer, this.#boardVertexCount);
+    this.#drawBuffer(this.#overlayBuffer, this.#overlayVertexCount);
   }
 
-  #drawVertices(vertices: Float32Array<ArrayBufferLike>): void {
-    if (vertices.length === 0) return;
+  dispose(): void {
+    this.#gl.deleteBuffer(this.#boardBuffer);
+    this.#gl.deleteBuffer(this.#overlayBuffer);
+    this.#gl.deleteProgram(this.#program);
+  }
+
+  #upload(buffer: WebGLBuffer, vertices: Float32Array<ArrayBufferLike>, usage: number): void {
     const gl = this.#gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.#buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
-    gl.drawArrays(gl.TRIANGLES, 0, vertices.length / FLOATS_PER_VERTEX);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, usage);
+  }
+
+  #drawBuffer(buffer: WebGLBuffer, vertexCount: number): void {
+    if (vertexCount === 0) return;
+    const gl = this.#gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * 4, 0);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * 4, 2 * 4);
+    gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
   }
 }
 
-export function decodeTile(bytes: ArrayBuffer): Float32Array {
+export function decodeTile(bytes: ArrayBuffer, lod = 0): Float32Array {
   const view = new DataView(bytes);
   if (bytes.byteLength < HEADER_BYTES || readMagic(view) !== "CITL") throw new Error("无效的 CircuitInspector tile");
   const count = view.getUint32(6, true);
-  const vertices: number[] = [];
+  if (HEADER_BYTES + count * RECORD_BYTES > bytes.byteLength) throw new Error("CircuitInspector tile 数据被截断");
+  let floatCount = 0;
+  for (let index = 0; index < count; index += 1) {
+    floatCount += recordFloatCount(view.getUint8(HEADER_BYTES + index * RECORD_BYTES), lod);
+  }
+  const vertices = new Float32Array(floatCount);
+  let cursor = 0;
+  const write: VertexWriter = (x, y, color) => {
+    vertices[cursor++] = x;
+    vertices[cursor++] = y;
+    vertices[cursor++] = color[0]!;
+    vertices[cursor++] = color[1]!;
+    vertices[cursor++] = color[2]!;
+    vertices[cursor++] = color[3]!;
+  };
   for (let index = 0; index < count; index += 1) {
     const offset = HEADER_BYTES + index * RECORD_BYTES;
-    if (offset + RECORD_BYTES > bytes.byteLength) throw new Error("CircuitInspector tile 数据被截断");
     const kind = view.getUint8(offset);
     const clear = view.getUint8(offset + 1) === 1;
     const layer = view.getUint16(offset + 2, true);
@@ -162,60 +220,80 @@ export function decodeTile(bytes: ArrayBuffer): Float32Array {
     const y2 = view.getFloat32(offset + 16, true);
     const width = view.getFloat32(offset + 20, true);
     const color = clear ? ([0.067, 0.078, 0.086, 1] as const) : palette[layer % palette.length]!;
-    if (kind === 1) addLine(vertices, x1, y1, x2, y2, Math.max(width, 0.01), color);
-    else if (kind === 2) addRect(vertices, x1 - x2 / 2, y1 - y2 / 2, x1 + x2 / 2, y1 + y2 / 2, color);
-    else if (kind === 3) addDisc(vertices, x1, y1, Math.max(x2 / 2, 0.01), color);
-    else if (kind === 4) addRectOutline(vertices, x1, y1, x2, y2, 0.04, color);
+    if (kind === 1) addLine(write, x1, y1, x2, y2, Math.max(width, 0.01), color);
+    else if (kind === 2) addRect(write, x1 - x2 / 2, y1 - y2 / 2, x1 + x2 / 2, y1 + y2 / 2, color);
+    else if (kind === 3) addDisc(write, x1, y1, Math.max(x2 / 2, 0.01), color, discSegments(lod));
+    else if (kind === 4) addRectOutline(write, x1, y1, x2, y2, 0.04, color);
   }
-  return new Float32Array(vertices);
+  return vertices;
 }
 
-function addLine(vertices: number[], x0: number, y0: number, x1: number, y1: number, width: number, color: readonly number[]) {
+type VertexWriter = (x: number, y: number, color: readonly number[]) => void;
+
+function arrayVertexWriter(vertices: number[]): VertexWriter {
+  return (x, y, color) => {
+    vertices.push(x, y, color[0]!, color[1]!, color[2]!, color[3]!);
+  };
+}
+
+function recordFloatCount(kind: number, lod: number): number {
+  if (kind === 1 || kind === 2) return FLOATS_PER_TRIANGLE * 2;
+  if (kind === 3) return FLOATS_PER_TRIANGLE * discSegments(lod);
+  if (kind === 4) return FLOATS_PER_TRIANGLE * 8;
+  return 0;
+}
+
+function discSegments(lod: number): number {
+  return lod >= 2 ? 8 : lod === 1 ? 12 : 24;
+}
+
+function addLine(write: VertexWriter, x0: number, y0: number, x1: number, y1: number, width: number, color: readonly number[]) {
   const dx = x1 - x0;
   const dy = y1 - y0;
   const length = Math.hypot(dx, dy) || 1;
   const nx = (-dy / length) * width * 0.5;
   const ny = (dx / length) * width * 0.5;
-  addQuad(vertices, x0 + nx, y0 + ny, x0 - nx, y0 - ny, x1 - nx, y1 - ny, x1 + nx, y1 + ny, color);
+  addQuad(write, x0 + nx, y0 + ny, x0 - nx, y0 - ny, x1 - nx, y1 - ny, x1 + nx, y1 + ny, color);
 }
 
-function addRect(vertices: number[], minX: number, minY: number, maxX: number, maxY: number, color: readonly number[]) {
-  addQuad(vertices, minX, minY, maxX, minY, maxX, maxY, minX, maxY, color);
+function addRect(write: VertexWriter, minX: number, minY: number, maxX: number, maxY: number, color: readonly number[]) {
+  addQuad(write, minX, minY, maxX, minY, maxX, maxY, minX, maxY, color);
 }
 
-function addRectOutline(vertices: number[], minX: number, minY: number, maxX: number, maxY: number, width: number, color: readonly number[]) {
-  addLine(vertices, minX, minY, maxX, minY, width, color);
-  addLine(vertices, maxX, minY, maxX, maxY, width, color);
-  addLine(vertices, maxX, maxY, minX, maxY, width, color);
-  addLine(vertices, minX, maxY, minX, minY, width, color);
+function addRectOutline(write: VertexWriter, minX: number, minY: number, maxX: number, maxY: number, width: number, color: readonly number[]) {
+  addLine(write, minX, minY, maxX, minY, width, color);
+  addLine(write, maxX, minY, maxX, maxY, width, color);
+  addLine(write, maxX, maxY, minX, maxY, width, color);
+  addLine(write, minX, maxY, minX, minY, width, color);
 }
 
-function addDisc(vertices: number[], x: number, y: number, radius: number, color: readonly number[]) {
-  const segments = 24;
+function addDisc(write: VertexWriter, x: number, y: number, radius: number, color: readonly number[], segments: number) {
   for (let index = 0; index < segments; index += 1) {
     const a0 = (index / segments) * Math.PI * 2;
     const a1 = ((index + 1) / segments) * Math.PI * 2;
-    addTriangle(vertices, x, y, x + Math.cos(a0) * radius, y + Math.sin(a0) * radius, x + Math.cos(a1) * radius, y + Math.sin(a1) * radius, color);
+    addTriangle(write, x, y, x + Math.cos(a0) * radius, y + Math.sin(a0) * radius, x + Math.cos(a1) * radius, y + Math.sin(a1) * radius, color);
   }
 }
 
-function addRing(vertices: number[], x: number, y: number, radius: number, color: readonly number[]) {
+function addRing(write: VertexWriter, x: number, y: number, radius: number, color: readonly number[]) {
   const segments = 32;
   const width = radius * 0.08;
   for (let index = 0; index < segments; index += 1) {
     const a0 = (index / segments) * Math.PI * 2;
     const a1 = ((index + 1) / segments) * Math.PI * 2;
-    addLine(vertices, x + Math.cos(a0) * radius, y + Math.sin(a0) * radius, x + Math.cos(a1) * radius, y + Math.sin(a1) * radius, width, color);
+    addLine(write, x + Math.cos(a0) * radius, y + Math.sin(a0) * radius, x + Math.cos(a1) * radius, y + Math.sin(a1) * radius, width, color);
   }
 }
 
-function addQuad(vertices: number[], ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number, color: readonly number[]) {
-  addTriangle(vertices, ax, ay, bx, by, cx, cy, color);
-  addTriangle(vertices, ax, ay, cx, cy, dx, dy, color);
+function addQuad(write: VertexWriter, ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number, color: readonly number[]) {
+  addTriangle(write, ax, ay, bx, by, cx, cy, color);
+  addTriangle(write, ax, ay, cx, cy, dx, dy, color);
 }
 
-function addTriangle(vertices: number[], ax: number, ay: number, bx: number, by: number, cx: number, cy: number, color: readonly number[]) {
-  for (const [x, y] of [[ax, ay], [bx, by], [cx, cy]]) vertices.push(x!, y!, color[0]!, color[1]!, color[2]!, color[3]!);
+function addTriangle(write: VertexWriter, ax: number, ay: number, bx: number, by: number, cx: number, cy: number, color: readonly number[]) {
+  write(ax, ay, color);
+  write(bx, by, color);
+  write(cx, cy, color);
 }
 
 function readMagic(view: DataView): string {
