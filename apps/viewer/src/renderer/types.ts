@@ -1,5 +1,6 @@
 import type {
   ArtifactCatalog,
+  ArtifactKind,
   ConnectorMapping,
   SchematicComponent,
   SchematicDocument,
@@ -15,7 +16,7 @@ import type {
   WibWorkflowDraft
 } from "@circuit-inspector/contracts";
 
-export type { ArtifactCatalog, ConnectorMapping, SchematicDocument, TableFormat, TableImportResult, TableKind, WibConstraintDefinition, WibConstraintSet, WibWorkflowDraft };
+export type { ArtifactCatalog, ArtifactKind, ConnectorMapping, SchematicDocument, TableFormat, TableImportResult, TableKind, WibConstraintDefinition, WibConstraintSet, WibWorkflowDraft };
 
 export type CoverageLevel = "EXPLICIT" | "SUPPLEMENTED" | "INFERRED" | "MISSING";
 
@@ -50,6 +51,16 @@ export interface DesignSummary {
   elapsed_ms: number;
 }
 
+export interface TestPointCandidate {
+  id: string;
+  center: { x: number; y: number };
+  radius_nm: number;
+  net_name: string | null;
+  component_ref: string | null;
+  confidence: CoverageLevel;
+  source: string;
+}
+
 export interface RulePack {
   id: string;
   version: string;
@@ -69,9 +80,9 @@ export interface RulePack {
 export interface RuleDefinition {
     id: string;
     title: string;
-    kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING";
-    source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL";
-    target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | null;
+    kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING" | "MINIMUM_DIAMETER";
+    source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE";
+    target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE" | null;
     metric: "CENTER_TO_CENTER" | "EDGE_TO_EDGE" | "BODY_TO_PAD" | null;
     threshold_nm: number;
     severity: "INFO" | "WARNING" | "ERROR" | null;
@@ -160,6 +171,15 @@ export interface WiringAnalysis {
   product: SchematicPinout;
   wib: SchematicPinout;
   connections: WiringConnection[];
+  net_name_review: Array<{
+    net_name: string;
+    product_locations: string[];
+    wib_locations: string[];
+    product_count: number;
+    wib_count: number;
+    status: "MATCH_CANDIDATE" | "COUNT_MISMATCH" | "PRODUCT_ONLY" | "WIB_ONLY";
+    message: string;
+  }>;
   violations: Array<Violation & {
     product_connector: string | null;
     product_pin: string | null;
@@ -217,7 +237,7 @@ export interface WibDesignRecommendation {
 export interface WibConstraint {
   id: string;
   status: "REVIEW";
-  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_IMPLEMENTATION_CONFIRMATION" | "MANUAL_FACTORY_CONFIRMATION";
   area: string;
   requirement: string;
   metric: string;
@@ -250,7 +270,7 @@ export interface WibConstraintResult {
   id: string;
   constraint_id: string;
   status: Violation["verdict"];
-  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_IMPLEMENTATION_CONFIRMATION" | "MANUAL_FACTORY_CONFIRMATION";
   area: string;
   requirement: string;
   comparator: string;
@@ -299,6 +319,14 @@ export interface ViewerApi {
   getTile(input: Record<string, unknown>): Promise<TilePayload>;
   searchDesign(input: Record<string, unknown>): Promise<{ results: SearchResult[] }>;
   pickDesign(input: Record<string, unknown>): Promise<{ results: PickResult[] }>;
+  listTestPoints(designId: string): Promise<{ test_points: TestPointCandidate[] }>;
+  reviewTestPoints(input: {
+    design_id: string;
+    reviewed_by: string;
+    confirm_ids: string[];
+    reject_ids: string[];
+    additions: Array<{ source_kind: "COMPONENT" | "FEATURE"; source_id: string }>;
+  }): Promise<{ summary: DesignSummary; test_points: TestPointCandidate[] }>;
   listRulePacks(): Promise<{ rule_packs: RulePack[] }>;
   updateRulePack(input: { rule_pack_id: string; rules: RuleDefinition[]; acknowledged_review_item_ids: string[] }): Promise<RulePack>;
   deleteRulePack(rulePackId: string): Promise<{ id: string; deleted: true }>;
@@ -310,6 +338,7 @@ export interface ViewerApi {
   openEvidence(filePath: string): Promise<{ ok: boolean; error: string | null }>;
   chooseWorkbenchInput(kind: "RULE_DOCUMENT" | "SCHEMATIC" | "TABLE", multiple: boolean, locale: "zh-CN" | "en-US"): Promise<string[]>;
   listArtifacts(): Promise<ArtifactCatalog>;
+  deleteArtifact(kind: ArtifactKind, id: string): Promise<{ id: string; kind: ArtifactKind; deleted: true }>;
   extractRulePack(input: { paths: string[]; title?: string }): Promise<{ rule_pack: RulePack; passage_count: number; rule_count: number; rag_index_path: string }>;
   importSchematic(input: { path: string; role: "PRODUCT" | "WIB"; revision?: string }): Promise<SchematicDocument>;
   readSchematic(id: string): Promise<SchematicDocument>;
@@ -374,6 +403,8 @@ export interface PickResult {
   layer_id: string | null;
   net_name: string | null;
   component_ref: string | null;
+  x_nm: number;
+  y_nm: number;
   distance_nm: number;
 }
 

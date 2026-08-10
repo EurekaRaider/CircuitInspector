@@ -1,5 +1,5 @@
 use circuit_inspector_core::cache::CacheStore;
-use circuit_inspector_core::model::{CoverageLevel, DesignFormat, Verdict};
+use circuit_inspector_core::model::{CoverageLevel, Design, DesignFormat, Verdict};
 use circuit_inspector_core::parsers::import_design;
 use circuit_inspector_core::rules::RulePack;
 use circuit_inspector_core::server::dispatch;
@@ -28,6 +28,111 @@ fn imports_odb_directory() {
     assert_eq!(design.format, DesignFormat::Odbpp);
     assert_eq!(design.coverage.components, CoverageLevel::Explicit);
     assert_eq!(design.components.len(), 2);
+    assert_eq!(design.test_points.len(), 2);
+    assert_eq!(design.coverage.test_points, CoverageLevel::Inferred);
+}
+
+#[test]
+fn stale_cached_design_is_reparsed_on_import() {
+    let temporary = tempfile::tempdir().unwrap();
+    let source = fixture("fixtures/odb/simple");
+    let first = dispatch(
+        "import_design",
+        json!({ "path": source, "cache_dir": temporary.path() }),
+    )
+    .unwrap();
+    let design_id = first["id"].as_str().unwrap();
+    let cache = CacheStore::new(temporary.path()).unwrap();
+    let mut stale = cache.load_design(design_id).unwrap();
+    stale.schema_version = Design::SCHEMA_VERSION - 1;
+    cache.save_design(&stale).unwrap();
+    let listed = dispatch("list_designs", json!({ "cache_dir": temporary.path() })).unwrap();
+    assert_eq!(listed["designs"].as_array().unwrap().len(), 0);
+    assert_eq!(listed["diagnostics"][0]["code"], "STALE_CACHED_DESIGN");
+
+    let reparsed = dispatch(
+        "import_design",
+        json!({ "path": source, "cache_dir": temporary.path() }),
+    )
+    .unwrap();
+    assert_eq!(reparsed["cache_hit"], false);
+    assert_eq!(
+        cache.load_design(design_id).unwrap().schema_version,
+        Design::SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn inferred_odb_test_points_can_be_confirmed_without_reexport() {
+    let temporary = tempfile::tempdir().unwrap();
+    let summary = dispatch(
+        "import_design",
+        json!({ "path": fixture("fixtures/odb/simple"), "cache_dir": temporary.path() }),
+    )
+    .unwrap();
+    let design_id = summary["id"].as_str().unwrap();
+    let listed = dispatch(
+        "list_test_points",
+        json!({ "design_id": design_id, "cache_dir": temporary.path() }),
+    )
+    .unwrap();
+    let candidate_ids = listed["test_points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|point| point["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    let reviewed = dispatch(
+        "review_test_points",
+        json!({
+            "design_id": design_id,
+            "cache_dir": temporary.path(),
+            "reviewed_by": "dft-owner",
+            "confirm_ids": candidate_ids,
+            "reject_ids": [],
+            "additions": []
+        }),
+    )
+    .unwrap();
+    assert_eq!(reviewed["test_points"][0]["confidence"], "EXPLICIT");
+    assert_eq!(
+        reviewed["summary"]["semantic_coverage"]["test_points"],
+        "EXPLICIT"
+    );
+}
+
+#[test]
+fn odb_import_selects_the_board_step_instead_of_merging_panel_geometry() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("odb");
+    std::fs::create_dir_all(root.join("matrix")).unwrap();
+    std::fs::write(root.join("matrix/matrix"), "UNITS=MM\nSTEP { NAME=pcb }\nSTEP { NAME=panel }\nLAYER { NAME=top CONTEXT=BOARD TYPE=SIGNAL }\n").unwrap();
+    for (step, reference) in [("pcb", "U1"), ("panel", "U99")] {
+        let layer = root.join("steps").join(step).join("layers/top");
+        std::fs::create_dir_all(&layer).unwrap();
+        std::fs::write(layer.join("features"), "UNITS=MM\n$0 r500\nP 1 1 0 P 0\n").unwrap();
+        std::fs::write(
+            layer.join("profile"),
+            "UNITS=MM\nS P 0\nOB 0 0\nOS 10 0\nOS 10 10\nOS 0 10\nOE\n",
+        )
+        .unwrap();
+        std::fs::write(
+            layer.join("components"),
+            format!("UNITS=MM\nCMP 0 1 1 0 N {reference} PACKAGE\n"),
+        )
+        .unwrap();
+    }
+
+    let design = import_design(&root).unwrap();
+
+    assert_eq!(design.components.len(), 1);
+    assert_eq!(design.components[0].refdes, "U1");
+    assert!(
+        design
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ODB_PRIMARY_STEP_SELECTED")
+    );
 }
 
 #[test]

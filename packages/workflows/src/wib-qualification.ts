@@ -22,7 +22,7 @@ export interface WibConstraintDefinition {
   comparator: ConstraintComparator;
   required_value: string | number | { min: number; max: number };
   unit: string | null;
-  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_IMPLEMENTATION_CONFIRMATION" | "MANUAL_FACTORY_CONFIRMATION";
   source_authority: string;
   scope?: { connector?: string; pin?: string; net_name?: string } | undefined;
   allowed_component_kinds?: Array<"CONNECTOR" | "IC" | "PASSIVE" | "PROTECTION" | "POWER" | "UNKNOWN"> | undefined;
@@ -206,8 +206,8 @@ function evaluateConstraint(constraint: WibConstraintDefinition, wiring: WiringA
     unit: constraint.unit,
     evidence: [constraint.source_authority]
   };
-  if (constraint.verification_mode === "MANUAL_FACTORY_CONFIRMATION") {
-    return { ...base, status: "REVIEW", actual_value: null, message: "This hard constraint depends on real tester, fixture, safety, mechanical, measurement-system, or production evidence and cannot be closed from schematics alone." };
+  if (constraint.verification_mode === "MANUAL_FACTORY_CONFIRMATION" || constraint.verification_mode === "MANUAL_IMPLEMENTATION_CONFIRMATION") {
+    return { ...base, status: "REVIEW", actual_value: null, message: "The engineering-owned requirement baseline needs implementation confirmation from the actual tester, fixture, supplier/factory capability, selected part, deviations, or production evidence; schematics alone cannot close it." };
   }
   if (["ENDPOINT_UNIQUENESS", "NO_UNRESOLVED_BRANCH", "PATH_COMPONENT_POLICY", "ENDPOINT_PIN_MATCH"].includes(constraint.check)) {
     return evaluatePathConstraint(constraint, wiring, base);
@@ -323,7 +323,7 @@ function validateConstraints(constraints: WibConstraintDefinition[]) {
     seen.add(key);
     if (!checks.includes(constraint.check)) throw new Error(`${constraint.id} has an invalid check`);
     if (!comparators.includes(constraint.comparator)) throw new Error(`${constraint.id} has an invalid comparator`);
-    if (!(["DOCUMENT_BACKED", "MANUAL_FACTORY_CONFIRMATION"] as const).includes(constraint.verification_mode)) throw new Error(`${constraint.id} has an invalid verification_mode`);
+    if (!(["DOCUMENT_BACKED", "MANUAL_IMPLEMENTATION_CONFIRMATION", "MANUAL_FACTORY_CONFIRMATION"] as const).includes(constraint.verification_mode)) throw new Error(`${constraint.id} has an invalid verification_mode`);
     if (constraint.check === "DESIGN_METRIC" && !constraint.metric_id?.trim()) throw new Error(`${constraint.id} requires metric_id`);
     if (constraint.check === "DESIGN_METRIC" && !constraint.unit?.trim()) throw new Error(`${constraint.id} requires unit`);
     if (constraint.check === "ENDPOINT_PIN_MATCH" && !constraint.expected_endpoint_refs?.length) throw new Error(`${constraint.id} requires expected_endpoint_refs`);
@@ -353,7 +353,7 @@ function validateConstraints(constraints: WibConstraintDefinition[]) {
 
 function renderQualificationReport(qualification: WibQualification, set: WibConstraintSet, wiring: WiringAnalysis) {
   const rows = qualification.constraint_results.map((result) => `<tr class="${result.status.toLowerCase()}"><td>${html(result.status)}</td><td>${html(result.constraint_id)}</td><td>${html(result.area)}</td><td>${html(result.requirement)}</td><td>${html(result.comparator)}</td><td>${html(formatRequired(result.required_value, result.unit))}</td><td>${html(result.actual_value == null ? "MISSING" : formatValue(result.actual_value, result.unit))}</td><td>${html(result.message)}</td></tr>`).join("");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WIB qualification ${html(qualification.verdict)}</title><style>${css()}</style></head><body><main><header><div><p>CircuitInspector · CLOSED-LOOP WIB DESIGN REVIEW</p><h1>Final WIB design qualification</h1><span>${html(qualification.id)}</span></div><strong class="verdict ${qualification.verdict.toLowerCase()}">${html(qualification.verdict)}</strong></header><section class="metrics"><div><b>${qualification.pass_count}</b> PASS</div><div><b>${qualification.fail_count}</b> FAIL</div><div><b>${qualification.review_count}</b> REVIEW</div></section><section><h2>Controlled inputs</h2><ul><li>Product pinout: ${html(qualification.product_pinout_id)}</li><li>Actual WIB pinout: ${html(qualification.wib_pinout_id)}</li><li>Constraint set: ${html(set.id)} · revision ${html(set.revision)} · approved by ${html(set.approved_by)} · SHA-256 ${html(set.content_hash)}</li><li>Wiring analysis: <code>${html(wiring.id)}</code> · ${html(wiring.verdict)}</li></ul></section><section><h2>Hard-constraint results</h2><table><thead><tr><th>Status</th><th>ID</th><th>Area</th><th>Requirement</th><th>Comparator</th><th>Required</th><th>Actual</th><th>Evidence/result</th></tr></thead><tbody>${rows}</tbody></table></section><footer>PASS means every constraint in this approved set was evaluated with supported evidence and passed. It does not extend to constraints omitted from the set or factory-dependent validation not represented by approved evidence.</footer></main></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WIB qualification ${html(qualification.verdict)}</title><style>${css()}</style></head><body><main><header><div><p>CircuitInspector · CLOSED-LOOP WIB DESIGN REVIEW</p><h1>Final WIB design qualification</h1><span>${html(qualification.id)}</span></div><strong class="verdict ${qualification.verdict.toLowerCase()}">${html(qualification.verdict)}</strong></header><section class="metrics"><div><b>${qualification.pass_count}</b> PASS</div><div><b>${qualification.fail_count}</b> FAIL</div><div><b>${qualification.review_count}</b> REVIEW</div></section><section><h2>Controlled inputs</h2><ul><li>Product pinout: ${html(qualification.product_pinout_id)}</li><li>Actual WIB pinout: ${html(qualification.wib_pinout_id)}</li><li>Constraint set: ${html(set.id)} · revision ${html(set.revision)} · approved by ${html(set.approved_by)} · SHA-256 ${html(set.content_hash)}</li><li>Wiring analysis: <code>${html(wiring.id)}</code> · ${html(wiring.verdict)}</li></ul></section><section><h2>Hard-constraint results</h2><table><thead><tr><th>Status</th><th>ID</th><th>Area</th><th>Requirement</th><th>Comparator</th><th>Required</th><th>Actual</th><th>Evidence/result</th></tr></thead><tbody>${rows}</tbody></table></section><footer>PASS means every constraint in this approved set was evaluated with supported evidence and passed. Engineering owns each requirement baseline; the result does not extend to omitted constraints or implementation evidence not represented in the approved set.</footer></main></body></html>`;
 }
 
 function css() {

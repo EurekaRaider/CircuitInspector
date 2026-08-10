@@ -43,9 +43,12 @@ describe("manufacturing test and WIB design recommendations", () => {
     ]));
     expect(plan.wib_design_recommendations.map((item) => item.category)).toEqual(expect.arrayContaining(["POWER", "PROGRAMMING_DEBUG", "ANALOG_SENSOR"]));
     expect(plan.wib_constraints.filter((constraint) => constraint.area === "CONNECTIVITY").every((constraint) => constraint.required_value !== null)).toBe(true);
-    const numericFactoryConstraints = plan.wib_constraints.filter((constraint) => constraint.verification_mode === "MANUAL_FACTORY_CONFIRMATION");
-    expect(numericFactoryConstraints.length).toBeGreaterThan(0);
-    expect(numericFactoryConstraints.every((constraint) => constraint.required_value === null && constraint.status === "REVIEW")).toBe(true);
+    const implementationConstraints = plan.wib_constraints.filter((constraint) => constraint.verification_mode === "MANUAL_IMPLEMENTATION_CONFIRMATION");
+    expect(implementationConstraints.length).toBeGreaterThan(0);
+    expect(implementationConstraints.every((constraint) => constraint.required_value === null && constraint.status === "REVIEW")).toBe(true);
+    const probe = plan.wib_constraints.find((constraint) => constraint.id === "WIB-PROBE-001");
+    expect(probe?.requirement).toContain("define and approve the probe family/type");
+    expect(probe?.owner).toContain("requirement owner");
     const report = await readFile(plan.report_path, "utf8");
     expect(report).toContain("Corresponding WIB design recommendations");
     expect(report).toContain("WIB constraints and hard metrics");

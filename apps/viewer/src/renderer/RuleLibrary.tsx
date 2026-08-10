@@ -13,7 +13,7 @@ import type { Locale } from "./i18n";
 import type { RuleDefinition, RulePack } from "./types";
 
 const APPROVER_KEY = "circuit-inspector.approver";
-const ENTITY_OPTIONS = ["TEST_POINT", "COMPONENT", "COPPER", "BOARD_EDGE", "DRILL"] as const;
+const ENTITY_OPTIONS = ["TEST_POINT", "COMPONENT", "COPPER", "BOARD_EDGE", "DRILL", "PANEL_TAB", "BGA_CSP", "SHIELD_FENCE", "UV_GLUE"] as const;
 const METRIC_OPTIONS = ["CENTER_TO_CENTER", "EDGE_TO_EDGE", "BODY_TO_PAD"] as const;
 const SEVERITY_OPTIONS = ["ERROR", "WARNING", "INFO"] as const;
 
@@ -319,7 +319,8 @@ export function approvalBlockers(pack: RulePack): string[] {
   if (pack.rules.some((rule) => rule.threshold_nm <= 0
     || (rule.kind === "MINIMUM_DISTANCE" && (!rule.target || !rule.metric))
     || (rule.kind === "MINIMUM_WIDTH" && (rule.source !== "COPPER" || rule.target !== null || rule.metric !== null))
-    || (rule.kind === "MINIMUM_ANNULAR_RING" && (rule.source !== "DRILL" || rule.target !== "COPPER" || rule.metric !== null)))) blockers.push("INCOMPLETE_RULE");
+    || (rule.kind === "MINIMUM_ANNULAR_RING" && (rule.source !== "DRILL" || rule.target !== "COPPER" || rule.metric !== null))
+    || (rule.kind === "MINIMUM_DIAMETER" && (rule.source !== "TEST_POINT" || rule.target !== null || rule.metric !== null)))) blockers.push("INCOMPLETE_RULE");
   return blockers;
 }
 
@@ -350,8 +351,8 @@ function approvalMessage(blockers: string[], locale: Locale): string {
 function reviewMessage(code: string, fallback: string, locale: Locale): string {
   if (locale !== "zh-CN") return fallback;
   const labels: Record<string, string> = {
-    RELATIVE_THRESHOLD: "原文使用相对直径公式，当前固定阈值引擎不能安全执行。",
-    AMBIGUOUS_THRESHOLD: "原文包含多个尺寸，未擅自选择其中一个作为阈值。",
+    RELATIVE_THRESHOLD: "相对公式已作为有效基准候选保留；执行前仍需确认 D、测量对象和适用范围。",
+    AMBIGUOUS_THRESHOLD: "原文给出多个备选阈值或适用条件，未擅自替产品选择。",
     NON_EXECUTABLE_GUIDANCE: "原文是尺寸或设备建议，不构成可执行的间距要求。",
     UNSUPPORTED_TARGET: "当前几何实体不能可靠表达该目标，需要人工确认。",
     LEGACY_AUTO_SEVERITY: "此严重度来自旧版自动默认值，必须重新确认。"
@@ -361,13 +362,13 @@ function reviewMessage(code: string, fallback: string, locale: Locale): string {
 
 export function reviewSuggestion(code: RulePack["review_items"][number]["code"], locale: Locale): string {
   const suggestions = locale === "zh-CN" ? {
-    RELATIVE_THRESHOLD: "先确认相对公式引用的直径及适用范围。当前引擎不能执行公式；只有能从受控文档得到唯一固定值时，才在下方创建或保留对应规则，否则作为非执行性指导留档。",
+    RELATIVE_THRESHOLD: "确认 D 的定义、测量对象和适用范围后保留为公式基准；在公式执行能力完成前保持 REVIEW，不要把它伪装成固定数值或丢弃原文。",
     AMBIGUOUS_THRESHOLD: "结合产品类型、章节和适用条件人工选择唯一尺寸，并在下方规则中核对阈值；若原文无法唯一判断，不要猜选，保持为复核记录。",
     NON_EXECUTABLE_GUIDANCE: "把它作为设计或设备选型参考，不转换成自动 PASS/FAIL 规则；确认下方没有因这段文字误生成规则。",
     UNSUPPORTED_TARGET: "当前引擎无法可靠表示该目标。先人工检查并保留为 REVIEW；不要用相近实体替代，待几何模型支持后再建立规则。",
     LEGACY_AUTO_SEVERITY: "在下方规则表中根据违规后的工程影响重新选择严重度，不要沿用旧版自动默认值。"
   } : {
-    RELATIVE_THRESHOLD: "Confirm the referenced diameter and scope first. The engine cannot execute the relative formula; create or keep a fixed rule only when the controlled source yields one unambiguous value.",
+    RELATIVE_THRESHOLD: "Confirm D, the measured entities, and applicability, then retain the formula baseline. Keep it in REVIEW until formula execution is supported; do not invent a fixed value or discard the source.",
     AMBIGUOUS_THRESHOLD: "Use product type, section, and applicability to choose one value, then verify it in the rule table. If the source is not decisive, do not guess; keep it as a review record.",
     NON_EXECUTABLE_GUIDANCE: "Keep this as design or equipment guidance, not an automatic PASS/FAIL rule, and verify that no executable rule was created from it by mistake.",
     UNSUPPORTED_TARGET: "The engine cannot represent this target reliably. Review it manually and keep it as REVIEW; do not substitute a similar entity while geometry support is absent.",

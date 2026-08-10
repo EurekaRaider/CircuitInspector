@@ -2,7 +2,7 @@ use crate::analyze::analyze_design;
 use crate::archive::hash_input;
 use crate::cache::CacheStore;
 use crate::evidence::{render_evidence, write_html_report};
-use crate::model::{BoundsNm, DesignSummary, Verdict};
+use crate::model::{BoundsNm, CoverageLevel, DesignSummary, Severity, TestPoint, Verdict};
 use crate::parsers::import_design;
 use crate::rules::{RuleApproval, RuleDefinition, RulePack, RulePackStatus, RuleReviewItem};
 use crate::tile::write_tile;
@@ -92,6 +92,8 @@ pub fn dispatch(method: &str, params: Value) -> CoreResult<Value> {
         "get_tile" => tile_request(params),
         "search_design" => search_request(params),
         "pick_design" => pick_request(params),
+        "list_test_points" => list_test_points_request(params),
+        "review_test_points" => review_test_points_request(params),
         "save_rule_pack" => save_rule_pack_request(params),
         "update_rule_pack" => update_rule_pack_request(params),
         "list_rule_packs" => list_rule_packs_request(params),
@@ -118,7 +120,14 @@ fn import_request(params: Value) -> CoreResult<Value> {
     let content_hash = hash_input(&params.path)?;
     let id = content_hash[..24.min(content_hash.len())].to_owned();
     let (design, cache_hit) = if cache.design_path(&id).exists() {
-        (cache.load_design(&id)?, true)
+        let cached: crate::model::Design = cache.load_json(&cache.design_path(&id))?;
+        if cached.schema_version == crate::model::Design::SCHEMA_VERSION {
+            (cached, true)
+        } else {
+            let design = import_design(&params.path)?;
+            cache.save_design(&design)?;
+            (design, false)
+        }
     } else {
         let design = import_design(&params.path)?;
         cache.save_design(&design)?;
@@ -146,14 +155,21 @@ fn list_designs_request(params: Value) -> CoreResult<Value> {
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;
         }
-        match cache.load_json(&path) {
-            Ok(design) => {
+        let loaded: CoreResult<crate::model::Design> = cache.load_json(&path);
+        match loaded {
+            Ok(design) if design.schema_version == crate::model::Design::SCHEMA_VERSION => {
                 let design: crate::model::Design = design;
                 designs.push(json!({
                     "summary": DesignSummary::from_design(&design, true, 0),
                     "updated_at_unix_ms": modified_unix_ms(&path),
                 }));
             }
+            Ok(design) => diagnostics.push(json!({
+                "code": "STALE_CACHED_DESIGN",
+                "severity": "WARNING",
+                "message": format!("cached design uses schema {}, current schema is {}; re-import the source design", design.schema_version, crate::model::Design::SCHEMA_VERSION),
+                "source": path,
+            })),
             Err(error) => diagnostics.push(json!({
                 "code": "INVALID_CACHED_DESIGN",
                 "severity": "WARNING",
@@ -282,6 +298,8 @@ fn pick_request(params: Value) -> CoreResult<Value> {
                 "layer_id": null,
                 "net_name": null,
                 "component_ref": component.refdes,
+                "x_nm": component.center.x,
+                "y_nm": component.center.y,
                 "distance_nm": distance,
             }));
         }
@@ -300,6 +318,8 @@ fn pick_request(params: Value) -> CoreResult<Value> {
                 "layer_id": null,
                 "net_name": point.net_name,
                 "component_ref": point.component_ref,
+                "x_nm": point.center.x,
+                "y_nm": point.center.y,
                 "distance_nm": distance,
             }));
         }
@@ -315,6 +335,8 @@ fn pick_request(params: Value) -> CoreResult<Value> {
                     "layer_id": layer.id,
                     "net_name": feature.net_name,
                     "component_ref": feature.component_ref,
+                    "x_nm": feature.geometry.bounds().center().x,
+                    "y_nm": feature.geometry.bounds().center().y,
                     "distance_nm": distance,
                 }));
             }
@@ -328,6 +350,154 @@ fn pick_request(params: Value) -> CoreResult<Value> {
     });
     results.truncate(20);
     Ok(json!({ "results": results }))
+}
+
+fn list_test_points_request(params: Value) -> CoreResult<Value> {
+    let (cache, design_id) = design_cache_params(params)?;
+    let design = cache.load_design(&design_id)?;
+    Ok(json!({ "test_points": design.test_points }))
+}
+
+fn review_test_points_request(params: Value) -> CoreResult<Value> {
+    #[derive(Deserialize)]
+    struct Addition {
+        source_kind: String,
+        source_id: String,
+    }
+    #[derive(Deserialize)]
+    struct Params {
+        design_id: String,
+        cache_dir: PathBuf,
+        reviewed_by: String,
+        #[serde(default)]
+        confirm_ids: Vec<String>,
+        #[serde(default)]
+        reject_ids: Vec<String>,
+        #[serde(default)]
+        additions: Vec<Addition>,
+    }
+    let params: Params = serde_json::from_value(params)?;
+    if params.reviewed_by.trim().is_empty() {
+        return Err(CoreError::Parse(
+            "reviewed_by is required for test-point review".into(),
+        ));
+    }
+    let cache = CacheStore::new(&params.cache_dir)?;
+    let mut design = cache.load_design(&params.design_id)?;
+    let known = design
+        .test_points
+        .iter()
+        .map(|point| point.id.as_str())
+        .collect::<HashSet<_>>();
+    if params
+        .confirm_ids
+        .iter()
+        .chain(&params.reject_ids)
+        .any(|id| !known.contains(id.as_str()))
+    {
+        return Err(CoreError::Parse(
+            "test-point review contains an unknown candidate id".into(),
+        ));
+    }
+    design
+        .test_points
+        .retain(|point| !params.reject_ids.iter().any(|id| id == &point.id));
+    for point in &mut design.test_points {
+        if params.confirm_ids.iter().any(|id| id == &point.id) {
+            point.confidence = CoverageLevel::Explicit;
+        }
+    }
+    for addition in &params.additions {
+        let candidate = if addition.source_kind.eq_ignore_ascii_case("COMPONENT") {
+            design
+                .components
+                .iter()
+                .find(|component| component.refdes == addition.source_id)
+                .map(|component| TestPoint {
+                    id: manual_test_point_id(&addition.source_kind, &addition.source_id),
+                    center: component.center,
+                    radius_nm: ((component.bounds.max_x - component.bounds.min_x)
+                        .max(component.bounds.max_y - component.bounds.min_y)
+                        / 2)
+                    .max(50_000),
+                    net_name: None,
+                    component_ref: Some(component.refdes.clone()),
+                    confidence: CoverageLevel::Explicit,
+                    source: format!("manual:{}", addition.source_id),
+                })
+        } else if addition.source_kind.eq_ignore_ascii_case("FEATURE") {
+            design
+                .layers
+                .iter()
+                .flat_map(|layer| &layer.features)
+                .find(|feature| feature.id == addition.source_id)
+                .map(|feature| {
+                    let bounds = feature.geometry.bounds();
+                    TestPoint {
+                        id: manual_test_point_id(&addition.source_kind, &addition.source_id),
+                        center: bounds.center(),
+                        radius_nm: ((bounds.max_x - bounds.min_x).max(bounds.max_y - bounds.min_y)
+                            / 2)
+                        .max(50_000),
+                        net_name: feature.net_name.clone(),
+                        component_ref: feature.component_ref.clone(),
+                        confidence: CoverageLevel::Explicit,
+                        source: format!("manual:{}", addition.source_id),
+                    }
+                })
+        } else {
+            return Err(CoreError::Parse(format!(
+                "unsupported test-point source kind {}",
+                addition.source_kind
+            )));
+        };
+        let candidate = candidate.ok_or_else(|| {
+            CoreError::Parse(format!(
+                "test-point source {} was not found",
+                addition.source_id
+            ))
+        })?;
+        if !design
+            .test_points
+            .iter()
+            .any(|point| point.id == candidate.id)
+        {
+            design.test_points.push(candidate);
+        }
+    }
+    design.coverage.test_points = if design.test_points.is_empty() {
+        CoverageLevel::Missing
+    } else if design
+        .test_points
+        .iter()
+        .all(|point| point.confidence == CoverageLevel::Explicit)
+    {
+        CoverageLevel::Explicit
+    } else {
+        CoverageLevel::Inferred
+    };
+    design.diagnostics.push(crate::parsers::diagnostic(
+        "TEST_POINT_REVIEW_APPLIED",
+        Severity::Info,
+        format!(
+            "{} confirmed {}, rejected {}, and added {} test-point candidates",
+            params.reviewed_by.trim(),
+            params.confirm_ids.len(),
+            params.reject_ids.len(),
+            params.additions.len()
+        ),
+        None,
+    ));
+    cache.save_design(&design)?;
+    Ok(json!({
+        "summary": DesignSummary::from_design(&design, true, 0),
+        "test_points": design.test_points,
+    }))
+}
+
+fn manual_test_point_id(kind: &str, id: &str) -> String {
+    let digest = Sha256::digest(format!("{kind}:{id}").as_bytes());
+    format!("manual-tp-{}", &hex::encode(digest)[..16])
 }
 
 fn save_rule_pack_request(params: Value) -> CoreResult<Value> {

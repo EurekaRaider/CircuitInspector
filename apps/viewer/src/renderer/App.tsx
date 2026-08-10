@@ -12,7 +12,7 @@ import { LOCALE_STORAGE_KEY, resolveLocale, type Locale } from "./i18n";
 import { PcbWorkspace } from "./PcbWorkspace";
 import { ResultsLibrary } from "./ResultsLibrary";
 import { RuleLibrary } from "./RuleLibrary";
-import type { AnyAnalysis, ArtifactCatalog, DocumentAnalysis } from "./types";
+import type { AnyAnalysis, ArtifactCatalog, ArtifactKind, DocumentAnalysis } from "./types";
 import { WorkbenchHome } from "./WorkbenchHome";
 import { WibWorkspace } from "./WibWorkspace";
 
@@ -28,6 +28,7 @@ export function App() {
   const [initialDesignId, setInitialDesignId] = useState<string | null>(null);
   const [initialDraftId, setInitialDraftId] = useState<string | null>(null);
   const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis | null>(null);
+  const [pcbSession, setPcbSession] = useState(0);
 
   const changeLocale = useCallback(() => setLocale((current) => current === "zh-CN" ? "en-US" : "zh-CN"), []);
   useEffect(() => {
@@ -67,6 +68,18 @@ export function App() {
       setCatalogError(message(cause));
     }
   }, []);
+
+  const deleteArtifact = useCallback(async (kind: ArtifactKind, id: string) => {
+    try {
+      await window.circuitInspector.deleteArtifact(kind, id);
+      if (kind === "ANALYSIS" && documentAnalysis?.id === id) setDocumentAnalysis(null);
+      if (kind === "DESIGN" && initialDesignId === id) setInitialDesignId(null);
+      if (kind === "DESIGN" || kind === "ANALYSIS") setPcbSession((current) => current + 1);
+      await refreshCatalog();
+    } catch (cause) {
+      setCatalogError(message(cause));
+    }
+  }, [documentAnalysis?.id, initialDesignId, refreshCatalog]);
 
   useEffect(() => window.circuitInspector.onDeepLink((url) => {
     try {
@@ -135,17 +148,19 @@ export function App() {
             onOpenAnalysis={(id) => void openAnalysis(id)}
             onOpenDraft={(id) => { setInitialDraftId(id); setView("WIB"); }}
             onRefresh={() => void refreshCatalog()}
+            onDelete={(kind, id) => void deleteArtifact(kind, id)}
           />
         )}
-        {view === "PCB" && (
+        <div className={view === "PCB" ? "h-full" : "hidden"}>
           <PcbWorkspace
+            key={pcbSession}
             locale={locale}
             onLocaleChange={changeLocale}
             deepLinkUrl={deepLinkUrl}
             initialDesignId={initialDesignId}
             onCatalogChanged={() => void refreshCatalog()}
           />
-        )}
+        </div>
         {view === "RULES" && <RuleLibrary locale={locale} onCatalogChanged={() => void refreshCatalog()} />}
         {view === "WIB" && (
           <WibWorkspace
@@ -165,7 +180,7 @@ export function App() {
             onBack={() => setDocumentAnalysis(null)}
           />
         ) : (
-          <ResultsLibrary locale={locale} catalog={catalog} busy={catalogBusy} onOpenAnalysis={(id) => void openAnalysis(id)} onRefresh={() => void refreshCatalog()} />
+          <ResultsLibrary locale={locale} catalog={catalog} busy={catalogBusy} onOpenAnalysis={(id) => void openAnalysis(id)} onRefresh={() => void refreshCatalog()} onDelete={(kind, id) => void deleteArtifact(kind, id)} />
         ))}
       </section>
     </main>

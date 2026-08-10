@@ -81,6 +81,16 @@ export interface WiringConnection {
   message: string;
 }
 
+export interface NetNameReviewRow {
+  net_name: string;
+  product_locations: string[];
+  wib_locations: string[];
+  product_count: number;
+  wib_count: number;
+  status: "MATCH_CANDIDATE" | "COUNT_MISMATCH" | "PRODUCT_ONLY" | "WIB_ONLY";
+  message: string;
+}
+
 export interface WiringFinding {
   id: string;
   analysis_id: string;
@@ -123,6 +133,7 @@ export interface WiringAnalysis {
   review_count: number;
   not_applicable_count: number;
   connections: WiringConnection[];
+  net_name_review: NetNameReviewRow[];
   violations: WiringFinding[];
   diagnostics: Array<{ code: string; severity: "INFO" | "WARNING" | "ERROR"; message: string }>;
   report_uri: string;
@@ -305,6 +316,15 @@ export async function compareFixtureWiring(
   const analysisId = `wiring-${sha256(comparisonIdentity).slice(0, 20)}`;
   const connections: WiringConnection[] = [];
   const findings: WiringFinding[] = [];
+  const exactPinScope = hasExactPinScope(product, wib, mappings, mappingResolution.diagnostics);
+  const netNameReview = exactPinScope ? [] : compareNetNameInventory(product, wib, aliases, options.caseSensitive ?? false);
+  if (!exactPinScope) {
+    const message = "NET NAME inventory was compared without assuming connector or pin correspondence. This supports human review, but cannot prove pin identity or detect swaps, so PASS/FAIL remains unavailable until exact correspondence is established.";
+    if (!diagnostics.some((diagnostic) => diagnostic.code === "NET_NAME_REVIEW_ONLY")) {
+      diagnostics.push({ code: "NET_NAME_REVIEW_ONLY", severity: "WARNING", message });
+    }
+    findings.push(makeScopeFinding(analysisId, message));
+  }
 
   if (product.status !== "CONFIRMED" || wib.status !== "CONFIRMED") {
     diagnostics.push({
@@ -316,7 +336,7 @@ export async function compareFixtureWiring(
     });
   }
 
-  for (const mapping of mappings) {
+  for (const mapping of exactPinScope ? mappings : []) {
     const productPins = pinsForConnector(product, mapping.product_connector);
     const wibPins = pinsForConnector(wib, mapping.wib_connector);
     const pinPairs = resolvePinPairs(mapping, productPins, wibPins);
@@ -381,13 +401,6 @@ export async function compareFixtureWiring(
     }
   }
 
-  if (mappings.length === 0) {
-    findings.push(makeScopeFinding(analysisId, "No unambiguous connector mapping could be established."));
-  }
-  for (const diagnostic of mappingResolution.diagnostics) {
-    findings.push(makeScopeFinding(analysisId, diagnostic.message));
-  }
-
   const passCount = connections.filter((connection) => connection.verdict === "PASS").length;
   const failCount = findings.filter((finding) => finding.verdict === "FAIL").length;
   const reviewCount = findings.filter((finding) => finding.verdict === "REVIEW").length;
@@ -412,6 +425,7 @@ export async function compareFixtureWiring(
     review_count: reviewCount,
     not_applicable_count: verdict === "NOT_APPLICABLE" ? 1 : 0,
     connections,
+    net_name_review: netNameReview,
     violations: findings,
     diagnostics,
     report_uri: `circuit://analysis/${analysisId}/report`,
@@ -658,9 +672,9 @@ function resolveConnectorMappings(product: PinoutDocument, wib: PinoutDocument, 
   const unresolvedWib = wibConnectors.filter((connector) => !mappedWib.has(normalizedKey(connector)));
   if (unresolvedProduct.length || unresolvedWib.length) {
     diagnostics.push({
-      code: "CONNECTOR_MAPPING_REQUIRED",
+      code: "NET_NAME_REVIEW_ONLY",
       severity: "WARNING",
-      message: `Explicit connector mapping is required. Unmapped product: ${unresolvedProduct.join(", ") || "-"}; WIB: ${unresolvedWib.join(", ") || "-"}.`
+      message: `Exact pin correspondence is unresolved. NET NAME review remains available without mapping. Unmapped product connectors: ${unresolvedProduct.join(", ") || "-"}; WIB: ${unresolvedWib.join(", ") || "-"}.`
     });
   }
   return { mappings, diagnostics };
@@ -723,6 +737,52 @@ function netsMatch(productNet: string, wibNet: string, aliases: NetAlias[], case
   return aliases.some((alias) => key(alias.product_net) === key(productNet) && key(alias.wib_net) === key(wibNet));
 }
 
+function hasExactPinScope(product: PinoutDocument, wib: PinoutDocument, mappings: ConnectorMapping[], diagnostics: WiringAnalysis["diagnostics"]) {
+  if (diagnostics.some((diagnostic) => diagnostic.code === "NET_NAME_REVIEW_ONLY" || diagnostic.code === "INCOMPLETE_CONNECTOR_SCOPE")) return false;
+  if (mappings.length === 0 || mappings.length !== connectorNames(product).length || mappings.length !== connectorNames(wib).length) return false;
+  return mappings.every((mapping) => {
+    if (mapping.pin_map?.length) return true;
+    const productPins = [...pinsForConnector(product, mapping.product_connector).keys()].sort();
+    const wibPins = [...pinsForConnector(wib, mapping.wib_connector).keys()].sort();
+    return productPins.length === wibPins.length && productPins.every((pin, index) => pin === wibPins[index]);
+  });
+}
+
+function compareNetNameInventory(product: PinoutDocument, wib: PinoutDocument, aliases: NetAlias[], caseSensitive: boolean): NetNameReviewRow[] {
+  const locations = (pins: PinConnection[]) => pins.map((pin) => `${pin.connector}.${pin.pin}`);
+  const productGroups = groupPinsByNet(product.pins, caseSensitive);
+  const wibGroups = groupPinsByNet(wib.pins, caseSensitive);
+  const consumedWib = new Set<string>();
+  const rows: NetNameReviewRow[] = [];
+  for (const group of productGroups.values()) {
+    const matched = [...wibGroups.entries()].find(([key, candidate]) => !consumedWib.has(key) && netsMatch(group.name, candidate.name, aliases, caseSensitive));
+    if (!matched) {
+      rows.push({ net_name: group.name, product_locations: locations(group.pins), wib_locations: [], product_count: group.pins.length, wib_count: 0, status: "PRODUCT_ONLY", message: `${group.name} appears only in the product interface inventory.` });
+      continue;
+    }
+    consumedWib.add(matched[0]);
+    const candidate = matched[1];
+    const status = group.pins.length === candidate.pins.length ? "MATCH_CANDIDATE" : "COUNT_MISMATCH";
+    rows.push({ net_name: group.name, product_locations: locations(group.pins), wib_locations: locations(candidate.pins), product_count: group.pins.length, wib_count: candidate.pins.length, status, message: status === "MATCH_CANDIDATE" ? "NET NAME and occurrence count match; pin correspondence is not asserted." : "NET NAME exists on both sides, but occurrence counts differ." });
+  }
+  for (const [key, group] of wibGroups) {
+    if (consumedWib.has(key)) continue;
+    rows.push({ net_name: group.name, product_locations: [], wib_locations: locations(group.pins), product_count: 0, wib_count: group.pins.length, status: "WIB_ONLY", message: `${group.name} appears only in the WIB interface inventory.` });
+  }
+  return rows.sort((left, right) => naturalCompare(left.net_name, right.net_name));
+}
+
+function groupPinsByNet(pins: PinConnection[], caseSensitive: boolean) {
+  const groups = new Map<string, { name: string; pins: PinConnection[] }>();
+  for (const pin of pins) {
+    const key = caseSensitive ? pin.net_name.trim() : normalizedKey(pin.net_name);
+    const group = groups.get(key) ?? { name: pin.net_name, pins: [] };
+    group.pins.push(pin);
+    groups.set(key, group);
+  }
+  return groups;
+}
+
 function makeFinding(
   analysisId: string,
   id: string,
@@ -765,8 +825,8 @@ function makeScopeFinding(analysisId: string, message: string): WiringFinding {
   return {
     id,
     analysis_id: analysisId,
-    rule_id: "CONNECTOR_MAPPING_REQUIRED",
-    title: "Connector mapping requires review",
+    rule_id: "NET_NAME_REVIEW_ONLY",
+    title: "NET NAME inventory review only",
     severity: "WARNING",
     verdict: "REVIEW",
     verification_mode: "DOCUMENT_BACKED",
@@ -790,11 +850,12 @@ function makeScopeFinding(analysisId: string, message: string): WiringFinding {
 
 function renderWiringReport(analysis: WiringAnalysis, overviewName: string) {
   const rows = analysis.connections.map((connection) => `<tr class="${connection.verdict.toLowerCase()}"><td>${html(connection.verdict)}</td><td>${html(`${connection.product_connector}.${connection.product_pin}`)}</td><td>${html(connection.product_net ?? "-")}</td><td>${html(connection.product_endpoint_refs?.join(", ") || "-")}</td><td>${html(`${connection.wib_connector}.${connection.wib_pin}`)}</td><td>${html(connection.wib_net ?? "-")}</td><td>${html(connection.wib_endpoint_refs?.join(", ") || "-")}</td><td>${html(connection.message)}</td></tr>`).join("");
+  const netRows = analysis.net_name_review.map((row) => `<tr><td>${html(row.status)}</td><td>${html(row.net_name)}</td><td>${html(row.product_locations.join(", ") || "-")}</td><td>${row.product_count}</td><td>${html(row.wib_locations.join(", ") || "-")}</td><td>${row.wib_count}</td><td>${html(row.message)}</td></tr>`).join("");
   const inputRows = [analysis.product, analysis.wib].map((document) => `<tr><td>${html(document.role)}</td><td>${html(document.source_path)}</td><td>${html(document.revision ?? "-")}</td><td>${html(document.status)}</td><td>${html(document.source_hash)}</td></tr>`).join("");
   const diagnostics = analysis.diagnostics.length
     ? `<ul>${analysis.diagnostics.map((diagnostic) => `<li><strong>${html(diagnostic.code)}</strong> — ${html(diagnostic.message)}</li>`).join("")}</ul>`
     : "<p>None.</p>";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WIB wiring ${html(analysis.verdict)}</title><style>${reportCss()}</style></head><body><main><header><div><p class="eyebrow">CircuitInspector · DOCUMENT_BACKED</p><h1>Product ↔ WIB wiring comparison</h1><p class="muted">Analysis ${html(analysis.id)}</p></div><span class="verdict ${analysis.verdict.toLowerCase()}">${html(analysis.verdict)}</span></header><section class="metrics"><div><strong>${analysis.pass_count}</strong><span>PASS</span></div><div><strong>${analysis.fail_count}</strong><span>FAIL</span></div><div><strong>${analysis.review_count}</strong><span>REVIEW</span></div></section><section><h2>Inputs and evidence state</h2><table><thead><tr><th>Role</th><th>Source</th><th>Revision</th><th>Status</th><th>SHA-256</th></tr></thead><tbody>${inputRows}</tbody></table></section><section><h2>Annotated wiring</h2><img class="diagram" src="${html(overviewName)}" alt="Annotated product to WIB pin mapping"></section><section><h2>Pin-by-pin result</h2><table><thead><tr><th>Status</th><th>Product pin</th><th>Product NET</th><th>Product chip endpoint</th><th>WIB pin</th><th>WIB NET</th><th>WIB chip endpoint</th><th>Details</th></tr></thead><tbody>${rows || "<tr><td colspan=\"8\">No pins were evaluated.</td></tr>"}</tbody></table></section><section><h2>Diagnostics and unresolved evidence</h2>${diagnostics}</section><footer>PASS applies only to the confirmed connector paths listed in this report. Automatically traced chip endpoints describe actual graph connectivity; they do not establish functional intent unless an approved constraint or golden reference names the expected endpoint.</footer></main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WIB wiring ${html(analysis.verdict)}</title><style>${reportCss()}</style></head><body><main><header><div><p class="eyebrow">CircuitInspector · DOCUMENT_BACKED</p><h1>Product ↔ WIB wiring comparison</h1><p class="muted">Analysis ${html(analysis.id)}</p></div><span class="verdict ${analysis.verdict.toLowerCase()}">${html(analysis.verdict)}</span></header><section class="metrics"><div><strong>${analysis.pass_count}</strong><span>PASS</span></div><div><strong>${analysis.fail_count}</strong><span>FAIL</span></div><div><strong>${analysis.review_count}</strong><span>REVIEW</span></div></section><section><h2>Inputs and evidence state</h2><table><thead><tr><th>Role</th><th>Source</th><th>Revision</th><th>Status</th><th>SHA-256</th></tr></thead><tbody>${inputRows}</tbody></table></section>${netRows ? `<section><h2>NET NAME inventory review</h2><p class="muted">No connector or pin correspondence is assumed. Matching NET NAME values are review candidates, not proof of wiring identity.</p><table><thead><tr><th>Status</th><th>NET NAME</th><th>Product locations</th><th>Count</th><th>WIB locations</th><th>Count</th><th>Details</th></tr></thead><tbody>${netRows}</tbody></table></section>` : `<section><h2>Annotated wiring</h2><img class="diagram" src="${html(overviewName)}" alt="Annotated product to WIB pin mapping"></section><section><h2>Pin-by-pin result</h2><table><thead><tr><th>Status</th><th>Product pin</th><th>Product NET</th><th>Product chip endpoint</th><th>WIB pin</th><th>WIB NET</th><th>WIB chip endpoint</th><th>Details</th></tr></thead><tbody>${rows || "<tr><td colspan=\"8\">No pins were evaluated.</td></tr>"}</tbody></table></section>`}<section><h2>Diagnostics and unresolved evidence</h2>${diagnostics}</section><footer>NET NAME-only review cannot prove pin identity or detect swaps. PASS applies only to confirmed exact connector paths; automatically traced chip endpoints describe graph connectivity, not functional intent unless an approved constraint names the expected endpoint.</footer></main></body></html>`;
 }
 
 function renderWiringSvg(analysis: WiringAnalysis, activeFindingId: string | null) {
@@ -809,7 +870,7 @@ function renderWiringSvg(analysis: WiringAnalysis, activeFindingId: string | nul
     const active = activeConnection === connection.id;
     return `<g data-connection="${html(connection.id)}"><rect x="24" y="${y - 22}" width="1152" height="44" rx="8" fill="${active ? "#3b2a24" : index % 2 ? "#181c1f" : "#141719"}" stroke="${active ? color : "#282d30"}"/><text x="48" y="${y - 4}" fill="#f0efeb" font-size="14" font-family="ui-monospace,monospace">${html(`${connection.product_connector}.${connection.product_pin}`)}</text><text x="48" y="${y + 14}" fill="#8f9695" font-size="12" font-family="ui-monospace,monospace">${html(connection.product_net ?? "MISSING")}</text><line x1="348" y1="${y}" x2="852" y2="${y}" stroke="${color}" stroke-width="${active ? 5 : 3}" stroke-dasharray="${connection.verdict === "PASS" ? "none" : "10 7"}"/><circle cx="348" cy="${y}" r="6" fill="${color}"/><circle cx="852" cy="${y}" r="6" fill="${color}"/><text x="600" y="${y - 8}" text-anchor="middle" fill="${color}" font-size="12" font-weight="700" font-family="ui-monospace,monospace">${html(connection.verdict)}</text><text x="1152" y="${y - 4}" text-anchor="end" fill="#f0efeb" font-size="14" font-family="ui-monospace,monospace">${html(`${connection.wib_connector}.${connection.wib_pin}`)}</text><text x="1152" y="${y + 14}" text-anchor="end" fill="#8f9695" font-size="12" font-family="ui-monospace,monospace">${html(connection.wib_net ?? "MISSING")}</text></g>`;
   }).join("");
-  const empty = analysis.connections.length ? "" : `<text x="600" y="190" text-anchor="middle" fill="#8f9695" font-size="18">No connector mapping available</text>`;
+  const empty = analysis.connections.length ? "" : `<text x="600" y="190" text-anchor="middle" fill="#8f9695" font-size="18">NET NAME review only — no pin correspondence asserted</text>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#111416"/><text x="48" y="38" fill="#f0efeb" font-size="20" font-weight="700" font-family="ui-sans-serif,sans-serif">PRODUCT SCHEMATIC</text><text x="1152" y="38" text-anchor="end" fill="#f0efeb" font-size="20" font-weight="700" font-family="ui-sans-serif,sans-serif">WIB SCHEMATIC</text><text x="48" y="62" fill="#737a79" font-size="12" font-family="ui-monospace,monospace">${html(analysis.product.source_path)}</text><text x="1152" y="62" text-anchor="end" fill="#737a79" font-size="12" font-family="ui-monospace,monospace">${html(analysis.wib.source_path)}</text>${rows}${empty}</svg>`;
 }
 

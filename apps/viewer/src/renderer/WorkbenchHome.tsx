@@ -5,10 +5,11 @@ import {
   CircuitryIcon,
   ClockCounterClockwiseIcon,
   PlugsConnectedIcon,
-  ShieldCheckIcon
+  ShieldCheckIcon,
+  TrashIcon
 } from "@phosphor-icons/react";
 import type { WorkspaceView } from "./App";
-import type { ArtifactCatalog } from "./types";
+import type { ArtifactCatalog, ArtifactKind } from "./types";
 import type { Locale } from "./i18n";
 
 interface Props {
@@ -21,9 +22,10 @@ interface Props {
   onOpenAnalysis(id: string): void;
   onOpenDraft(id: string): void;
   onRefresh(): void;
+  onDelete(kind: ArtifactKind, id: string): void;
 }
 
-export function WorkbenchHome({ locale, catalog, busy, error, onNavigate, onOpenDesign, onOpenAnalysis, onOpenDraft, onRefresh }: Props) {
+export function WorkbenchHome({ locale, catalog, busy, error, onNavigate, onOpenDesign, onOpenAnalysis, onOpenDraft, onRefresh, onDelete }: Props) {
   const chinese = locale === "zh-CN";
   const recent = catalog.artifacts.slice(0, 8);
   const counts = {
@@ -121,13 +123,16 @@ export function WorkbenchHome({ locale, catalog, busy, error, onNavigate, onOpen
             </div>
             <div className="divide-y divide-white/[0.065] border-y border-white/[0.065]">
               {busy ? Array.from({ length: 4 }, (_, index) => <div key={index} className="h-[62px] animate-pulse bg-white/[0.015]" />) : recent.length ? recent.map((artifact) => (
-                <button key={`${artifact.kind}:${artifact.id}`} className="flex w-full items-center gap-4 px-2 py-3.5 text-left transition-colors hover:bg-white/[0.025]" onClick={() => openArtifact(artifact.kind, artifact.id, onNavigate, onOpenDesign, onOpenAnalysis, onOpenDraft)}>
+                <div key={`${artifact.kind}:${artifact.id}`} className="grid w-full grid-cols-[minmax(0,1fr)_32px] items-center gap-2 transition-colors hover:bg-white/[0.025]">
+                  <button className="flex w-full items-center gap-4 px-2 py-3.5 text-left" onClick={() => openArtifact(artifact.kind, artifact.id, onNavigate, onOpenDesign, onOpenAnalysis, onOpenDraft)}>
                   <span className="w-28 shrink-0 font-mono text-[9px] tracking-[0.06em] text-[#8d744c]">{artifact.kind.replaceAll("_", " ")}</span>
                   <span className="min-w-0 flex-1"><span className="block truncate text-[12px] text-[#d3d1cc]">{artifact.title}</span><span className="mt-0.5 block truncate font-mono text-[9px] text-[#666966]">{artifact.subtitle}</span></span>
                   {artifact.status && <span className={`status-chip status-${artifact.status.toLowerCase().replaceAll("_", "-")}`}>{artifact.status}</span>}
                   <time className="w-32 shrink-0 text-right font-mono text-[9px] text-[#666966]">{formatTime(artifact.updated_at, locale)}</time>
                   <ArrowRightIcon size={13} className="text-[#5f615f]" />
-                </button>
+                  </button>
+                  <button className="icon-button mr-1 size-8" title={chinese ? "删除本地产物" : "Delete local artifact"} aria-label={chinese ? `删除 ${artifact.title}` : `Delete ${artifact.title}`} onClick={() => { if (window.confirm(chinese ? "永久删除这项本地产物及其缓存文件？" : "Permanently delete this local artifact and its cache files?")) onDelete(artifact.kind, artifact.id); }}><TrashIcon size={14} /></button>
+                </div>
               )) : (
                 <div className="px-5 py-12 text-center text-[12px] leading-6 text-[#777875]">{chinese ? "资料库为空。选择上方任务导入第一个受控输入。" : "The library is empty. Choose a task above to import the first controlled input."}</div>
               )}

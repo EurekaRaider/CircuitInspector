@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import mammoth from "mammoth";
 
-const EXTRACTOR_VERSION = "0.2.0";
+const EXTRACTOR_VERSION = "0.3.0";
 
 export interface RuleCitation {
   source_path: string;
@@ -16,9 +16,9 @@ export interface RuleCitation {
 export interface ExtractedRule {
   id: string;
   title: string;
-  kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING";
-  source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL";
-  target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | null;
+  kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING" | "MINIMUM_DIAMETER";
+  source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE";
+  target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE" | null;
   metric: "CENTER_TO_CENTER" | "EDGE_TO_EDGE" | "BODY_TO_PAD" | null;
   threshold_nm: number;
   severity: "INFO" | "WARNING" | "ERROR" | null;
@@ -133,35 +133,56 @@ function inferPassage(passage: Passage, sequence: number): { rules: ExtractedRul
     rules: [],
     reviewItems: [{ id: `review-${code.toLowerCase().replaceAll("_", "-")}-${suffix}`, code, message, acknowledged: false, citation }]
   });
-  if (/测试点|test\s*point/i.test(value) && /panel\s*tab|breaking\s*tab|工艺边连接筋|邮票孔连接边/i.test(value)) {
-    return reviewItem("UNSUPPORTED_TARGET", "Panel-tab clearance is not represented by the current executable geometry entities; confirm it manually.");
-  }
   if (/测试点|test\s*point/i.test(value) && /(?:\d+\s*\/\s*\d+|half|一半|二分之一)\s*(?:d\b|diameter|直径)?/i.test(value)) {
-    return reviewItem("RELATIVE_THRESHOLD", "The source uses a relative diameter formula that the current fixed-threshold engine cannot execute safely.");
+    return reviewItem("RELATIVE_THRESHOLD", "The relative formula is retained as a valid baseline candidate, but D, the measured entities, and its applicability must be confirmed before execution.");
   }
   const supportedSubject = /环宽|annular\s+ring|线宽|导线宽|trace\s+width|minimum\s+width|测试点|test\s*point/i.test(value)
     || ((/铜|copper/i.test(value) && /板边|board\s+edge/i.test(value)))
     || ((/孔|drill|hole/i.test(value) && /铜|copper/i.test(value)));
   if (!supportedSubject) return { rules: [], reviewItems: [] };
-  if (thresholds.length !== 1) {
-    return reviewItem("AMBIGUOUS_THRESHOLD", "The passage contains multiple dimensional values, so no single executable threshold was selected.");
-  }
-  const threshold = thresholds[0]!;
+  const uniqueThresholds = [...new Set(thresholds)];
   if (/环宽|annular\s+ring/i.test(value)) {
+    if (uniqueThresholds.length !== 1) return reviewItem("AMBIGUOUS_THRESHOLD", "The passage contains multiple distinct annular-ring values and does not select one requirement.");
+    const threshold = uniqueThresholds[0]!;
     return executable(baseRule(`annular-ring-${suffix}`, "最小环宽", "MINIMUM_ANNULAR_RING", "DRILL", "COPPER", null, threshold, citation));
   }
   if (/线宽|导线宽|trace\s+width|minimum\s+width/i.test(value)) {
+    if (uniqueThresholds.length !== 1) return reviewItem("AMBIGUOUS_THRESHOLD", "The passage contains multiple distinct trace-width values and does not select one requirement.");
+    const threshold = uniqueThresholds[0]!;
     return executable(baseRule(`trace-width-${suffix}`, "最小导线宽度", "MINIMUM_WIDTH", "COPPER", null, null, threshold, citation));
   }
   if (/测试点|test\s*point/i.test(value)) {
+    const diameterThresholds = [...new Set(extractDiameterThresholds(value))];
+    if (diameterThresholds.length > 1) {
+      return reviewItem("AMBIGUOUS_THRESHOLD", "The passage gives multiple alternative test-point diameters and requires the applicable product or use condition to be selected.");
+    }
+    if (diameterThresholds.length === 1 && /直径|diameter/i.test(value)) {
+      return executable(baseRule(`tp-diameter-${suffix}`, "测试点最小直径", "MINIMUM_DIAMETER", "TEST_POINT", null, null, diameterThresholds[0]!, citation));
+    }
     if (!hasDistanceRequirement(normalized)) {
       return reviewItem("NON_EXECUTABLE_GUIDANCE", "The passage mentions test-point dimensions or equipment guidance but does not state an executable clearance requirement.");
     }
+    if (uniqueThresholds.length !== 1) {
+      return reviewItem("AMBIGUOUS_THRESHOLD", "The passage states a clearance requirement but contains multiple distinct candidate limits without selecting one.");
+    }
+    const threshold = uniqueThresholds[0]!;
     if (/工装孔|定位孔|tooling\s+hole/i.test(value)) {
       return executable(baseRule(`tp-tooling-hole-${suffix}`, "测试点到工装孔距离", "MINIMUM_DISTANCE", "TEST_POINT", "DRILL", "EDGE_TO_EDGE", threshold, citation));
     }
     if (/板边|board\s+edge/i.test(value)) {
       return executable(baseRule(`tp-board-edge-${suffix}`, "测试点到板边距离", "MINIMUM_DISTANCE", "TEST_POINT", "BOARD_EDGE", "EDGE_TO_EDGE", threshold, citation));
+    }
+    if (/panel\s*tab|breaking\s*tab|工艺边连接筋|邮票孔连接边/i.test(value)) {
+      return executable(baseRule(`tp-panel-tab-${suffix}`, "测试点到断板边距离", "MINIMUM_DISTANCE", "TEST_POINT", "PANEL_TAB", "EDGE_TO_EDGE", threshold, citation));
+    }
+    if (/\bBGA\b|\bCSP\b|芯片外形|chip\s+outline/i.test(value)) {
+      return executable(baseRule(`tp-bga-csp-${suffix}`, "测试点到 BGA/CSP 外形距离", "MINIMUM_DISTANCE", "TEST_POINT", "BGA_CSP", "EDGE_TO_EDGE", threshold, citation));
+    }
+    if (/shield(?:ing)?\s*(?:fence|cover)|屏蔽(?:罩|框|围栏)/i.test(value)) {
+      return executable(baseRule(`tp-shield-fence-${suffix}`, "测试点到屏蔽结构距离", "MINIMUM_DISTANCE", "TEST_POINT", "SHIELD_FENCE", "EDGE_TO_EDGE", threshold, citation));
+    }
+    if (/UV\s*glue|dispens(?:e|ing)|点胶|UV\s*胶/i.test(value)) {
+      return executable(baseRule(`tp-uv-glue-${suffix}`, "测试点到 UV 胶边缘距离", "MINIMUM_DISTANCE", "TEST_POINT", "UV_GLUE", "EDGE_TO_EDGE", threshold, citation));
     }
     if (/器件|component/i.test(value)) {
       return executable(baseRule(`tp-component-${suffix}`, "测试点到器件距离", "MINIMUM_DISTANCE", "TEST_POINT", "COMPONENT", "BODY_TO_PAD", threshold, citation));
@@ -172,9 +193,13 @@ function inferPassage(passage: Passage, sequence: number): { rules: ExtractedRul
     return reviewItem("NON_EXECUTABLE_GUIDANCE", "The passage does not identify a supported target for the test-point measurement.");
   }
   if (/铜|copper/i.test(value) && /板边|board\s+edge/i.test(value)) {
+    if (uniqueThresholds.length !== 1) return reviewItem("AMBIGUOUS_THRESHOLD", "The passage contains multiple distinct copper-clearance values and does not select one requirement.");
+    const threshold = uniqueThresholds[0]!;
     return executable(baseRule(`copper-edge-${suffix}`, "铜到板边距离", "MINIMUM_DISTANCE", "COPPER", "BOARD_EDGE", "EDGE_TO_EDGE", threshold, citation));
   }
   if (/孔|drill|hole/i.test(value) && /铜|copper/i.test(value)) {
+    if (uniqueThresholds.length !== 1) return reviewItem("AMBIGUOUS_THRESHOLD", "The passage contains multiple distinct drill-clearance values and does not select one requirement.");
+    const threshold = uniqueThresholds[0]!;
     return executable(baseRule(`drill-copper-${suffix}`, "孔到铜距离", "MINIMUM_DISTANCE", "DRILL", "COPPER", "EDGE_TO_EDGE", threshold, citation));
   }
   return { rules: [], reviewItems: [] };
@@ -185,8 +210,8 @@ function executable(rule: ExtractedRule): { rules: ExtractedRule[]; reviewItems:
 }
 
 function hasDistanceRequirement(text: string): boolean {
-  const distance = /间距|距离|间隙|避让|clearance|distance|spacing|gap|keep[- ]?out|edge\s+to\s+(?:the\s+)?(?:board|tooling|component|test)/i.test(text);
-  const requirement = /不得|不低于|不小于|至少|最小|要求|必须|应保持|at\s+least|minimum|required|must|shall|make\s+sure|keep\s+at\s+least|>=|≥|keep[- ]?out/i.test(text);
+  const distance = /间距|距离|间隙|避让|clearance|distance|spacing|gap|keep[- ]?out|edge\s+to\s+(?:the\s+)?(?:board|tooling|component|test|panel|breaking|BGA|CSP|shield|UV)/i.test(text);
+  const requirement = /不得|不低于|不小于|至少|最小|要求|必须|应保持|at\s+least|minimum|require(?:d|s)?|must|shall|make\s+sure|keep\s+at\s+least|>=|≥|keep[- ]?out/i.test(text);
   return distance && requirement;
 }
 
@@ -200,6 +225,20 @@ function extractThresholds(text: string): number[] {
     if (unit === "um" || unit === "μm" || unit === "微米") return [Math.round(amount * 1_000)];
     return [Math.round(amount * 1_000_000)];
   });
+}
+
+function extractDiameterThresholds(text: string): number[] {
+  const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(mm|毫米|mil|mils|um|μm|微米)\s*(?:diameter|直径)/giu)];
+  return matches.flatMap((match) => lengthToNm(match[1], match[2]));
+}
+
+function lengthToNm(amountText: string | undefined, unitText: string | undefined): number[] {
+  const amount = Number(amountText);
+  if (!Number.isFinite(amount) || amount <= 0) return [];
+  const unit = unitText?.toLowerCase();
+  if (unit === "mil" || unit === "mils") return [Math.round(amount * 25_400)];
+  if (unit === "um" || unit === "μm" || unit === "微米") return [Math.round(amount * 1_000)];
+  return [Math.round(amount * 1_000_000)];
 }
 
 function metricFromText(text: string): "CENTER_TO_CENTER" | "EDGE_TO_EDGE" {

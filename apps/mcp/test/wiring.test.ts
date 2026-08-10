@@ -80,7 +80,7 @@ describe("product to WIB schematic wiring comparison", () => {
     expect(report).toContain("SDA");
   });
 
-  it("requires explicit connector mapping when multiple connector names do not align", async () => {
+  it("offers NET NAME review without connector mapping and upgrades to PASS only with exact scope", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "circuit-inspector-wiring-map-"));
     temporaryDirectories.push(root);
     const cache = path.join(root, "cache");
@@ -102,8 +102,35 @@ describe("product to WIB schematic wiring comparison", () => {
     });
 
     expect(unresolved.verdict).toBe("REVIEW");
-    expect(unresolved.diagnostics.some((diagnostic) => diagnostic.code === "CONNECTOR_MAPPING_REQUIRED")).toBe(true);
+    expect(unresolved.diagnostics.some((diagnostic) => diagnostic.code === "NET_NAME_REVIEW_ONLY")).toBe(true);
+    expect(unresolved.net_name_review.map((row) => [row.net_name, row.status])).toEqual([
+      ["GND", "MATCH_CANDIDATE"],
+      ["VDD", "MATCH_CANDIDATE"]
+    ]);
     expect(resolved.verdict).toBe("PASS");
+  });
+
+  it("does not require pin mapping for NET NAME review when pin identifiers differ", async () => {
+    const { cache, product, wib } = await fixture(
+      [{ number: "1", net: "VDD" }, { number: "2", net: "GND" }],
+      [{ number: "A", net: "VDD" }, { number: "B", net: "GND" }]
+    );
+    await confirmSchematicPinout(product.id, "product-owner", cache);
+    await confirmSchematicPinout(wib.id, "fixture-owner", cache);
+
+    const review = await compareFixtureWiring(product.id, wib.id, cache);
+    const exact = await compareFixtureWiring(product.id, wib.id, cache, {
+      connectorMappings: [{
+        product_connector: "J1",
+        wib_connector: "P3",
+        pin_map: [{ product_pin: "1", wib_pin: "A" }, { product_pin: "2", wib_pin: "B" }]
+      }]
+    });
+
+    expect(review.verdict).toBe("REVIEW");
+    expect(review.connections).toEqual([]);
+    expect(review.net_name_review).toHaveLength(2);
+    expect(exact.verdict).toBe("PASS");
   });
 
   it("does not let an incomplete explicit pin map hide imported pins", async () => {

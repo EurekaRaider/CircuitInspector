@@ -106,9 +106,9 @@ export interface AnalysisSummary {
 export interface RuleDefinition {
   id: string;
   title: string;
-  kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING";
-  source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL";
-  target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | null;
+  kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING" | "MINIMUM_DIAMETER";
+  source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE";
+  target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE" | null;
   metric: "CENTER_TO_CENTER" | "EDGE_TO_EDGE" | "BODY_TO_PAD" | null;
   threshold_nm: number;
   severity: "INFO" | "WARNING" | "ERROR" | null;
@@ -382,6 +382,15 @@ export interface WiringAnalysis {
   review_count: number;
   not_applicable_count: number;
   connections: WiringConnection[];
+  net_name_review: Array<{
+    net_name: string;
+    product_locations: string[];
+    wib_locations: string[];
+    product_count: number;
+    wib_count: number;
+    status: "MATCH_CANDIDATE" | "COUNT_MISMATCH" | "PRODUCT_ONLY" | "WIB_ONLY";
+    message: string;
+  }>;
   violations: Array<Record<string, unknown>>;
   diagnostics: Diagnostic[];
   report_uri: string;
@@ -414,7 +423,7 @@ export interface WibConstraintDefinition {
   comparator: "EXACT" | "ALL" | "NONE" | "MAXIMUM" | "MINIMUM" | "RANGE";
   required_value: string | number | { min: number; max: number };
   unit: string | null;
-  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_IMPLEMENTATION_CONFIRMATION" | "MANUAL_FACTORY_CONFIRMATION";
   source_authority: string;
   scope?: { connector?: string; pin?: string; net_name?: string };
   allowed_component_kinds?: SchematicComponentKind[] | undefined;

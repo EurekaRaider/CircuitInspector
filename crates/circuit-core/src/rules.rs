@@ -18,6 +18,10 @@ pub enum EntityKind {
     Copper,
     BoardEdge,
     Drill,
+    PanelTab,
+    BgaCsp,
+    ShieldFence,
+    UvGlue,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -26,6 +30,7 @@ pub enum RuleKind {
     MinimumDistance,
     MinimumWidth,
     MinimumAnnularRing,
+    MinimumDiameter,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -134,6 +139,16 @@ impl RulePack {
                 {
                     return Err(CoreError::Rule(format!(
                         "annular-ring rule {} must measure DRILL to COPPER without a distance metric",
+                        rule.id
+                    )));
+                }
+                RuleKind::MinimumDiameter
+                    if rule.source != EntityKind::TestPoint
+                        || rule.target.is_some()
+                        || rule.metric.is_some() =>
+                {
+                    return Err(CoreError::Rule(format!(
+                        "diameter rule {} must measure TEST_POINT without a target or distance metric",
                         rule.id
                     )));
                 }

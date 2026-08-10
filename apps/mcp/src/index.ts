@@ -342,7 +342,7 @@ server.registerTool(
         comparator: z.enum(["EXACT", "ALL", "NONE", "MAXIMUM", "MINIMUM", "RANGE"]),
         required_value: constraintValueSchema,
         unit: z.string().nullable().optional(),
-        verification_mode: z.enum(["DOCUMENT_BACKED", "MANUAL_FACTORY_CONFIRMATION"]),
+        verification_mode: z.enum(["DOCUMENT_BACKED", "MANUAL_IMPLEMENTATION_CONFIRMATION", "MANUAL_FACTORY_CONFIRMATION"]),
         source_authority: z.string().min(1),
         scope: z.object({ connector: z.string().min(1).optional(), pin: z.string().min(1).optional(), net_name: z.string().min(1).optional() }).optional(),
         allowed_component_kinds: z.array(z.enum(["CONNECTOR", "IC", "PASSIVE", "PROTECTION", "POWER", "UNKNOWN"])).optional(),

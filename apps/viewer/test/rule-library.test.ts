@@ -25,9 +25,9 @@ function draftPack(): RulePack {
     review_items: [{
       id: "review-1",
       code: "NON_EXECUTABLE_GUIDANCE",
-      message: "Diameter guidance is not an executable spacing rule.",
+      message: "Pogo pitch guidance is not a test-point geometry rule.",
       acknowledged: false,
-      citation: { source_path: "rules.pdf", source_hash: "hash", page: 1, paragraph: 2, excerpt: "0.8 mm diameter." }
+      citation: { source_path: "rules.pdf", source_hash: "hash", page: 1, paragraph: 2, excerpt: "0.3 mm pogo pitch." }
     }],
     approval: null
   };

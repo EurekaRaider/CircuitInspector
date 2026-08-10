@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   ArtifactCatalog,
+  ArtifactKind,
   ArtifactSummary,
   ConnectorMapping,
   TableFormat,
@@ -224,6 +225,22 @@ ipcMain.handle("workbench:artifacts", async (): Promise<ArtifactCatalog> => {
   };
 });
 
+ipcMain.handle("workbench:delete-artifact", async (_event, kind: ArtifactKind, rawId: string) => {
+  const id = assertArtifactId(rawId);
+  const targets: Record<ArtifactKind, string[]> = {
+    DESIGN: [path.join(cacheDir, "designs", `${id}.json`), path.join(cacheDir, "tiles", id)],
+    RULE_PACK: [path.join(cacheDir, "rules", `${id}.json`), path.join(cacheDir, "rules", "rag", `${id}.json`)],
+    PINOUT: [path.join(cacheDir, "pinouts", `${id}.json`)],
+    SCHEMATIC: [path.join(cacheDir, "schematics", id)],
+    CONSTRAINT_SET: [path.join(cacheDir, "wib-constraints", `${id}.json`)],
+    ANALYSIS: [path.join(cacheDir, "analyses", `${id}.json`), path.join(cacheDir, "evidence", id)],
+    WORKFLOW_DRAFT: [path.join(cacheDir, "workflow-drafts", `${id}.json`)]
+  };
+  if (!Object.hasOwn(targets, kind)) throw new Error("Unsupported artifact kind");
+  await Promise.all(targets[kind].map((target) => rm(target, { recursive: true, force: true })));
+  return { id, kind, deleted: true as const };
+});
+
 ipcMain.handle("workbench:extract-rules", async (_event, input: { paths: string[]; title?: string }) => {
   if (!Array.isArray(input.paths) || input.paths.length === 0) throw new Error("At least one rule document is required");
   input.paths.forEach((file) => assertGrantedPath(grantedInputPaths, file));
@@ -390,6 +407,12 @@ ipcMain.handle("design:search", (_event, input: Record<string, unknown>) =>
 );
 ipcMain.handle("design:pick", (_event, input: Record<string, unknown>) =>
   core.request("pick_design", { ...withArtifactId(input, "design_id"), cache_dir: cacheDir })
+);
+ipcMain.handle("design:test-points", (_event, designId: string) =>
+  core.request("list_test_points", { design_id: assertArtifactId(designId), cache_dir: cacheDir })
+);
+ipcMain.handle("design:review-test-points", (_event, input: Record<string, unknown>) =>
+  core.request("review_test_points", { ...withArtifactId(input, "design_id"), cache_dir: cacheDir })
 );
 
 ipcMain.handle("rules:list", () => core.request("list_rule_packs", { cache_dir: cacheDir }));

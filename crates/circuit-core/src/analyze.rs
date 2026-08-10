@@ -88,13 +88,13 @@ fn evaluate_rule(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> R
     let coverage = required_coverage(design, rule);
     if coverage == CoverageLevel::Missing {
         return RuleOutcome {
-            verdict: Verdict::NotApplicable,
+            verdict: Verdict::Review,
             violations: vec![review_violation(
                 design,
                 rule,
                 analysis_id,
-                Verdict::NotApplicable,
-                "required semantic data is missing",
+                Verdict::Review,
+                "required semantic target is not identified in the imported design; the numeric baseline remains valid but needs entity confirmation before measurement",
             )],
         };
     }
@@ -114,6 +114,7 @@ fn evaluate_rule(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> R
         RuleKind::MinimumDistance => evaluate_distance(design, rule, analysis_id),
         RuleKind::MinimumWidth => evaluate_width(design, rule, analysis_id),
         RuleKind::MinimumAnnularRing => evaluate_annular_ring(design, rule, analysis_id),
+        RuleKind::MinimumDiameter => evaluate_diameter(design, rule, analysis_id),
     };
     RuleOutcome {
         verdict: if violations.is_empty() {
@@ -253,6 +254,44 @@ fn evaluate_annular_ring(
     violations
 }
 
+fn evaluate_diameter(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> Vec<Violation> {
+    entities(design, EntityKind::TestPoint)
+        .into_iter()
+        .filter_map(|point| {
+            let diameter = point.radius_nm.saturating_mul(2);
+            (diameter < rule.threshold_nm).then(|| Violation {
+                id: format!("{}:{}", rule.id, point.id),
+                analysis_id: analysis_id.into(),
+                rule_id: rule.id.clone(),
+                title: rule.title.clone(),
+                severity: confirmed_severity(rule),
+                verdict: Verdict::Fail,
+                source_format: design.format.clone(),
+                semantic_confidence: point.confidence,
+                net_names: point.net_name.into_iter().map(ToOwned::to_owned).collect(),
+                component_refs: point
+                    .component_ref
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                layer_ids: point.layer_id.into_iter().map(ToOwned::to_owned).collect(),
+                x_nm: point.center.x,
+                y_nm: point.center.y,
+                measured_value_nm: Some(diameter),
+                threshold_nm: Some(rule.threshold_nm),
+                message: format!(
+                    "measured test-point diameter {:.3} mm is below {:.3} mm",
+                    nm_mm(diameter),
+                    nm_mm(rule.threshold_nm)
+                ),
+                evidence_points: vec![point.center],
+                evidence_uris: Vec::new(),
+                rule_citation: rule.citation.clone(),
+            })
+        })
+        .collect()
+}
+
 fn entities(design: &Design, kind: EntityKind) -> Vec<GeometryRef<'_>> {
     match kind {
         EntityKind::TestPoint => design
@@ -322,6 +361,10 @@ fn entities(design: &Design, kind: EntityKind) -> Vec<GeometryRef<'_>> {
             layer_id: None,
             confidence: CoverageLevel::Explicit,
         }],
+        EntityKind::PanelTab
+        | EntityKind::BgaCsp
+        | EntityKind::ShieldFence
+        | EntityKind::UvGlue => Vec::new(),
     }
 }
 
@@ -499,6 +542,10 @@ fn coverage_for(design: &Design, kind: EntityKind) -> CoverageLevel {
         EntityKind::Component => design.coverage.components,
         EntityKind::Copper | EntityKind::BoardEdge => design.coverage.layers,
         EntityKind::Drill => design.coverage.drills,
+        EntityKind::PanelTab
+        | EntityKind::BgaCsp
+        | EntityKind::ShieldFence
+        | EntityKind::UvGlue => CoverageLevel::Missing,
     }
 }
 
@@ -519,7 +566,7 @@ mod tests {
     use crate::rules::{RuleApproval, RulePackStatus};
 
     #[test]
-    fn finds_testpoint_spacing_failure() {
+    fn finds_testpoint_spacing_and_diameter_failures() {
         let design = Design {
             schema_version: 1,
             id: "board".into(),
@@ -572,20 +619,36 @@ mod tests {
             version: "1".into(),
             title: "DFT".into(),
             status: RulePackStatus::Approved,
-            rules: vec![RuleDefinition {
-                id: "tp-spacing".into(),
-                title: "Test point spacing".into(),
-                kind: RuleKind::MinimumDistance,
-                source: EntityKind::TestPoint,
-                target: Some(EntityKind::TestPoint),
-                metric: Some(DistanceMetric::EdgeToEdge),
-                threshold_nm: 500_000,
-                severity: Some(Severity::Error),
-                layer_functions: Vec::new(),
-                same_net_only: false,
-                different_net_only: false,
-                citation: None,
-            }],
+            rules: vec![
+                RuleDefinition {
+                    id: "tp-spacing".into(),
+                    title: "Test point spacing".into(),
+                    kind: RuleKind::MinimumDistance,
+                    source: EntityKind::TestPoint,
+                    target: Some(EntityKind::TestPoint),
+                    metric: Some(DistanceMetric::EdgeToEdge),
+                    threshold_nm: 500_000,
+                    severity: Some(Severity::Error),
+                    layer_functions: Vec::new(),
+                    same_net_only: false,
+                    different_net_only: false,
+                    citation: None,
+                },
+                RuleDefinition {
+                    id: "tp-diameter".into(),
+                    title: "Test point diameter".into(),
+                    kind: RuleKind::MinimumDiameter,
+                    source: EntityKind::TestPoint,
+                    target: None,
+                    metric: None,
+                    threshold_nm: 400_000,
+                    severity: Some(Severity::Warning),
+                    layer_functions: Vec::new(),
+                    same_net_only: false,
+                    different_net_only: false,
+                    citation: None,
+                },
+            ],
             review_items: Vec::new(),
             approval: Some(RuleApproval {
                 approved_by: "fixture".into(),
@@ -594,7 +657,15 @@ mod tests {
             }),
         };
         let analysis = analyze_design(&design, &pack).unwrap();
-        assert_eq!(analysis.fail_count, 1);
+        assert_eq!(analysis.fail_count, 3);
+        assert_eq!(
+            analysis
+                .violations
+                .iter()
+                .filter(|violation| violation.rule_id == "tp-diameter")
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -661,9 +732,9 @@ mod tests {
             }),
         };
         let analysis = analyze_design(&design, &pack).unwrap();
-        assert_eq!(analysis.verdict, Verdict::NotApplicable);
+        assert_eq!(analysis.verdict, Verdict::Review);
         assert_eq!(analysis.fail_count, 0);
-        assert_eq!(analysis.not_applicable_count, 1);
+        assert_eq!(analysis.review_count, 1);
         assert_eq!(
             analysis.violations[0].semantic_confidence,
             CoverageLevel::Missing

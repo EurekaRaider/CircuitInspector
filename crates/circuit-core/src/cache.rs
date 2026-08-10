@@ -50,7 +50,15 @@ impl CacheStore {
     }
 
     pub fn load_design(&self, id: &str) -> CoreResult<Design> {
-        self.load_json(&self.design_path(id))
+        let design: Design = self.load_json(&self.design_path(id))?;
+        if design.schema_version != Design::SCHEMA_VERSION {
+            return Err(CoreError::Cache(format!(
+                "cached design {id} uses schema {}, current schema is {}; re-import the source design",
+                design.schema_version,
+                Design::SCHEMA_VERSION
+            )));
+        }
+        Ok(design)
     }
 
     pub fn save_design(&self, design: &Design) -> CoreResult<()> {

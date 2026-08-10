@@ -13,6 +13,7 @@ pub fn write_tile(
     max_features: usize,
 ) -> CoreResult<TileDescriptor> {
     let mut key_hash = Sha256::new();
+    key_hash.update(b"tile-selection-v2-fair-layers");
     key_hash.update(serde_json::to_vec(&(
         viewport,
         layer_ids,
@@ -38,29 +39,43 @@ pub fn write_tile(
     let mut records = Vec::<TileRecord>::new();
     let layer_filter =
         |id: &str| layer_ids.is_empty() || layer_ids.iter().any(|candidate| candidate == id);
-    for (layer_index, layer) in design.layers.iter().enumerate() {
-        if !layer_filter(&layer.id) {
-            continue;
-        }
-        for feature in &layer.features {
-            if !feature.geometry.bounds().intersects(viewport) {
-                continue;
-            }
+    let mut cursors = design
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| layer_filter(&layer.id))
+        .map(|(layer_index, layer)| (layer_index, layer, 0_usize))
+        .collect::<Vec<_>>();
+    while records.len() < max_features {
+        let mut progressed = false;
+        for (layer_index, layer, cursor) in &mut cursors {
+            let feature = loop {
+                let Some(candidate) = layer.features.get(*cursor) else {
+                    break None;
+                };
+                *cursor += 1;
+                if candidate.geometry.bounds().intersects(viewport) {
+                    break Some(candidate);
+                }
+            };
+            let Some(feature) = feature else { continue };
+            progressed = true;
             append_geometry(
                 &mut records,
                 &feature.geometry,
                 feature.polarity,
-                layer_index.min(u16::MAX as usize) as u16,
+                (*layer_index).min(u16::MAX as usize) as u16,
                 lod,
             );
             if records.len() >= max_features {
                 break;
             }
         }
-        if records.len() >= max_features {
+        if !progressed {
             break;
         }
     }
+    records.truncate(max_features);
 
     let mut bytes = Vec::with_capacity(42 + records.len() * TileRecord::BYTE_LEN);
     bytes.extend_from_slice(b"CITL");
@@ -261,6 +276,8 @@ fn append_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{CoverageLevel, DesignFormat, Feature, Layer, SemanticCoverage, Side};
+    use std::collections::BTreeMap;
 
     #[test]
     fn record_has_stable_binary_size() {
@@ -277,5 +294,68 @@ mod tests {
         }
         .write(&mut bytes);
         assert_eq!(bytes.len(), TileRecord::BYTE_LEN);
+    }
+
+    #[test]
+    fn feature_limit_is_shared_across_enabled_layers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cache = CacheStore::new(temporary.path()).unwrap();
+        let feature = |id: &str, layer_id: &str, x: i64| Feature {
+            id: id.into(),
+            layer_id: layer_id.into(),
+            polarity: Polarity::Dark,
+            geometry: FeatureGeometry::Pad {
+                center: PointNm { x, y: 1_000_000 },
+                size_x_nm: 100_000,
+                size_y_nm: 100_000,
+                rotation_deg: 0.0,
+            },
+            net_name: None,
+            component_ref: None,
+            pin: None,
+            attributes: BTreeMap::new(),
+            source: "fixture".into(),
+        };
+        let design = Design {
+            schema_version: Design::SCHEMA_VERSION,
+            id: "fair-layers".into(),
+            format: DesignFormat::Odbpp,
+            source_path: "fixture".into(),
+            content_hash: "hash".into(),
+            bounds: BoundsNm {
+                min_x: 0,
+                min_y: 0,
+                max_x: 10_000_000,
+                max_y: 10_000_000,
+            },
+            layers: vec![
+                Layer {
+                    id: "a".into(),
+                    name: "a".into(),
+                    function: "SIGNAL".into(),
+                    side: Side::Top,
+                    features: vec![feature("a1", "a", 1_000_000), feature("a2", "a", 2_000_000)],
+                },
+                Layer {
+                    id: "b".into(),
+                    name: "b".into(),
+                    function: "DRILL".into(),
+                    side: Side::Inner,
+                    features: vec![feature("b1", "b", 3_000_000)],
+                },
+            ],
+            components: Vec::new(),
+            nets: Vec::new(),
+            test_points: Vec::new(),
+            coverage: SemanticCoverage {
+                layers: CoverageLevel::Explicit,
+                ..Default::default()
+            },
+            diagnostics: Vec::new(),
+        };
+        let tile = write_tile(&cache, &design, design.bounds, &[], 0, 2).unwrap();
+        let bytes = fs::read(tile.path).unwrap();
+        assert_eq!(u16::from_le_bytes(bytes[44..46].try_into().unwrap()), 0);
+        assert_eq!(u16::from_le_bytes(bytes[68..70].try_into().unwrap()), 1);
     }
 }

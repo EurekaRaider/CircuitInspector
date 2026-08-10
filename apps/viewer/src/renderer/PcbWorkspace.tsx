@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardCanvas, type BoardCanvasHandle } from "./BoardCanvas";
 import { DocumentAnalysisScreen } from "./DocumentAnalysisScreen";
 import { translate, type Locale, type Translator } from "./i18n";
+import { defaultLayerIds, violationHasLocation } from "./pcb-layers";
 import type {
   AnalysisSummary,
   DocumentAnalysis,
@@ -28,6 +29,7 @@ import type {
   PickResult,
   SearchResult,
   TilePayload,
+  TestPointCandidate,
   Violation
 } from "./types";
 
@@ -67,6 +69,8 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const [measureMode, setMeasureMode] = useState(false);
   const [viewSide, setViewSide] = useState<"TOP" | "BOTTOM">("TOP");
   const [measureDistance, setMeasureDistance] = useState<number | null>(null);
+  const [testPoints, setTestPoints] = useState<TestPointCandidate[]>([]);
+  const [testPointReviewer, setTestPointReviewer] = useState(() => localStorage.getItem("circuit-inspector.approver") ?? "");
 
   const loadRules = useCallback(async () => {
     try {
@@ -112,8 +116,11 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   function showDesign(summary: DesignSummary) {
     lastTileRequestKey.current = "";
     setTile(null);
-    setEnabledLayers(summary.layers.map((layer) => layer.id));
+    setEnabledLayers(defaultLayerIds(summary.layers));
     setDesign(summary);
+    void window.circuitInspector.listTestPoints(summary.id)
+      .then((result) => setTestPoints(result.test_points))
+      .catch((cause) => setError(message(cause)));
   }
 
   async function openDeepLink(url: string) {
@@ -139,7 +146,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       const issue = parsed.searchParams.get("issue");
       const selected = loaded.violations.find((violation) => violation.id === issue) ?? loaded.violations[0] ?? null;
       setActiveViolation(selected);
-      if (selected) queueMicrotask(() => canvasRef.current?.focus(selected.x_nm, selected.y_nm));
+      if (violationHasLocation(selected)) queueMicrotask(() => canvasRef.current?.focus(selected!.x_nm, selected!.y_nm));
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -234,7 +241,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       onCatalogChanged?.();
       const first = result.violations.find((violation) => violation.verdict === "FAIL") ?? result.violations[0] ?? null;
       setActiveViolation(first);
-      if (first) canvasRef.current?.focus(first.x_nm, first.y_nm);
+      if (violationHasLocation(first)) canvasRef.current?.focus(first!.x_nm, first!.y_nm);
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -284,12 +291,44 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     setBusy(true);
     setError("");
     try {
-      const ids = activeViolation ? [activeViolation.id] : violations.map((violation) => violation.id);
+      const ids = violationHasLocation(activeViolation)
+        ? [activeViolation!.id]
+        : violations.filter(violationHasLocation).map((violation) => violation.id);
+      if (ids.length === 0) throw new Error(locale === "zh-CN" ? "这些 REVIEW 只有语义缺失说明，没有可渲染的板上坐标。" : "These REVIEW findings have no renderable board location.");
       const result = await window.circuitInspector.renderEvidence({ analysis_id: analysis.id, violation_ids: ids, width: 1600, height: 1200 });
       onCatalogChanged?.();
       if (result.evidence[0]) await window.circuitInspector.openEvidence(result.evidence[0].png_path);
       const refreshed = await window.circuitInspector.readAnalysis(analysis.id);
       if (!("kind" in refreshed)) setAnalysis(refreshed);
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reviewTestPoints(confirmIds: string[] = [], rejectIds: string[] = [], additions: Array<{ source_kind: "COMPONENT" | "FEATURE"; source_id: string }> = []) {
+    if (!design || !testPointReviewer.trim()) {
+      setError(locale === "zh-CN" ? "确认测试点前请输入复核人。" : "Enter a reviewer before confirming test points.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      localStorage.setItem("circuit-inspector.approver", testPointReviewer.trim());
+      const result = await window.circuitInspector.reviewTestPoints({
+        design_id: design.id,
+        reviewed_by: testPointReviewer.trim(),
+        confirm_ids: confirmIds,
+        reject_ids: rejectIds,
+        additions
+      });
+      setTestPoints(result.test_points);
+      showDesign(result.summary);
+      setAnalysis(undefined);
+      setActiveViolation(null);
+      setPicked(null);
+      onCatalogChanged?.();
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -421,6 +460,20 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                     </div>
                   ))}
                 </div>
+                <div className="mt-4 border-t border-white/[0.065] pt-3">
+                  <div className="mb-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.12em] text-[#6e6f6c]"><span>{locale === "zh-CN" ? "测试点复核" : "Test-point review"}</span><span>{testPoints.length}</span></div>
+                  <input className="workbench-input mb-2 h-8 w-full text-[10px]" value={testPointReviewer} onChange={(event) => setTestPointReviewer(event.target.value)} placeholder={locale === "zh-CN" ? "复核人" : "Reviewer"} />
+                  <div className="max-h-48 space-y-1 overflow-y-auto">
+                    {testPoints.filter((point) => point.confidence === "INFERRED").map((point) => (
+                      <div key={point.id} className="rounded-lg border border-white/[0.06] px-2 py-2 text-[10px] text-[#9b9c98]">
+                        <button className="block w-full truncate text-left font-mono text-[#d2b173]" onClick={() => canvasRef.current?.focus(point.center.x, point.center.y)}>{point.component_ref ?? point.id}</button>
+                        <div className="mt-1 truncate">{point.net_name ?? "NET -"}</div>
+                        <div className="mt-2 grid grid-cols-2 gap-1"><button className="secondary-button h-7 px-1 text-[9px]" onClick={() => void reviewTestPoints([point.id])}>{locale === "zh-CN" ? "确认" : "Confirm"}</button><button className="secondary-button h-7 px-1 text-[9px]" onClick={() => void reviewTestPoints([], [point.id])}>{locale === "zh-CN" ? "排除" : "Reject"}</button></div>
+                      </div>
+                    ))}
+                    {testPoints.length === 0 && <p className="text-[10px] leading-4 text-[#70716e]">{locale === "zh-CN" ? "未识别到候选；可在板图中点选焊盘或器件后人工标记。" : "No candidates found. Pick a pad or component in the board view to mark one."}</p>}
+                  </div>
+                </div>
               </div>
             </>
           )}
@@ -432,7 +485,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
               ref={canvasRef}
               bounds={design.bounds}
               tile={tile}
-              activeViolation={activeViolation}
+              activeViolation={violationHasLocation(activeViolation) ? activeViolation : null}
               mirrored={viewSide === "BOTTOM"}
               measureMode={measureMode}
               onViewportChange={handleViewportChange}
@@ -454,7 +507,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
               <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[10px] text-[#969691]">
                 <span>{t("net")} {activeViolation.net_names.join(", ") || "-"}</span>
                 <span>{t("reference")} {activeViolation.component_refs.join(", ") || "-"}</span>
-                <span className="text-[#d1ad6f]">{t("measured")} {formatNm(activeViolation.measured_value_nm)} / {t("threshold")} {formatNm(activeViolation.threshold_nm)}</span>
+                {violationHasLocation(activeViolation) ? <span className="text-[#d1ad6f]">{t("measured")} {formatNm(activeViolation.measured_value_nm)} / {t("threshold")} {formatNm(activeViolation.threshold_nm)}</span> : <span className="text-[#d1ad6f]">{locale === "zh-CN" ? "仅语义复核，未执行几何测量" : "Semantic review only; no geometry measurement"}</span>}
               </div>
             </div>
           )}
@@ -486,6 +539,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
             <div className="popover-surface absolute left-5 top-5 max-w-[380px] rounded-xl px-4 py-3">
               <div className="flex items-center gap-2.5 text-[11px]"><span className="font-mono text-[9px] text-[#cbaa72]">{picked.kind}</span><span className="truncate font-medium text-[#e1e0db]">{picked.label}</span></div>
               <div className="mt-2 flex flex-wrap gap-x-4 font-mono text-[9px] text-[#81827f]"><span>{t("layer")} {picked.layer_id ?? "-"}</span><span>{t("net")} {picked.net_name ?? "-"}</span><span>{t("reference")} {picked.component_ref ?? "-"}</span></div>
+              {(picked.kind === "FEATURE" || picked.kind === "COMPONENT") && <button className="secondary-button mt-3 h-8 w-full text-[10px]" onClick={() => void reviewTestPoints([], [], [{ source_kind: picked.kind as "COMPONENT" | "FEATURE", source_id: picked.id }])}>{locale === "zh-CN" ? "标记为测试点" : "Mark as test point"}</button>}
             </div>
           )}
           {error && (
@@ -546,7 +600,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                 </div>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   <button className="secondary-button h-8 px-2 text-[10px]" onClick={() => void filterViolations()}><FunnelIcon size={13} />{locale === "zh-CN" ? "筛选" : "Filter"}</button>
-                  <button className="secondary-button h-8 px-2 text-[10px]" onClick={() => void generateEvidence()} disabled={busy || violations.length === 0}><ImageSquareIcon size={13} />{locale === "zh-CN" ? "生成证据" : "Evidence"}</button>
+                  <button className="secondary-button h-8 px-2 text-[10px]" onClick={() => void generateEvidence()} disabled={busy || !violations.some(violationHasLocation)}><ImageSquareIcon size={13} />{locale === "zh-CN" ? "生成证据" : "Evidence"}</button>
                   <button className="secondary-button h-8 px-2 text-[10px]" onClick={() => analysis.report_path && void window.circuitInspector.openEvidence(analysis.report_path)} disabled={!analysis.report_path}><FileHtmlIcon size={13} />{locale === "zh-CN" ? "报告" : "Report"}</button>
                 </div>
               </div>
@@ -564,7 +618,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                     style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
                     onClick={() => {
                       setActiveViolation(violation);
-                      canvasRef.current?.focus(violation.x_nm, violation.y_nm);
+                      if (violationHasLocation(violation)) canvasRef.current?.focus(violation.x_nm, violation.y_nm);
                     }}
                   >
                     <div className="mb-2 flex items-center gap-2.5">

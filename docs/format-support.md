@@ -2,10 +2,10 @@
 
 | 输入 | 当前能力 | 语义策略 |
 |---|---|---|
-| ODB++ 目录/TGZ | 独立基础 parser：matrix、feature、component、net/testpoint、单位与属性诊断 | 源数据存在时显式；不完整时缺失或推断 |
+| ODB++ 目录/TGZ | 选择主 BOARD step；按 matrix 限定 BOARD layer；区分坐标单位与标准 symbol 的 μm/mil 单位；解析 feature/component/net/testpoint 与 drill | `.test_point` 等源属性为显式；TP 位号/封装为候选；可在 Viewer 逐项确认、排除或点选焊盘补充，无需仅为识别测试点重导出 |
 | Gerber X2/X3 + Drill | 图形、文件/对象属性、component layer、钻孔 | 按属性标记显式语义 |
 | Gerber + IPC-356 | 合并网络、器件和测试点关系 | 标记 `SUPPLEMENTED`；冲突生成 `DATA_CONFLICT` |
-| 纯 Gerber X1 | 准确图形解析路径与基础 DFM | NET/器件/测试点通常 `MISSING`，相关规则 `NOT_APPLICABLE` |
+| 纯 Gerber X1 | 准确图形解析路径与基础 DFM | NET/器件/测试点通常 `MISSING`，已经批准的数值基准保留，相关测量为 `REVIEW`，不会伪造 PASS/FAIL |
 | `.gbrjob` | 文件清单与 layer function 辅助 | 只补充 Job 明确声明的元数据 |
 | 原理图 pinout JSON | `connectors[].pins[]` 或 `pins[]`、可选 `design_metrics[]` | 通过兼容适配器进入 `SchematicDocument v2`；完整候选接口仍需确认 |
 | 原理图 CSV/TSV/TXT | `connector`、`pin`、`net_name` 行 | 通过兼容适配器进入 v2；不从缺失行推断 pin |
@@ -25,7 +25,11 @@ PDF 与同修订结构化映射在连接器引脚上冲突时，两者均不会�
 }
 ```
 
-单位不自动换算；constraint set 与实际值单位不同会返回 `REVIEW`。工厂、fixture、机械、量测系统或节拍能力即使在原理图中有文字，也必须以相应的真实验证证据关闭，不能由静态 schematic 自动给出 PASS。
+单位不自动换算；constraint set 与实际值单位不同会返回 `REVIEW`。产品/硬件/测试/治具/制造工程负责定义并批准要求基准，包括探针家族、针头几何与直径、行程、力、电流/接触电阻、材料/镀层、测试面和 keep-out。治具供应商与工厂负责确认能力、合规选型、偏差和真实工站结果；静态 schematic 不能替代实施验证。
+
+WIB 比较允许映射表留空：软件会按两侧 `NET NAME` 和出现次数生成清单式人工复核，结果保持 `REVIEW`。只有需要证明精确 connector/pin 对应、检测 pin swap，并输出正式 `PASS/FAIL` 时才需要一一映射；软件不会把 NET 名称相同循环论证为接线已经正确。
+
+规则抽取会把单一、明确的测试点直径生成待批准的 `MINIMUM_DIAMETER` 候选，并把同句中的 pogo pitch 与测试点直径分开；测试点到板边、断板边、BGA/CSP、屏蔽结构和 UV 胶边缘的固定 keep-out 也会保留为数值基准。多个备选直径或 `1/2D` 公式不会被丢弃，但在适用条件、D 的定义和测量对象确认前保持人工复核。
 
 解析器包含 aperture、圆弧、region、极性、step-repeat、坐标格式、单位和属性生命周期的测试路径，但当前仓库尚未提交 Ucamco 全套官方 fixture，也没有 ODB++ 官方认证。发布流程必须在合法取得的本地测试数据上运行：
 
