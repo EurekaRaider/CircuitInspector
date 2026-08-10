@@ -1,12 +1,10 @@
 import type { LayerSummary, Violation } from "./types";
 
 const DEFAULT_FUNCTIONS = [
-  "PROFILE",
   "SIGNAL",
   "POWER_GROUND",
   "MIXED",
   "COPPER",
-  "DRILL",
   "SOLDER_MASK",
   "SOLDERMASK",
   "SILK_SCREEN",
@@ -14,11 +12,16 @@ const DEFAULT_FUNCTIONS = [
   "COMPONENT"
 ];
 
-export function defaultLayerIds(layers: LayerSummary[]) {
-  const selected = layers
-    .filter((layer) => DEFAULT_FUNCTIONS.some((value) => layer.function.toUpperCase().includes(value)))
+export function defaultLayerIds(layers: LayerSummary[], side: "TOP" | "BOTTOM") {
+  const profiles = layers.filter((layer) => layer.function.toUpperCase().includes("PROFILE"));
+  const surfaceLayers = layers.filter((layer) =>
+    layer.side === side
+    && DEFAULT_FUNCTIONS.some((value) => layer.function.toUpperCase().includes(value))
+  );
+  const selected = [...profiles, ...surfaceLayers]
     .map((layer) => layer.id);
-  return selected.length ? selected : layers.map((layer) => layer.id);
+  if (selected.length) return [...new Set(selected)];
+  return layers.filter((layer) => layer.side === side).map((layer) => layer.id);
 }
 
 export function violationHasLocation(violation: Violation | null | undefined) {

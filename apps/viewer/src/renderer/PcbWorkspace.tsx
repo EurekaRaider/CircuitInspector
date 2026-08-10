@@ -116,11 +116,19 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   function showDesign(summary: DesignSummary) {
     lastTileRequestKey.current = "";
     setTile(null);
-    setEnabledLayers(defaultLayerIds(summary.layers));
+    setViewSide("TOP");
+    setEnabledLayers(defaultLayerIds(summary.layers, "TOP"));
     setDesign(summary);
     void window.circuitInspector.listTestPoints(summary.id)
       .then((result) => setTestPoints(result.test_points))
       .catch((cause) => setError(message(cause)));
+  }
+
+  function switchViewSide() {
+    if (!design) return;
+    const side = viewSide === "TOP" ? "BOTTOM" : "TOP";
+    setViewSide(side);
+    setEnabledLayers(defaultLayerIds(design.layers, side));
   }
 
   async function openDeepLink(url: string) {
@@ -403,7 +411,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
             title={t("switchSide")}
             aria-label={t("switchSide")}
             disabled={!design}
-            onClick={() => setViewSide((side) => side === "TOP" ? "BOTTOM" : "TOP")}
+            onClick={switchViewSide}
           >
             {viewSide === "TOP" ? "TOP" : "BOTTOM"}
           </button>

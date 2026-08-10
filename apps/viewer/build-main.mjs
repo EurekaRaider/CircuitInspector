@@ -1,5 +1,6 @@
 import { build } from "esbuild";
 import { copyFile, rm } from "node:fs/promises";
+import { nodeEsmBanner } from "../../scripts/esbuild-node-esm-banner.mjs";
 
 await rm("dist/node_modules/@napi-rs", { recursive: true, force: true });
 
@@ -14,7 +15,7 @@ await Promise.all([
     sourcemap: true,
     loader: { ".node": "copy" },
     banner: {
-      js: "import { createRequire as __circuitInspectorCreateRequire } from 'node:module';\nconst require = __circuitInspectorCreateRequire(import.meta.url);"
+      js: nodeEsmBanner
     },
     external: ["electron", "@napi-rs/canvas", "@napi-rs/canvas-*"]
   }),
