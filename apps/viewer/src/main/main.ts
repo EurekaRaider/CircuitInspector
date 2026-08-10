@@ -35,7 +35,7 @@ import {
   traceSchematicInterface
 } from "@circuit-inspector/workflows";
 import { CoreClient } from "./core-client.js";
-import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, withArtifactId } from "./security.js";
+import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, withArtifactId } from "./security.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const iconPath = path.resolve(directory, "../assets/icon.png");
@@ -379,6 +379,15 @@ ipcMain.handle("design:pick", (_event, input: Record<string, unknown>) =>
 );
 
 ipcMain.handle("rules:list", () => core.request("list_rule_packs", { cache_dir: cacheDir }));
+ipcMain.handle("rules:update-draft", (_event, value: unknown) => {
+  const input = assertRuleDraftUpdate(value);
+  return core.request("update_rule_pack", {
+    cache_dir: cacheDir,
+    rule_pack_id: input.rule_pack_id,
+    rules: input.rules,
+    acknowledged_review_item_ids: input.acknowledged_review_item_ids
+  });
+});
 ipcMain.handle("rules:approve", (_event, rulePackId: string, approvedBy: string) =>
   core.request("approve_rule_pack", { cache_dir: cacheDir, rule_pack_id: assertArtifactId(rulePackId), approved_by: approvedBy })
 );

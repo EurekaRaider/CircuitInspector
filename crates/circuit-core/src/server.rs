@@ -4,12 +4,13 @@ use crate::cache::CacheStore;
 use crate::evidence::{render_evidence, write_html_report};
 use crate::model::{BoundsNm, DesignSummary, Verdict};
 use crate::parsers::import_design;
-use crate::rules::{RuleApproval, RulePack, RulePackStatus};
+use crate::rules::{RuleApproval, RuleDefinition, RulePack, RulePackStatus, RuleReviewItem};
 use crate::tile::write_tile;
 use crate::{CoreError, CoreResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -92,6 +93,7 @@ pub fn dispatch(method: &str, params: Value) -> CoreResult<Value> {
         "search_design" => search_request(params),
         "pick_design" => pick_request(params),
         "save_rule_pack" => save_rule_pack_request(params),
+        "update_rule_pack" => update_rule_pack_request(params),
         "list_rule_packs" => list_rule_packs_request(params),
         "approve_rule_pack" => approve_rule_pack_request(params),
         "analyze_design" => analyze_request(params),
@@ -351,6 +353,70 @@ fn save_rule_pack_request(params: Value) -> CoreResult<Value> {
     Ok(json!({ "id": params.rule_pack.id, "path": path }))
 }
 
+fn update_rule_pack_request(params: Value) -> CoreResult<Value> {
+    #[derive(Deserialize)]
+    struct Params {
+        cache_dir: PathBuf,
+        rule_pack_id: String,
+        rules: Vec<RuleDefinition>,
+        #[serde(default)]
+        acknowledged_review_item_ids: Vec<String>,
+    }
+    let params: Params = serde_json::from_value(params)?;
+    let cache = CacheStore::new(&params.cache_dir)?;
+    let path = rule_path(&cache, &params.rule_pack_id);
+    let mut pack: RulePack = cache.load_json(&path)?;
+    prepare_legacy_draft(&mut pack);
+    if pack.status != RulePackStatus::Draft || pack.approval.is_some() {
+        return Err(CoreError::Rule(format!(
+            "rule pack {} is immutable because it is not an unapproved DRAFT",
+            pack.id
+        )));
+    }
+    let submitted_ids = params
+        .rules
+        .iter()
+        .map(|rule| rule.id.as_str())
+        .collect::<HashSet<_>>();
+    if submitted_ids.len() != params.rules.len() {
+        return Err(CoreError::Rule(
+            "draft contains duplicate rule identifiers".into(),
+        ));
+    }
+    for submitted in &params.rules {
+        let original = pack
+            .rules
+            .iter()
+            .find(|rule| rule.id == submitted.id)
+            .ok_or_else(|| CoreError::Rule(format!("unknown draft rule {}", submitted.id)))?;
+        if submitted.title != original.title || submitted.citation != original.citation {
+            return Err(CoreError::Rule(format!(
+                "rule {} cannot change its extracted title or citation",
+                submitted.id
+            )));
+        }
+    }
+    let acknowledged = params
+        .acknowledged_review_item_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if acknowledged
+        .iter()
+        .any(|id| !pack.review_items.iter().any(|item| item.id == *id))
+    {
+        return Err(CoreError::Rule(
+            "draft contains an unknown review item acknowledgement".into(),
+        ));
+    }
+    for item in &mut pack.review_items {
+        item.acknowledged = acknowledged.contains(item.id.as_str());
+    }
+    pack.rules = params.rules;
+    cache.save_json(&path, &pack)?;
+    Ok(serde_json::to_value(pack)?)
+}
+
 fn list_rule_packs_request(params: Value) -> CoreResult<Value> {
     #[derive(Deserialize)]
     struct Params {
@@ -363,7 +429,10 @@ fn list_rule_packs_request(params: Value) -> CoreResult<Value> {
         let path = entry?.path();
         if path.extension().and_then(|value| value.to_str()) == Some("json") {
             match cache.load_json(&path) {
-                Ok(pack) => packs.push(pack),
+                Ok(mut pack) => {
+                    prepare_legacy_draft(&mut pack);
+                    packs.push(pack);
+                }
                 Err(error) => eprintln!("Skipping invalid rule pack {}: {error}", path.display()),
             }
         }
@@ -390,12 +459,14 @@ fn approve_rule_pack_request(params: Value) -> CoreResult<Value> {
     let cache = CacheStore::new(&params.cache_dir)?;
     let path = rule_path(&cache, &params.rule_pack_id);
     let mut pack: RulePack = cache.load_json(&path)?;
+    prepare_legacy_draft(&mut pack);
     if pack.status != RulePackStatus::Draft {
         return Err(CoreError::Rule(format!(
             "rule pack {} is not DRAFT",
             pack.id
         )));
     }
+    pack.validate_for_approval()?;
     let content = serde_json::to_vec(&pack.rules)?;
     let hash = hex::encode(Sha256::digest(content));
     let timestamp = SystemTime::now()
@@ -410,6 +481,29 @@ fn approve_rule_pack_request(params: Value) -> CoreResult<Value> {
     });
     cache.save_json(&path, &pack)?;
     Ok(serde_json::to_value(pack)?)
+}
+
+fn prepare_legacy_draft(pack: &mut RulePack) {
+    if pack.status != RulePackStatus::Draft
+        || pack.version != "0.1.0-draft"
+        || !pack.review_items.is_empty()
+    {
+        return;
+    }
+    let mut review_items = Vec::new();
+    for rule in &mut pack.rules {
+        rule.severity = None;
+        if let Some(citation) = rule.citation.clone() {
+            review_items.push(RuleReviewItem {
+                id: format!("legacy-severity-{}", rule.id),
+                code: "LEGACY_AUTO_SEVERITY".into(),
+                message: "This severity came from the legacy automatic default and must be confirmed again.".into(),
+                acknowledged: false,
+                citation,
+            });
+        }
+    }
+    pack.review_items = review_items;
 }
 
 fn analyze_request(params: Value) -> CoreResult<Value> {
@@ -654,6 +748,82 @@ fn failure(id: u64, error: &CoreError) -> CoreResponse {
             code: code.into(),
             message: error.to_string(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_draft_severity_must_be_confirmed_before_approval() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cache_dir = temporary.path();
+        let legacy = json!({
+            "id": "legacy-draft",
+            "version": "0.1.0-draft",
+            "title": "Legacy draft",
+            "status": "DRAFT",
+            "rules": [{
+                "id": "tp-edge",
+                "title": "Test point to board edge",
+                "kind": "MINIMUM_DISTANCE",
+                "source": "TEST_POINT",
+                "target": "BOARD_EDGE",
+                "metric": "EDGE_TO_EDGE",
+                "threshold_nm": 1_200_000,
+                "severity": "ERROR",
+                "layer_functions": [],
+                "same_net_only": false,
+                "different_net_only": false,
+                "citation": {
+                    "source_path": "rules.pdf",
+                    "source_hash": "hash",
+                    "page": 1,
+                    "paragraph": 1,
+                    "excerpt": "At least 1.2 mm"
+                }
+            }],
+            "approval": null
+        });
+        dispatch(
+            "save_rule_pack",
+            json!({ "cache_dir": cache_dir, "rule_pack": legacy }),
+        )
+        .unwrap();
+
+        let listed = dispatch("list_rule_packs", json!({ "cache_dir": cache_dir })).unwrap();
+        let pack = &listed["rule_packs"][0];
+        assert!(pack["rules"][0]["severity"].is_null());
+        assert_eq!(pack["review_items"][0]["code"], "LEGACY_AUTO_SEVERITY");
+        assert!(
+            dispatch(
+                "approve_rule_pack",
+                json!({ "cache_dir": cache_dir, "rule_pack_id": "legacy-draft", "approved_by": "owner" })
+            )
+            .is_err()
+        );
+
+        let mut rule = pack["rules"][0].clone();
+        rule["severity"] = json!("ERROR");
+        let review_id = pack["review_items"][0]["id"].as_str().unwrap();
+        dispatch(
+            "update_rule_pack",
+            json!({
+                "cache_dir": cache_dir,
+                "rule_pack_id": "legacy-draft",
+                "rules": [rule],
+                "acknowledged_review_item_ids": [review_id]
+            }),
+        )
+        .unwrap();
+        let approved = dispatch(
+            "approve_rule_pack",
+            json!({ "cache_dir": cache_dir, "rule_pack_id": "legacy-draft", "approved_by": "owner" }),
+        )
+        .unwrap();
+        assert_eq!(approved["status"], "APPROVED");
+        assert_eq!(approved["rules"][0]["severity"], "ERROR");
     }
 }
 

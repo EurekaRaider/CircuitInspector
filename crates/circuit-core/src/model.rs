@@ -458,7 +458,7 @@ pub enum Verdict {
     NotApplicable,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleCitation {
     pub source_path: String,
     pub source_hash: String,

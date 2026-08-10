@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, withArtifactId } from "../src/main/security.js";
+import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, withArtifactId } from "../src/main/security.js";
 
 describe("viewer IPC security boundaries", () => {
   it("accepts stable IDs and rejects traversal-like artifact identifiers", () => {
@@ -26,5 +26,13 @@ describe("viewer IPC security boundaries", () => {
   it("rejects unexpected enum values crossing IPC", () => {
     expect(assertOneOf("CSV", ["CSV", "JSON"] as const, "format")).toBe("CSV");
     expect(() => assertOneOf("HTML", ["CSV", "JSON"] as const, "format")).toThrow(/Invalid format/);
+  });
+
+  it("validates rule draft mutations before they cross IPC", () => {
+    const valid = assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [{ id: "rule-1" }], acknowledged_review_item_ids: ["review-1"] });
+    expect(valid.rule_pack_id).toBe("rules-1");
+    expect(() => assertRuleDraftUpdate({ rule_pack_id: "../rules", rules: [], acknowledged_review_item_ids: [] })).toThrow(/Invalid/);
+    expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [{ id: "../rule" }], acknowledged_review_item_ids: [] })).toThrow(/Invalid/);
+    expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [], acknowledged_review_item_ids: "review-1" })).toThrow(/Invalid/);
   });
 });

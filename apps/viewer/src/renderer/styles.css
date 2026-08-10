@@ -359,24 +359,32 @@ label:has(input:focus-visible) {
 .workbench-table strong,
 .workbench-table small,
 .workbench-table code,
-.workbench-table p {
+.workbench-table p,
+.editable-table strong,
+.editable-table small,
+.editable-table code,
+.editable-table p {
   display: block;
 }
 
-.workbench-table strong {
+.workbench-table strong,
+.editable-table strong {
   color: #d8d6d1;
   font-size: 0.68rem;
 }
 
 .workbench-table code,
-.workbench-table small {
+.workbench-table small,
+.editable-table code,
+.editable-table small {
   margin-top: 0.3rem;
   color: #737572;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 0.52rem;
 }
 
-.workbench-table p {
+.workbench-table p,
+.editable-table p {
   max-width: 36rem;
   margin: 0;
   color: #aaa9a4;
@@ -386,6 +394,7 @@ label:has(input:focus-visible) {
 .severity-error { color: #e38d79; }
 .severity-warning { color: #d3ad6d; }
 .severity-info { color: #8faab2; }
+.severity-pending { color: #d3ad6d; }
 
 .editable-table td {
   padding: 0.3rem;
@@ -404,6 +413,13 @@ label:has(input:focus-visible) {
   background: transparent;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 0.58rem;
+}
+
+.editable-table input[type="checkbox"] {
+  width: 0.8rem;
+  min-width: 0.8rem;
+  height: 0.8rem;
+  padding: 0;
 }
 
 .editable-table input:hover,

@@ -55,21 +55,38 @@ export interface RulePack {
   version: string;
   title: string;
   status: "DRAFT" | "APPROVED" | "DEPRECATED";
-  rules: Array<{
+  rules: RuleDefinition[];
+  review_items: Array<{
+    id: string;
+    code: "RELATIVE_THRESHOLD" | "AMBIGUOUS_THRESHOLD" | "NON_EXECUTABLE_GUIDANCE" | "UNSUPPORTED_TARGET" | "LEGACY_AUTO_SEVERITY";
+    message: string;
+    acknowledged: boolean;
+    citation: RuleCitation;
+  }>;
+  approval: { approved_by: string; approved_at: string; content_hash: string } | null;
+}
+
+export interface RuleDefinition {
     id: string;
     title: string;
     kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING";
-    source: string;
-    target: string | null;
-    metric: string | null;
+    source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL";
+    target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | null;
+    metric: "CENTER_TO_CENTER" | "EDGE_TO_EDGE" | "BODY_TO_PAD" | null;
     threshold_nm: number;
-    severity: "INFO" | "WARNING" | "ERROR";
+    severity: "INFO" | "WARNING" | "ERROR" | null;
     layer_functions: string[];
     same_net_only: boolean;
     different_net_only: boolean;
-    citation: { source_path: string; source_hash: string; page: number | null; paragraph: number | null; excerpt: string };
-  }>;
-  approval: { approved_by: string; approved_at: string; content_hash: string } | null;
+    citation: RuleCitation;
+}
+
+export interface RuleCitation {
+  source_path: string;
+  source_hash: string;
+  page: number | null;
+  paragraph: number | null;
+  excerpt: string;
 }
 
 export interface Violation {
@@ -283,6 +300,7 @@ export interface ViewerApi {
   searchDesign(input: Record<string, unknown>): Promise<{ results: SearchResult[] }>;
   pickDesign(input: Record<string, unknown>): Promise<{ results: PickResult[] }>;
   listRulePacks(): Promise<{ rule_packs: RulePack[] }>;
+  updateRulePack(input: { rule_pack_id: string; rules: RuleDefinition[]; acknowledged_review_item_ids: string[] }): Promise<RulePack>;
   approveRulePack(rulePackId: string, approvedBy: string): Promise<RulePack>;
   runAnalysis(designId: string, rulePackId: string): Promise<AnalysisSummary>;
   queryViolations(input: Record<string, unknown>): Promise<{ analysis_id: string; total: number; offset: number; violations: Violation[] }>;

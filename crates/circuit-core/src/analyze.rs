@@ -1,7 +1,7 @@
 use crate::CoreResult;
 use crate::model::{
-    AnalysisSummary, BoundsNm, CoverageLevel, Design, Feature, FeatureGeometry, PointNm, Verdict,
-    Violation,
+    AnalysisSummary, BoundsNm, CoverageLevel, Design, Feature, FeatureGeometry, PointNm, Severity,
+    Verdict, Violation,
 };
 use crate::rules::{DistanceMetric, EntityKind, RuleDefinition, RuleKind, RulePack};
 use rayon::prelude::*;
@@ -198,7 +198,7 @@ fn evaluate_width(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> 
                     analysis_id: analysis_id.into(),
                     rule_id: rule.id.clone(),
                     title: rule.title.clone(),
-                    severity: rule.severity,
+                    severity: confirmed_severity(rule),
                     verdict: Verdict::Fail,
                     source_format: design.format.clone(),
                     semantic_confidence: CoverageLevel::Explicit,
@@ -428,7 +428,7 @@ fn distance_violation(
         analysis_id: analysis_id.into(),
         rule_id: rule.id.clone(),
         title: rule.title.clone(),
-        severity: rule.severity,
+        severity: confirmed_severity(rule),
         verdict: if matches!(
             source.confidence.weakest(target.confidence),
             CoverageLevel::Inferred
@@ -470,7 +470,7 @@ fn review_violation(
         analysis_id: analysis_id.into(),
         rule_id: rule.id.clone(),
         title: rule.title.clone(),
-        severity: rule.severity,
+        severity: confirmed_severity(rule),
         verdict,
         source_format: design.format.clone(),
         semantic_confidence: required_coverage(design, rule),
@@ -486,6 +486,11 @@ fn review_violation(
         evidence_uris: Vec::new(),
         rule_citation: rule.citation.clone(),
     }
+}
+
+fn confirmed_severity(rule: &RuleDefinition) -> Severity {
+    rule.severity
+        .expect("approved rule packs are validated before evaluation")
 }
 
 fn coverage_for(design: &Design, kind: EntityKind) -> CoverageLevel {
@@ -575,12 +580,13 @@ mod tests {
                 target: Some(EntityKind::TestPoint),
                 metric: Some(DistanceMetric::EdgeToEdge),
                 threshold_nm: 500_000,
-                severity: Severity::Error,
+                severity: Some(Severity::Error),
                 layer_functions: Vec::new(),
                 same_net_only: false,
                 different_net_only: false,
                 citation: None,
             }],
+            review_items: Vec::new(),
             approval: Some(RuleApproval {
                 approved_by: "fixture".into(),
                 approved_at: "2026-08-07T00:00:00Z".into(),
@@ -641,12 +647,13 @@ mod tests {
                 target: Some(EntityKind::Component),
                 metric: Some(DistanceMetric::BodyToPad),
                 threshold_nm: 500_000,
-                severity: Severity::Error,
+                severity: Some(Severity::Error),
                 layer_functions: Vec::new(),
                 same_net_only: false,
                 different_net_only: false,
                 citation: None,
             }],
+            review_items: Vec::new(),
             approval: Some(RuleApproval {
                 approved_by: "fixture".into(),
                 approved_at: "2026-08-07T00:00:00Z".into(),

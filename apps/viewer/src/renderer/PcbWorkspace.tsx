@@ -1,6 +1,5 @@
 import {
   ArrowsOutSimpleIcon,
-  CaretRightIcon,
   CheckCircleIcon,
   CircleNotchIcon,
   CrosshairIcon,
@@ -52,8 +51,6 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const [activeViolation, setActiveViolation] = useState<Violation | null>(null);
   const [rulePacks, setRulePacks] = useState<RulePack[]>([]);
   const [selectedRulePack, setSelectedRulePack] = useState("");
-  const [approvalPack, setApprovalPack] = useState<RulePack>();
-  const [approver, setApprover] = useState("");
   const [progress, setProgress] = useState<ProgressEvent>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -225,22 +222,6 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       setPicked(result.results[0] ?? null);
     } catch (cause) {
       setError(message(cause));
-    }
-  }
-
-  async function approvePack() {
-    if (!approvalPack || !approver.trim()) return;
-    setBusy(true);
-    try {
-      await window.circuitInspector.approveRulePack(approvalPack.id, approver.trim());
-      setApprovalPack(undefined);
-      setApprover("");
-      await loadRules();
-      onCatalogChanged?.();
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -500,11 +481,10 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
               <div className="mt-4 border-t border-white/[0.065] pt-3">
                 <div className="mb-1.5 text-[10px] font-medium text-[#777875]">{t("pendingConfirmation")}</div>
                 {rulePacks.filter((pack) => pack.status === "DRAFT").map((pack) => (
-                  <button key={pack.id} className="flex w-full items-center gap-2 rounded-lg px-1.5 py-2 text-left text-[12px] text-[#cbc9c4] transition-colors hover:bg-white/[0.035]" onClick={() => setApprovalPack(pack)}>
+                  <div key={pack.id} className="flex w-full items-start gap-2 rounded-lg px-1.5 py-2 text-left text-[12px] text-[#cbc9c4]">
                     <WarningCircleIcon size={14} className="text-[#c79d57]" />
-                    <span className="min-w-0 flex-1 truncate">{pack.title}</span>
-                    <CaretRightIcon size={12} className="text-[#686966]" />
-                  </button>
+                    <span className="min-w-0 flex-1"><span className="block truncate">{pack.title}</span><small className="mt-1 block text-[10px] leading-4 text-[#777875]">{locale === "zh-CN" ? "请在规则库逐条确认并批准" : "Review every field and approve it in Rule library"}</small></span>
+                  </div>
                 ))}
               </div>
             )}
@@ -578,34 +558,6 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
         <div className="border-l border-white/[0.07] px-4 text-right">{t("localOnly")}</div>
       </footer>
 
-      {approvalPack && (
-        <div className="fixed inset-0 grid place-items-center bg-[#0d0f10]/78 p-6 backdrop-blur-md">
-          <div role="dialog" aria-modal="true" aria-labelledby="approval-title" className="popover-surface w-full max-w-[580px] rounded-2xl p-6">
-            <div className="mb-5 flex items-start justify-between gap-4">
-              <div>
-                <div id="approval-title" className="text-[15px] font-semibold tracking-[-0.012em] text-[#edebe7]">{t("approveRulePack")}</div>
-                <p className="mt-1.5 max-w-[52ch] text-[12px] leading-5 text-[#858681]">{t("approvalDescription")}</p>
-              </div>
-              <button onClick={() => setApprovalPack(undefined)} aria-label={t("closeApproval")} className="rounded-lg p-1.5 text-[#777875] transition-colors hover:bg-white/5 hover:text-[#e1e0db]"><XIcon size={16} /></button>
-            </div>
-            <div className="max-h-60 divide-y divide-white/[0.065] overflow-y-auto border-y border-white/[0.065]">
-              {approvalPack.rules.map((rule) => (
-                <div key={rule.id} className="py-3.5">
-                  <div className="flex justify-between gap-4 text-[12px]"><span className="text-[#d8d7d2]">{rule.title}</span><span className="shrink-0 font-mono text-[10px] text-[#ceaa6c]">{(rule.threshold_nm / 1_000_000).toFixed(3)} mm</span></div>
-                  {rule.citation?.excerpt && <p className="mt-1.5 text-[11px] leading-[1.55] text-[#797a77]">{rule.citation.excerpt}</p>}
-                </div>
-              ))}
-            </div>
-            <label htmlFor="approver" className="mt-5 block text-[12px] font-medium text-[#d0cfca]">{t("approver")}</label>
-            <input id="approver" value={approver} onChange={(event) => setApprover(event.target.value)} className="mt-2 h-10 w-full rounded-lg border border-white/[0.1] bg-[#111315] px-3 text-[12px] text-[#e0dfda] transition-colors placeholder:text-[#5e5f5d] focus:border-[#c5a063]/50" placeholder={t("approverPlaceholder")} />
-            <p className="mt-2 text-[10px] leading-4 text-[#686966]">{t("approvalRecord")}</p>
-            <div className="mt-6 flex justify-end gap-2.5">
-              <button className="secondary-button" onClick={() => setApprovalPack(undefined)}>{t("cancel")}</button>
-              <button className="primary-button" disabled={!approver.trim() || busy} onClick={() => void approvePack()}><ShieldCheckIcon size={15} />{t("confirmApproval")}</button>
-            </div>
-          </div>
-        </div>
-      )}
     </main>
   );
 }

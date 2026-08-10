@@ -80,6 +80,14 @@ export interface RuleCitation {
   excerpt: string;
 }
 
+export interface RuleReviewItem {
+  id: string;
+  code: "RELATIVE_THRESHOLD" | "AMBIGUOUS_THRESHOLD" | "NON_EXECUTABLE_GUIDANCE" | "UNSUPPORTED_TARGET" | "LEGACY_AUTO_SEVERITY";
+  message: string;
+  acknowledged: boolean;
+  citation: RuleCitation;
+}
+
 export interface AnalysisSummary {
   id: string;
   design_id: string;
@@ -103,7 +111,7 @@ export interface RuleDefinition {
   target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | null;
   metric: "CENTER_TO_CENTER" | "EDGE_TO_EDGE" | "BODY_TO_PAD" | null;
   threshold_nm: number;
-  severity: "INFO" | "WARNING" | "ERROR";
+  severity: "INFO" | "WARNING" | "ERROR" | null;
   layer_functions: string[];
   same_net_only: boolean;
   different_net_only: boolean;
@@ -116,6 +124,7 @@ export interface RulePack {
   title: string;
   status: "DRAFT" | "APPROVED" | "DEPRECATED";
   rules: RuleDefinition[];
+  review_items: RuleReviewItem[];
   approval: { approved_by: string; approved_at: string; content_hash: string } | null;
 }
 

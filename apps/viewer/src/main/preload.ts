@@ -9,6 +9,7 @@ const api = {
   searchDesign: (input: Record<string, unknown>) => ipcRenderer.invoke("design:search", input),
   pickDesign: (input: Record<string, unknown>) => ipcRenderer.invoke("design:pick", input),
   listRulePacks: () => ipcRenderer.invoke("rules:list"),
+  updateRulePack: (input: Record<string, unknown>) => ipcRenderer.invoke("rules:update-draft", input),
   approveRulePack: (rulePackId: string, approvedBy: string) => ipcRenderer.invoke("rules:approve", rulePackId, approvedBy),
   runAnalysis: (designId: string, rulePackId: string) => ipcRenderer.invoke("analysis:run", designId, rulePackId),
   queryViolations: (input: Record<string, unknown>) => ipcRenderer.invoke("analysis:query", input),

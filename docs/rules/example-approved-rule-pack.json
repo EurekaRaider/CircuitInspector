@@ -45,6 +45,7 @@
       }
     }
   ],
+  "review_items": [],
   "approval": {
     "approved_by": "fixture-owner",
     "approved_at": "2026-08-07T00:00:00Z",
