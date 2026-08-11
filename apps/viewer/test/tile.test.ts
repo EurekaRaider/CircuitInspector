@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BoardRenderer, decodeTile } from "../src/renderer/board-renderer.js";
-import type { TilePayload } from "../src/renderer/types.js";
+import type { TilePayload, Violation } from "../src/renderer/types.js";
 
 function singleRecordTile(kind = 1): ArrayBuffer {
   const bytes = new ArrayBuffer(42 + 24);
@@ -44,6 +44,7 @@ describe("compact GPU tiles", () => {
   it("uploads board geometry once and reuses the GPU buffer while the view moves", () => {
     vi.stubGlobal("window", { devicePixelRatio: 1 });
     const uploads: Array<{ buffer: unknown; usage: number }> = [];
+    const opacities: number[] = [];
     let boundBuffer: unknown;
     let bufferId = 0;
     const gl = new Proxy({
@@ -65,7 +66,8 @@ describe("compact GPU tiles", () => {
       createProgram: () => ({}),
       getProgramParameter: () => true,
       createBuffer: () => ({ id: ++bufferId }),
-      getUniformLocation: () => ({}),
+      getUniformLocation: (_program: unknown, name: string) => name,
+      uniform1f: (location: unknown, value: number) => { if (location === "u_opacity") opacities.push(value); },
       bindBuffer: (_target: number, buffer: unknown) => { boundBuffer = buffer; },
       bufferData: (_target: number, _vertices: Float32Array, usage: number) => uploads.push({ buffer: boundBuffer, usage })
     }, {
@@ -93,9 +95,26 @@ describe("compact GPU tiles", () => {
     renderer.setTile(tile);
     renderer.setView({ centerX: 1, centerY: 1, zoom: 20 });
     renderer.setView({ centerX: 2, centerY: 1, zoom: 25 });
+    renderer.setOverlay({
+      id: "review",
+      rule_id: "rule",
+      title: "Review",
+      verdict: "REVIEW",
+      severity: "WARNING",
+      net_names: [],
+      component_refs: [],
+      layer_ids: [],
+      x_nm: 1_000_000,
+      y_nm: 1_000_000,
+      measured_value_nm: 100_000,
+      threshold_nm: 200_000,
+      message: "review",
+      evidence_points: []
+    } as Violation, null);
 
     expect(uploads.filter((upload) => upload.usage === gl.STATIC_DRAW)).toHaveLength(1);
-    expect(uploads).toHaveLength(1);
+    expect(uploads.filter((upload) => upload.usage === gl.DYNAMIC_DRAW)).toHaveLength(1);
+    expect(opacities.slice(-2)).toEqual([0.55, 1]);
     renderer.dispose();
   });
 });

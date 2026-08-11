@@ -10,7 +10,7 @@ import {
   SquareIcon,
   TreeStructureIcon
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import type { Locale } from "./i18n";
 import type { SchematicDocument, SchematicPagePayload } from "./types";
@@ -36,7 +36,10 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
   const [pageNumber, setPageNumber] = useState(document.pages[0]?.number ?? 0);
   const [pagePayload, setPagePayload] = useState<SchematicPagePayload | null>(null);
   const [pageUrl, setPageUrl] = useState("");
+  const [pageLoadFailed, setPageLoadFailed] = useState(false);
+  const [pageReloadKey, setPageReloadKey] = useState(0);
   const [thumbnailUrls, setThumbnailUrls] = useState<Record<number, string>>({});
+  const [thumbnailFailures, setThumbnailFailures] = useState<number[]>([]);
   const [candidateId, setCandidateId] = useState(document.interface_candidates.find((item) => item.confirmed)?.id ?? document.interface_candidates[0]?.id ?? "");
   const [selectedPathId, setSelectedPathId] = useState(document.paths[0]?.id ?? "");
   const [confirmedPathIds, setConfirmedPathIds] = useState<string[]>(document.confirmed_scopes.flatMap((scope) => scope.path_ids));
@@ -98,37 +101,51 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
     if (!pageNumber) {
       setPagePayload(null);
       setPageUrl("");
+      setPageLoadFailed(false);
       return;
     }
     let disposed = false;
     let url = "";
+    setPageLoadFailed(false);
     window.circuitInspector.getSchematicPage({ schematic_id: document.id, page: pageNumber }).then((payload) => {
       if (disposed) return;
       url = URL.createObjectURL(new Blob([payload.bytes], { type: "image/png" }));
       setPagePayload(payload);
       setPageUrl(url);
-      requestAnimationFrame(() => fitPageTo(payload));
     }).catch(() => {
-      if (!disposed) setPagePayload(null);
+      if (!disposed) {
+        setPagePayload(null);
+        setPageUrl("");
+        setPageLoadFailed(true);
+      }
     });
     return () => {
       disposed = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [document.id, pageNumber]);
+  }, [document.id, pageNumber, pageReloadKey]);
+
+  useLayoutEffect(() => {
+    if (pagePayload && pageUrl) fitPageTo(pagePayload);
+  }, [pagePayload, pageUrl]);
 
   useEffect(() => {
     let disposed = false;
     const created: string[] = [];
     setThumbnailUrls({});
+    setThumbnailFailures([]);
     void (async () => {
       for (const page of document.pages) {
         if (disposed) break;
-        const payload = await window.circuitInspector.getSchematicThumbnail({ schematic_id: document.id, page: page.number });
-        if (disposed) break;
-        const url = URL.createObjectURL(new Blob([payload.bytes], { type: "image/png" }));
-        created.push(url);
-        setThumbnailUrls((current) => ({ ...current, [payload.page]: url }));
+        try {
+          const payload = await window.circuitInspector.getSchematicThumbnail({ schematic_id: document.id, page: page.number });
+          if (disposed) break;
+          const url = URL.createObjectURL(new Blob([payload.bytes], { type: "image/png" }));
+          created.push(url);
+          setThumbnailUrls((current) => ({ ...current, [payload.page]: url }));
+        } catch {
+          if (!disposed) setThumbnailFailures((current) => current.includes(page.number) ? current : [...current, page.number]);
+        }
       }
     })();
     return () => {
@@ -146,8 +163,10 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
   function fitPageTo(payload: SchematicPagePayload) {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    const scale = Math.min((viewport.clientWidth - 48) / payload.page.width, (viewport.clientHeight - 48) / payload.page.height);
-    applyTransform({ x: (viewport.clientWidth - payload.page.width * scale) / 2, y: (viewport.clientHeight - payload.page.height * scale) / 2, scale: clamp(scale, 0.1, 6) });
+    applyTransform(fitPageTransform(
+      { width: viewport.clientWidth, height: viewport.clientHeight },
+      { width: payload.page.width, height: payload.page.height }
+    ));
   }
 
   function fitPage() {
@@ -252,7 +271,7 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
       <aside className="w-[132px] shrink-0 overflow-y-auto border-r border-white/[0.07] bg-[#15181a] p-2" aria-label={chinese ? "原理图页面" : "Schematic pages"}>
         <div className="px-1 pb-2 font-mono text-[8px] uppercase tracking-[0.12em] text-[#6f726e]">{chinese ? "页面" : "Pages"}</div>
         {document.pages.map((page) => <button key={page.number} className={`mb-2 block w-full rounded-lg border p-1 text-left ${pageNumber === page.number ? "border-[#c5a063]/55 bg-[#c5a063]/[0.08]" : "border-white/[0.07] bg-[#101214]"}`} onClick={() => setPageNumber(page.number)}>
-          <div className="aspect-[3/4] overflow-hidden rounded bg-white">{thumbnailUrls[page.number] ? <img className="size-full object-contain" src={thumbnailUrls[page.number]} alt="" /> : <div className="grid size-full place-items-center"><CircleNotchIcon className="animate-spin text-[#555]" /></div>}</div>
+          <div className="aspect-[3/4] overflow-hidden rounded bg-white">{thumbnailUrls[page.number] ? <img className="size-full object-contain" src={thumbnailUrls[page.number]} alt="" /> : thumbnailFailures.includes(page.number) ? <div className="grid size-full place-items-center bg-[#f4eee3] font-mono text-[9px] text-[#9a5a48]">{chinese ? "加载失败" : "LOAD FAILED"}</div> : <div className="grid size-full place-items-center"><CircleNotchIcon className="animate-spin text-[#555]" /></div>}</div>
           <div className="mt-1 flex justify-between px-0.5 font-mono text-[8px] text-[#898b87]"><span>{page.number}</span><span>{page.extraction === "OCR" ? "OCR" : "PDF"}</span></div>
         </button>)}
         {!document.pages.length && <div className="rounded-lg border border-dashed border-white/[0.09] px-2 py-8 text-center text-[9px] leading-4 text-[#6d706c]">{chinese ? "结构化映射没有 PDF 页面" : "Structured mapping has no PDF pages"}</div>}
@@ -285,7 +304,7 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
               {overlays.ocr && [...pagePayload.components.flatMap((item) => item.evidence), ...pagePayload.pins.flatMap((item) => item.evidence)].filter((item) => item.method === "OCR" && item.page === pageNumber && item.bbox).map((item, index) => <rect key={`ocr-${index}`} x={item.bbox!.x} y={item.bbox!.y} width={item.bbox!.width} height={item.bbox!.height} fill="rgba(88,182,214,.12)" stroke="#58b6d6" strokeWidth={2} />)}
               {wireStart && <circle cx={wireStart.x} cy={wireStart.y} r={8} fill="#ef835f" />}
             </svg>
-          </div> : <div className="absolute inset-0 grid place-items-center text-[10px] text-[#696c68]">{document.pages.length ? <CircleNotchIcon size={20} className="animate-spin" /> : (chinese ? "结构化映射通过右侧路径面板确认" : "Confirm structured mappings in the path panel")}</div>}
+          </div> : pageLoadFailed ? <div className="absolute inset-0 grid place-items-center text-center text-[10px] text-[#9d795f]"><div><div>{chinese ? "页面图像加载失败" : "Page image failed to load"}</div><button className="secondary-button mt-3" onClick={() => setPageReloadKey((value) => value + 1)}>{chinese ? "重试" : "Retry"}</button></div></div> : <div className="absolute inset-0 grid place-items-center text-[10px] text-[#696c68]">{document.pages.length ? <CircleNotchIcon size={20} className="animate-spin" /> : (chinese ? "结构化映射通过右侧路径面板确认" : "Confirm structured mappings in the path panel")}</div>}
         </div>
       </main>
 
@@ -359,6 +378,15 @@ export function zoomTransformAt(current: { x: number; y: number; scale: number }
   const worldX = (cursor.x - current.x) / current.scale;
   const worldY = (cursor.y - current.y) / current.scale;
   return { x: cursor.x - worldX * nextScale, y: cursor.y - worldY * nextScale, scale: nextScale };
+}
+
+export function fitPageTransform(viewport: { width: number; height: number }, page: { width: number; height: number }) {
+  const scale = clamp(Math.min((viewport.width - 48) / page.width, (viewport.height - 48) / page.height), 0.1, 6);
+  return {
+    x: (viewport.width - page.width * scale) / 2,
+    y: (viewport.height - page.height * scale) / 2,
+    scale
+  };
 }
 
 export function firstPathPage(evidence: Array<{ page: number | null }>) {

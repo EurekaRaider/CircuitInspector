@@ -19,7 +19,7 @@ import { BoardCanvas, type BoardCanvasHandle } from "./BoardCanvas";
 import { DocumentAnalysisScreen } from "./DocumentAnalysisScreen";
 import { translate, type Locale, type Translator } from "./i18n";
 import { defaultLayerIds, isolatedLayerIds, layerIdsForTestPoint, layerIdsForViolation, testPointFocusZoom, violationFocusZoom, violationHasLocation } from "./pcb-layers";
-import { reviewRoute, type ReviewRoute } from "./pcb-review";
+import { findingVerdictCounts, reviewRoute, type ReviewRoute } from "./pcb-review";
 import type {
   AnalysisSummary,
   DocumentAnalysis,
@@ -60,6 +60,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const [tile, setTile] = useState<TilePayload | null>(null);
   const [enabledLayers, setEnabledLayers] = useState<string[]>([]);
   const [analysis, setAnalysis] = useState<AnalysisSummary>();
+  const [initialViolationFocus, setInitialViolationFocus] = useState<Violation | null>(null);
   const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis>();
   const [activeViolation, setActiveViolation] = useState<Violation | null>(null);
   const [rulePacks, setRulePacks] = useState<RulePack[]>([]);
@@ -103,7 +104,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   }, [deepLinkUrl]);
 
   useEffect(() => {
-    if (!initialDesignId) return;
+    if (!initialDesignId || deepLinkUrl) return;
     setBusy(true);
     window.circuitInspector.getDesignSummary(initialDesignId)
       .then((summary) => {
@@ -113,19 +114,23 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       })
       .catch((cause) => setError(message(cause)))
       .finally(() => setBusy(false));
-  }, [initialDesignId]);
+  }, [deepLinkUrl, initialDesignId]);
 
   useEffect(() => {
     if (!design) return;
-    queueMicrotask(() => canvasRef.current?.fit());
-  }, [design?.id]);
+    queueMicrotask(() => {
+      if (initialViolationFocus) focusViolation(initialViolationFocus, design);
+      else canvasRef.current?.fit();
+    });
+  }, [design, initialViolationFocus]);
 
-  function showDesign(summary: DesignSummary) {
+  function showDesign(summary: DesignSummary, focusedViolation: Violation | null = null) {
     lastTileRequestKey.current = "";
     setTile(null);
     setViewSide("TOP");
     setEnabledLayers(defaultLayerIds(summary.layers, "TOP"));
     setActiveTestPoint(null);
+    setInitialViolationFocus(focusedViolation);
     setDesign(summary);
     void window.circuitInspector.listTestPoints(summary.id)
       .then((result) => setTestPoints(result.test_points))
@@ -204,13 +209,12 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       }
       const summary = await window.circuitInspector.getDesignSummary(loaded.design_id);
       setDocumentAnalysis(undefined);
-      showDesign(summary);
-      setAnalysis(loaded);
-      setQueriedViolations(null);
       const issue = parsed.searchParams.get("issue");
       const selected = loaded.violations.find((violation) => violation.id === issue) ?? loaded.violations[0] ?? null;
-      if (selected) queueMicrotask(() => focusViolation(selected, summary));
-      else setActiveViolation(null);
+      showDesign(summary, selected);
+      setAnalysis(loaded);
+      setQueriedViolations(null);
+      if (!selected) setActiveViolation(null);
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -402,6 +406,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   }
 
   const violations = queriedViolations ?? analysis?.violations ?? [];
+  const findingCounts = findingVerdictCounts(violations);
   const sourceName = design?.source_path.split(/[\\/]/).at(-1);
   const progressLabel = progress?.phase === "IMPORT"
     ? progress.progress >= 100 ? t("designIndexed") : t("validatingDesign")
@@ -670,8 +675,8 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
             <>
               <div className="grid grid-cols-4 divide-x divide-white/[0.065] border-b border-white/[0.065]">
                 <Count label="PASS" value={analysis.pass_count} tone="pass" />
-                <Count label="FAIL" value={analysis.fail_count} tone="fail" />
-                <Count label="REVIEW" value={analysis.review_count} tone="review" />
+                <Count label="FAIL" value={findingCounts.fail} tone="fail" />
+                <Count label="REVIEW" value={findingCounts.review} tone="review" />
                 <Count label="N/A" value={analysis.not_applicable_count} tone="muted" />
               </div>
               <div className="border-b border-white/[0.065] p-3">

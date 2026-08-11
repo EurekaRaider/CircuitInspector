@@ -13,7 +13,7 @@ import type {
 } from "@circuit-inspector/contracts";
 import { importSchematicPinout, readPinout } from "./wiring.js";
 import { buildInterfaceCandidates, classifySchematicComponent, rebuildDerivedSchematic, traceInterfacePaths } from "./schematic-graph.js";
-import { parseSchematicPdf } from "./schematic-pdf.js";
+import { parseSchematicPdf, SCHEMATIC_PARSER_VERSION } from "./schematic-pdf.js";
 
 export interface SchematicCorrectionInput {
   operation: SchematicCorrection["operation"];
@@ -36,7 +36,11 @@ export async function importSchematicDocument(
   const id = `schematic-${sourceHash.slice(0, 16)}-${role.toLowerCase()}`;
   const directory = schematicDirectory(cacheDir, id);
   const cached = await tryReadDocumentFile(path.join(directory, "document.json"));
-  if (cached?.source_hash === sourceHash && cached.parser_version === "schematic-v2.0.1") return cached;
+  if (
+    cached?.source_hash === sourceHash
+    && cached.parser_version === SCHEMATIC_PARSER_VERSION
+    && (extension !== ".pdf" || await hasCompletePdfPageCache(cached, directory))
+  ) return cached;
   await mkdir(directory, { recursive: true });
 
   let document: SchematicDocument;
@@ -191,6 +195,19 @@ export async function readSchematicThumbnail(id: string, pageNumber: number, cac
   return { page: pageNumber, bytes };
 }
 
+async function hasCompletePdfPageCache(document: SchematicDocument, root: string) {
+  if (document.pages.length === 0) return false;
+  try {
+    await Promise.all(document.pages.flatMap((page) => [page.render_path, page.thumbnail_path].map(async (file) => {
+      const metadata = await stat(assertPathInside(root, file));
+      if (!metadata.isFile() || metadata.size === 0) throw new Error("Incomplete cached schematic page");
+    })));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function saveSchematicDocument(document: SchematicDocument, cacheDir: string) {
   const directory = schematicDirectory(cacheDir, document.id);
   await mkdir(directory, { recursive: true });
@@ -236,7 +253,7 @@ export function structuredPinoutToDocument(pinout: SchematicPinout, id = `schema
   }
   const document: SchematicDocument = {
     schema_version: 2,
-    parser_version: "schematic-v2.0.1",
+    parser_version: SCHEMATIC_PARSER_VERSION,
     id,
     role: pinout.role,
     source_path: pinout.source_path,

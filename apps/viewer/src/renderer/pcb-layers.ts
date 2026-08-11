@@ -42,7 +42,7 @@ export function layerIdsForTestPoint(layers: LayerSummary[], point: Pick<TestPoi
       || source.startsWith(`manual:${id}:`);
   });
   if (!matches.length) return [];
-  return [...new Set(matches.flatMap((layer) => isolatedLayerIds(layers, layer.id)))];
+  return layerIdsWithSurfaceContext(layers, matches.map((layer) => layer.id));
 }
 
 export function testPointFocusZoom(radiusNm: number) {
@@ -51,9 +51,6 @@ export function testPointFocusZoom(radiusNm: number) {
 }
 
 export function layerIdsForViolation(layers: LayerSummary[], violation: Violation, testPoints: TestPointCandidate[]) {
-  const profiles = layers
-    .filter((layer) => layer.function.toUpperCase().includes("PROFILE"))
-    .map((layer) => layer.id);
   const declared = layers
     .filter((layer) => violation.layer_ids.includes(layer.id))
     .map((layer) => layer.id);
@@ -62,7 +59,21 @@ export function layerIdsForViolation(layers: LayerSummary[], violation: Violatio
     candidate.x === point.center.x && candidate.y === point.center.y
   ));
   const inferred = matchingPoint ? layerIdsForTestPoint(layers, matchingPoint) : [];
-  return [...new Set([...profiles, ...declared, ...inferred])];
+  return layerIdsWithSurfaceContext(layers, [...declared, ...inferred]);
+}
+
+function layerIdsWithSurfaceContext(layers: LayerSummary[], sourceLayerIds: string[]) {
+  const selected = new Set(sourceLayerIds);
+  for (const layer of layers) {
+    if (layer.function.toUpperCase().includes("PROFILE")) selected.add(layer.id);
+  }
+  const sides = new Set(layers
+    .filter((layer) => selected.has(layer.id) && (layer.side === "TOP" || layer.side === "BOTTOM"))
+    .map((layer) => layer.side as "TOP" | "BOTTOM"));
+  for (const side of sides) {
+    for (const layerId of defaultLayerIds(layers, side)) selected.add(layerId);
+  }
+  return layers.filter((layer) => selected.has(layer.id)).map((layer) => layer.id);
 }
 
 export function violationFocusZoom(violation: Violation) {

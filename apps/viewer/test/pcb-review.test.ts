@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { reviewRoute } from "../src/renderer/pcb-review";
+import { findingVerdictCounts, reviewRoute } from "../src/renderer/pcb-review";
 import { TestPointReviewEvidence } from "../src/renderer/PcbWorkspace";
 import type { RuleDefinition, TestPointCandidate, Violation } from "../src/renderer/types";
 
@@ -36,6 +36,14 @@ const baseRule: RuleDefinition = {
 };
 
 describe("PCB REVIEW routing", () => {
+  it("counts the actual finding rows rather than the number of rules", () => {
+    expect(findingVerdictCounts([
+      { verdict: "REVIEW" },
+      { verdict: "REVIEW" },
+      { verdict: "FAIL" }
+    ])).toEqual({ fail: 1, review: 2 });
+  });
+
   it("routes inferred test-point findings to candidate review", () => {
     const point: TestPointCandidate = { id: "tp", center: { x: 1, y: 2 }, radius_nm: 3, net_name: null, component_ref: "TP1", confidence: "INFERRED", source: "fixture" };
     expect(reviewRoute({ ...baseViolation, message: "required entities are inferred" }, baseRule, [point])).toBe("TEST_POINT_REVIEW");

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -151,8 +151,21 @@ describe("schematic document v2", () => {
 
     expect(imported.pages).toHaveLength(2);
     expect(imported.pages.every((page) => page.extraction === "OCR")).toBe(true);
+    expect(imported.parser_version).toBe("schematic-v2.0.2");
+    for (const page of imported.pages) {
+      expect((await readFile(page.render_path)).byteLength).toBeGreaterThan(1_000);
+      expect((await readFile(page.thumbnail_path)).byteLength).toBeGreaterThan(500);
+    }
     expect(imported.components.map((component) => component.refdes)).toEqual(expect.arrayContaining(["J1", "R104", "U7"]));
     expect(imported.diagnostics.map((diagnostic) => diagnostic.code)).toContain("SCANNED_PDF_OCR");
+
+    await unlink(imported.pages[1]!.render_path);
+    const rebuilt = await importSchematicDocument(
+      path.join(fixtureRoot, "product-schematic-scanned.pdf"),
+      "PRODUCT",
+      cacheDir
+    );
+    expect((await readFile(rebuilt.pages[1]!.render_path)).byteLength).toBeGreaterThan(1_000);
   }, 120_000);
 
   it("keeps JSON/CSV WIB pin mappings compatible with a traced product PDF", async () => {

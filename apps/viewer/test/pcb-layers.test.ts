@@ -44,8 +44,8 @@ describe("PCB workspace display defaults", () => {
   });
 
   it("isolates the source layer for a test-point review", () => {
-    expect(layerIdsForTestPoint([...layers], { source: "/steps/pcb/layers/top-signal/features" })).toEqual(["profile", "top-signal"]);
-    expect(layerIdsForTestPoint([...layers], { source: "/tmp/top-mask" })).toEqual(["profile", "top-mask"]);
+    expect(layerIdsForTestPoint([...layers], { source: "/steps/pcb/layers/top-signal/features" })).toEqual(["profile", "top-signal", "top-component", "top-mask"]);
+    expect(layerIdsForTestPoint([...layers], { source: "/tmp/top-mask" })).toEqual(["profile", "top-signal", "top-component", "top-mask"]);
   });
 
   it("uses a readable bounded zoom for test-point targets", () => {
@@ -71,7 +71,7 @@ describe("PCB workspace display defaults", () => {
       message: "review",
       evidence_points: [{ x: 1_000_000, y: 1_000_000 }, { x: 3_000_000, y: 1_000_000 }]
     };
-    expect(layerIdsForViolation([...layers], violation, [])).toEqual(["profile", "top-signal"]);
+    expect(layerIdsForViolation([...layers], violation, [])).toEqual(["profile", "top-signal", "top-component", "top-mask"]);
     expect(violationFocusZoom(violation)).toBe(130);
   });
 
@@ -93,7 +93,7 @@ describe("PCB workspace display defaults", () => {
       evidence_points: [{ x: 1_000_000, y: 2_000_000 }]
     };
     const points = [{ id: "tp", center: { x: 1_000_000, y: 2_000_000 }, radius_nm: 100_000, net_name: "A", component_ref: "TP1", confidence: "INFERRED" as const, source: "/steps/pcb/layers/top-signal/features" }];
-    expect(layerIdsForViolation([...layers], violation, points)).toEqual(["profile", "top-signal"]);
+    expect(layerIdsForViolation([...layers], violation, points)).toEqual(["profile", "top-signal", "top-component", "top-mask"]);
     expect(violationFocusZoom(violation)).toBe(320);
   });
 

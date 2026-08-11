@@ -31,14 +31,12 @@ pub fn analyze_design(design: &Design, rule_pack: &RulePack) -> CoreResult<Analy
         .collect::<Vec<_>>();
     let mut violations = Vec::new();
     let mut pass_count = 0;
-    let mut review_count = 0;
     let mut not_applicable_count = 0;
     for outcome in per_rule {
         match outcome.verdict {
             Verdict::Pass => pass_count += 1,
-            Verdict::Review => review_count += 1,
             Verdict::NotApplicable => not_applicable_count += 1,
-            Verdict::Fail => {}
+            Verdict::Fail | Verdict::Review => {}
         }
         violations.extend(outcome.violations);
     }
@@ -50,6 +48,10 @@ pub fn analyze_design(design: &Design, rule_pack: &RulePack) -> CoreResult<Analy
     let fail_count = violations
         .iter()
         .filter(|violation| violation.verdict == Verdict::Fail)
+        .count();
+    let review_count = violations
+        .iter()
+        .filter(|violation| violation.verdict == Verdict::Review)
         .count();
     let verdict = if fail_count > 0 {
         Verdict::Fail
@@ -879,20 +881,36 @@ mod tests {
             version: "1".into(),
             title: "DFT".into(),
             status: RulePackStatus::Approved,
-            rules: vec![RuleDefinition {
-                id: "tp-spacing".into(),
-                title: "Test point spacing".into(),
-                kind: RuleKind::MinimumDistance,
-                source: EntityKind::TestPoint,
-                target: Some(EntityKind::TestPoint),
-                metric: Some(DistanceMetric::EdgeToEdge),
-                threshold_nm: 100_000,
-                severity: Some(Severity::Warning),
-                layer_functions: Vec::new(),
-                same_net_only: false,
-                different_net_only: false,
-                citation: None,
-            }],
+            rules: vec![
+                RuleDefinition {
+                    id: "tp-spacing".into(),
+                    title: "Test point spacing".into(),
+                    kind: RuleKind::MinimumDistance,
+                    source: EntityKind::TestPoint,
+                    target: Some(EntityKind::TestPoint),
+                    metric: Some(DistanceMetric::EdgeToEdge),
+                    threshold_nm: 100_000,
+                    severity: Some(Severity::Warning),
+                    layer_functions: Vec::new(),
+                    same_net_only: false,
+                    different_net_only: false,
+                    citation: None,
+                },
+                RuleDefinition {
+                    id: "zz-tp-diameter".into(),
+                    title: "Test point diameter".into(),
+                    kind: RuleKind::MinimumDiameter,
+                    source: EntityKind::TestPoint,
+                    target: None,
+                    metric: None,
+                    threshold_nm: 400_000,
+                    severity: Some(Severity::Warning),
+                    layer_functions: Vec::new(),
+                    same_net_only: false,
+                    different_net_only: false,
+                    citation: None,
+                },
+            ],
             review_items: Vec::new(),
             approval: Some(RuleApproval {
                 approved_by: "fixture".into(),
@@ -905,9 +923,13 @@ mod tests {
 
         assert_eq!(analysis.verdict, Verdict::Review);
         assert_eq!(analysis.fail_count, 0);
-        assert_eq!(analysis.review_count, 1);
-        assert_eq!(analysis.violations.len(), 1);
-        let finding = &analysis.violations[0];
+        assert_eq!(analysis.review_count, 3);
+        assert_eq!(analysis.violations.len(), 3);
+        let finding = analysis
+            .violations
+            .iter()
+            .find(|finding| finding.rule_id == "tp-spacing")
+            .unwrap();
         assert_eq!(finding.verdict, Verdict::Review);
         assert_eq!(finding.semantic_confidence, CoverageLevel::Inferred);
         assert_eq!(finding.net_names, ["A", "B"]);

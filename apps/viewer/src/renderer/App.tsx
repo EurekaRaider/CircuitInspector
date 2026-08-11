@@ -62,7 +62,7 @@ export function App() {
         return;
       }
       setDocumentAnalysis(null);
-      setInitialDesignId(loaded.design_id);
+      setInitialDesignId(null);
       setDeepLinkUrl(`circuitinspector://analysis/${encodeURIComponent(loaded.id)}`);
       setView("PCB");
     } catch (cause) {

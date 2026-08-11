@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { firstPathPage, pathFocusPage, zoomTransformAt } from "../src/renderer/SchematicReview.js";
+import { firstPathPage, fitPageTransform, pathFocusPage, zoomTransformAt } from "../src/renderer/SchematicReview.js";
 import { SchematicReview } from "../src/renderer/SchematicReview.js";
 import type { SchematicDocument } from "../src/renderer/types.js";
 
@@ -14,6 +14,14 @@ describe("schematic PDF viewport", () => {
     const after = { x: (cursor.x - next.x) / next.scale, y: (cursor.y - next.y) / next.scale };
     expect(after.x).toBeCloseTo(before.x, 8);
     expect(after.y).toBeCloseTo(before.y, 8);
+  });
+
+  it("centers the first rendered page inside the available viewport", () => {
+    expect(fitPageTransform({ width: 1000, height: 700 }, { width: 2000, height: 1000 })).toEqual({
+      x: 24,
+      y: 112,
+      scale: 0.476
+    });
   });
 
   it("chooses the first page-backed evidence for cross-page navigation", () => {

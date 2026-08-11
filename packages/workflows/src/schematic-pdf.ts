@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createCanvas } from "@napi-rs/canvas";
+import { createCanvas, type Canvas } from "@napi-rs/canvas";
 import type {
   Diagnostic,
   SchematicBox,
@@ -18,6 +18,7 @@ import { classifySchematicComponent } from "./schematic-graph.js";
 
 const PAGE_RENDER_MAX_EDGE = 4096;
 const TEXT_TOKEN_MINIMUM = 4;
+export const SCHEMATIC_PARSER_VERSION = "schematic-v2.0.2";
 const REF_DESIGNATOR = /^(?:U|IC|MCU|FPGA|J|P|CN|X|CONN|R|C|L|FB|F|FL|NTC|PTC|D|TVS|ESD|Q)\d+[A-Z0-9_-]*$/i;
 const EXPLICIT_PIN_ROW = /\b((?:U|IC|MCU|FPGA|J|P|CN|X|CONN|R|C|L|FB|F|FL|NTC|PTC|D|TVS|ESD|Q)\d+[A-Z0-9_-]*)\s+(?:PIN\s*)?([A-Z0-9]+)\s+(?:NET(?:\s*NAME)?\s*[:=]?\s*)?([A-Z_+/.#-][A-Z0-9_+/.#-]*)\b/i;
 const COMPACT_EXPLICIT_PIN_ROW = /^((?:U|IC|MCU|FPGA|J|P|CN|X|CONN|R|C|L|FB|F|FL|NTC|PTC|D|TVS|ESD|Q)\d+[A-Z0-9_-]*?)_?PIN([A-Z0-9]+)NET(?:NAME)?[:=]?([A-Z_+/.#-][A-Z0-9_+/.#-]*)$/i;
@@ -64,45 +65,59 @@ export async function parseSchematicPdf(input: PdfParseInput): Promise<Schematic
   const junctions: SchematicJunction[] = [];
   const diagnostics: Diagnostic[] = [];
 
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    input.onProgress?.(Math.round((pageNumber - 1) / Math.max(1, pdf.numPages) * 72), `Rendering schematic page ${pageNumber}/${pdf.numPages}`);
-    const page = await pdf.getPage(pageNumber);
-    const baseViewport = page.getViewport({ scale: 1 });
-    const scale = Math.min(2, PAGE_RENDER_MAX_EDGE / Math.max(baseViewport.width, baseViewport.height));
-    const viewport = page.getViewport({ scale });
-    const canvas = createCanvas(Math.max(1, Math.ceil(viewport.width)), Math.max(1, Math.ceil(viewport.height)));
-    const context = canvas.getContext("2d");
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvas: canvas as unknown as HTMLCanvasElement, viewport }).promise;
-    const png = canvas.toBuffer("image/png");
-    const renderPath = path.join(pagesDirectory, `page-${pageNumber}.png`);
-    await writeFile(renderPath, png);
+  try {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      input.onProgress?.(Math.round((pageNumber - 1) / Math.max(1, pdf.numPages) * 72), `Rendering schematic page ${pageNumber}/${pdf.numPages}`);
+      const page = await pdf.getPage(pageNumber);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(2, PAGE_RENDER_MAX_EDGE / Math.max(baseViewport.width, baseViewport.height));
+      const viewport = page.getViewport({ scale });
+      const canvas = createCanvas(Math.max(1, Math.ceil(viewport.width)), Math.max(1, Math.ceil(viewport.height)));
+      let thumbnail: Canvas | undefined;
+      try {
+        const context = canvas.getContext("2d");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvas: canvas as unknown as HTMLCanvasElement, viewport }).promise;
+        const png = canvas.toBuffer("image/png");
+        const renderPath = path.join(pagesDirectory, `page-${pageNumber}.png`);
+        await writeFile(renderPath, png);
 
-    const thumbnail = createCanvas(Math.max(1, Math.round(canvas.width * 0.2)), Math.max(1, Math.round(canvas.height * 0.2)));
-    thumbnail.getContext("2d").drawImage(canvas, 0, 0, thumbnail.width, thumbnail.height);
-    const thumbnailPath = path.join(pagesDirectory, `page-${pageNumber}-thumb.png`);
-    await writeFile(thumbnailPath, thumbnail.toBuffer("image/png"));
+        thumbnail = createCanvas(Math.max(1, Math.round(canvas.width * 0.2)), Math.max(1, Math.round(canvas.height * 0.2)));
+        thumbnail.getContext("2d").drawImage(canvas, 0, 0, thumbnail.width, thumbnail.height);
+        const thumbnailPath = path.join(pagesDirectory, `page-${pageNumber}-thumb.png`);
+        await writeFile(thumbnailPath, thumbnail.toBuffer("image/png"));
 
-    const extractedTokens = await pdfTextTokens(page, scale, canvas.height);
-    const useOcr = meaningfulTokenCount(extractedTokens) < TEXT_TOKEN_MINIMUM;
-    const tokens = useOcr ? await recognizePage(png, input.onProgress, pageNumber, pdf.numPages) : extractedTokens;
-    pageTokens.set(pageNumber, tokens);
-    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-    const detectedWires = detectOrthogonalWires(imageData.data, canvas.width, canvas.height, tokens, pageNumber, input);
-    wires.push(...detectedWires);
-    junctions.push(...detectJunctions(imageData.data, canvas.width, canvas.height, detectedWires, pageNumber, input));
-    pages.push({
-      number: pageNumber,
-      width: canvas.width,
-      height: canvas.height,
-      render_path: renderPath,
-      thumbnail_path: thumbnailPath,
-      extraction: useOcr ? "OCR" : "VECTOR_TEXT"
-    });
-    if (useOcr) diagnostics.push({ code: "SCANNED_PDF_OCR", severity: "WARNING", message: `Page ${pageNumber} used local OCR; extracted connectivity remains REVIEW until relevant paths are confirmed.` });
+        const extractedTokens = await pdfTextTokens(page, scale, canvas.height);
+        const useOcr = meaningfulTokenCount(extractedTokens) < TEXT_TOKEN_MINIMUM;
+        const tokens = useOcr ? await recognizePage(png, input.onProgress, pageNumber, pdf.numPages) : extractedTokens;
+        pageTokens.set(pageNumber, tokens);
+        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+        const detectedWires = detectOrthogonalWires(imageData.data, canvas.width, canvas.height, tokens, pageNumber, input);
+        wires.push(...detectedWires);
+        junctions.push(...detectJunctions(imageData.data, canvas.width, canvas.height, detectedWires, pageNumber, input));
+        pages.push({
+          number: pageNumber,
+          width: canvas.width,
+          height: canvas.height,
+          render_path: renderPath,
+          thumbnail_path: thumbnailPath,
+          extraction: useOcr ? "OCR" : "VECTOR_TEXT"
+        });
+        if (useOcr) diagnostics.push({ code: "SCANNED_PDF_OCR", severity: "WARNING", message: `Page ${pageNumber} used local OCR; extracted connectivity remains REVIEW until relevant paths are confirmed.` });
+      } finally {
+        page.cleanup();
+        canvas.width = 0;
+        canvas.height = 0;
+        if (thumbnail) {
+          thumbnail.width = 0;
+          thumbnail.height = 0;
+        }
+      }
+    }
+  } finally {
+    await loadingTask.destroy();
   }
-  await loadingTask.destroy();
 
   input.onProgress?.(76, "Building schematic connectivity graph");
   const semantic = buildSemanticGraph(input, pageTokens, wires, junctions, diagnostics);
@@ -112,7 +127,7 @@ export async function parseSchematicPdf(input: PdfParseInput): Promise<Schematic
     .filter((junction) => junction.connected_wire_ids.length >= 2);
   return {
     schema_version: 2,
-    parser_version: "schematic-v2.0.1",
+    parser_version: SCHEMATIC_PARSER_VERSION,
     id: input.id,
     role: input.role,
     source_path: input.sourcePath,

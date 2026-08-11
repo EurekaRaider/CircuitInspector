@@ -195,7 +195,7 @@ export class BoardRenderer {
     gl.uniform2f(this.#uniforms.viewport, this.#canvas.width, this.#canvas.height);
     gl.uniform1f(this.#uniforms.zoom, this.#view.zoom * Math.min(window.devicePixelRatio || 1, 2));
     gl.uniform1f(this.#uniforms.mirror, this.#mirrored ? -1 : 1);
-    gl.uniform1f(this.#uniforms.opacity, this.#overlayTestPoint || this.#overlayViolation ? 0.16 : 1);
+    gl.uniform1f(this.#uniforms.opacity, this.#overlayTestPoint || this.#overlayViolation ? 0.55 : 1);
     this.#drawBuffer(this.#boardBuffer, this.#boardVertexCount);
     gl.uniform1f(this.#uniforms.opacity, 1);
     this.#drawBuffer(this.#overlayBuffer, this.#overlayVertexCount);
