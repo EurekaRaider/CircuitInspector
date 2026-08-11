@@ -34,18 +34,34 @@ export function assertOneOf<T extends string>(value: unknown, allowed: readonly 
   return value as T;
 }
 
-export function assertRuleDraftUpdate(value: unknown): { rule_pack_id: string; rules: Array<Record<string, unknown>>; acknowledged_review_item_ids: string[] } {
+export function assertRuleDraftUpdate(value: unknown): {
+  rule_pack_id: string;
+  rules: Array<Record<string, unknown>>;
+  review_item_resolutions: Array<{ review_item_id: string; decision: "ACCEPT_SUGGESTION" | "IGNORE" | "MODIFY_RULE"; note: string; rule_id: string | null }>;
+} {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid rule draft update");
   const input = value as Record<string, unknown>;
   if (!Array.isArray(input.rules) || input.rules.some((rule) => !rule || typeof rule !== "object" || Array.isArray(rule))) {
     throw new Error("Invalid rule draft rules");
   }
-  if (!Array.isArray(input.acknowledged_review_item_ids)) throw new Error("Invalid rule review acknowledgements");
+  if (!Array.isArray(input.review_item_resolutions)) throw new Error("Invalid rule review resolutions");
   const rules = input.rules as Array<Record<string, unknown>>;
   rules.forEach((rule) => assertArtifactId(rule.id));
+  const reviewItemResolutions = input.review_item_resolutions.map((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid rule review resolution");
+    const resolution = value as Record<string, unknown>;
+    if (typeof resolution.note !== "string") throw new Error("Invalid rule review resolution note");
+    const ruleId = resolution.rule_id === null ? null : assertArtifactId(resolution.rule_id);
+    return {
+      review_item_id: assertArtifactId(resolution.review_item_id),
+      decision: assertOneOf(resolution.decision, ["ACCEPT_SUGGESTION", "IGNORE", "MODIFY_RULE"] as const, "rule review decision"),
+      note: resolution.note,
+      rule_id: ruleId
+    };
+  });
   return {
     rule_pack_id: assertArtifactId(input.rule_pack_id),
     rules,
-    acknowledged_review_item_ids: input.acknowledged_review_item_ids.map(assertArtifactId)
+    review_item_resolutions: reviewItemResolutions
   };
 }

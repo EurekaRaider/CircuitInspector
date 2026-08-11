@@ -29,10 +29,16 @@ describe("viewer IPC security boundaries", () => {
   });
 
   it("validates rule draft mutations before they cross IPC", () => {
-    const valid = assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [{ id: "rule-1" }], acknowledged_review_item_ids: ["review-1"] });
+    const valid = assertRuleDraftUpdate({
+      rule_pack_id: "rules-1",
+      rules: [{ id: "rule-1" }],
+      review_item_resolutions: [{ review_item_id: "review-1", decision: "MODIFY_RULE", note: "Updated threshold", rule_id: "rule-1" }]
+    });
     expect(valid.rule_pack_id).toBe("rules-1");
-    expect(() => assertRuleDraftUpdate({ rule_pack_id: "../rules", rules: [], acknowledged_review_item_ids: [] })).toThrow(/Invalid/);
-    expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [{ id: "../rule" }], acknowledged_review_item_ids: [] })).toThrow(/Invalid/);
-    expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [], acknowledged_review_item_ids: "review-1" })).toThrow(/Invalid/);
+    expect(valid.review_item_resolutions[0]?.decision).toBe("MODIFY_RULE");
+    expect(() => assertRuleDraftUpdate({ rule_pack_id: "../rules", rules: [], review_item_resolutions: [] })).toThrow(/Invalid/);
+    expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [{ id: "../rule" }], review_item_resolutions: [] })).toThrow(/Invalid/);
+    expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [], review_item_resolutions: "review-1" })).toThrow(/Invalid/);
+    expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [], review_item_resolutions: [{ review_item_id: "review-1", decision: "SKIP", note: "", rule_id: null }] })).toThrow(/Invalid/);
   });
 });

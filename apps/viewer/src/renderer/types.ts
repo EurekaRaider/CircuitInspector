@@ -1,7 +1,17 @@
 import type {
+  AnalysisStaleState,
   ArtifactCatalog,
   ArtifactKind,
   ConnectorMapping,
+  ControlledTestBaseline,
+  LayoutTestAccessAnalysis,
+  LayoutBaselineConfirmation,
+  ManufacturingTestRequirement,
+  RuleDocumentDiagnostic,
+  RuleDocumentValidation,
+  RuleReviewDecision,
+  RuleReviewItem,
+  RuleReviewResolution,
   SchematicComponent,
   SchematicDocument,
   SchematicGraphPin,
@@ -11,12 +21,15 @@ import type {
   TableFormat,
   TableImportResult,
   TableKind,
+  TestMethodCoverage,
+  TestPlanApproval,
+  WibInterfaceContract,
   WibConstraintDefinition,
   WibConstraintSet,
   WibWorkflowDraft
 } from "@circuit-inspector/contracts";
 
-export type { ArtifactCatalog, ArtifactKind, ConnectorMapping, SchematicDocument, TableFormat, TableImportResult, TableKind, WibConstraintDefinition, WibConstraintSet, WibWorkflowDraft };
+export type { ArtifactCatalog, ArtifactKind, ConnectorMapping, LayoutBaselineConfirmation, LayoutTestAccessAnalysis, ManufacturingTestRequirement, RuleDocumentDiagnostic, RuleDocumentValidation, RuleReviewDecision, RuleReviewItem, RuleReviewResolution, SchematicDocument, TableFormat, TableImportResult, TableKind, TestMethodCoverage, WibConstraintDefinition, WibConstraintSet, WibInterfaceContract, WibWorkflowDraft };
 
 export type CoverageLevel = "EXPLICIT" | "SUPPLEMENTED" | "INFERRED" | "MISSING";
 
@@ -37,6 +50,7 @@ export interface LayerSummary {
 
 export interface DesignSummary {
   id: string;
+  content_hash: string;
   format: "ODBPP" | "GERBER_PACKAGE";
   source_path: string;
   bounds: BoundsNm;
@@ -84,14 +98,16 @@ export interface RulePack {
   title: string;
   status: "DRAFT" | "APPROVED" | "DEPRECATED";
   rules: RuleDefinition[];
-  review_items: Array<{
-    id: string;
-    code: "RELATIVE_THRESHOLD" | "AMBIGUOUS_THRESHOLD" | "NON_EXECUTABLE_GUIDANCE" | "UNSUPPORTED_TARGET" | "LEGACY_AUTO_SEVERITY";
-    message: string;
-    acknowledged: boolean;
-    citation: RuleCitation;
-  }>;
+  review_items: RuleReviewItem[];
   approval: { approved_by: string; approved_at: string; content_hash: string } | null;
+}
+
+export interface RulePackExtractionResponse {
+  rule_pack: RulePack | null;
+  passage_count: number;
+  rule_count: number;
+  rag_index_path: string;
+  validation: RuleDocumentValidation;
 }
 
 export interface RuleDefinition {
@@ -214,6 +230,7 @@ export interface WiringAnalysis {
   report_uri: string;
   report_path: string;
   diagnostics: Array<{ code: string; severity: "INFO" | "WARNING" | "ERROR"; message: string }>;
+  stale?: AnalysisStaleState;
 }
 
 export interface SchematicPinout {
@@ -261,7 +278,7 @@ export interface WibDesignRecommendation {
 export interface WibConstraint {
   id: string;
   status: "REVIEW";
-  verification_mode: "DOCUMENT_BACKED" | "MANUAL_IMPLEMENTATION_CONFIRMATION" | "MANUAL_FACTORY_CONFIRMATION";
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
   area: string;
   requirement: string;
   metric: string;
@@ -275,12 +292,18 @@ export interface WibConstraint {
 }
 
 export interface TestRecommendationAnalysis {
-  schema_version?: 1;
+  schema_version: 2;
   kind: "MANUFACTURING_TEST_RECOMMENDATIONS";
   id: string;
+  product_pinout_id: string;
+  lifecycle_status: "DRAFT" | "APPROVED" | "SUPERSEDED";
+  baseline: ControlledTestBaseline;
+  approval: TestPlanApproval | null;
   verdict: "REVIEW";
   verification_mode: "DOCUMENT_BACKED";
   product: SchematicPinout;
+  method_matrix: TestMethodCoverage[];
+  requirements: ManufacturingTestRequirement[];
   recommendation_count: number;
   recommendations: TestRecommendation[];
   wib_design_recommendations: WibDesignRecommendation[];
@@ -288,13 +311,14 @@ export interface TestRecommendationAnalysis {
   diagnostics: Array<{ code: string; severity: string; message: string }>;
   report_uri: string;
   report_path: string;
+  stale?: AnalysisStaleState;
 }
 
 export interface WibConstraintResult {
   id: string;
   constraint_id: string;
   status: Violation["verdict"];
-  verification_mode: "DOCUMENT_BACKED" | "MANUAL_IMPLEMENTATION_CONFIRMATION" | "MANUAL_FACTORY_CONFIRMATION";
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
   area: string;
   requirement: string;
   comparator: string;
@@ -312,6 +336,13 @@ export interface WibQualificationAnalysis {
   product_pinout_id: string;
   wib_pinout_id: string;
   constraint_set_id: string;
+  interface_contract_id?: string;
+  test_plan_id?: string;
+  product_content_hash?: string;
+  wib_content_hash?: string;
+  interface_contract_content_hash?: string;
+  test_plan_content_hash?: string;
+  constraint_set_content_hash?: string;
   wiring_analysis_id: string;
   wiring_verdict: Violation["verdict"];
   pass_count: number;
@@ -319,12 +350,27 @@ export interface WibQualificationAnalysis {
   review_count: number;
   not_applicable_count: number;
   constraint_results: WibConstraintResult[];
+  requirement_results?: Array<{
+    id: string;
+    requirement_id: string;
+    status: Violation["verdict"];
+    verification_mode: "DOCUMENT_BACKED";
+    access_strategy: string;
+    target_net_names: string[];
+    wiring_connection_ids: string[];
+    responsibility_boundary: string;
+    message: string;
+    evidence: string[];
+  }>;
+  production_readiness_verdict?: "REVIEW";
+  factory_confirmation_items?: Array<{ id: string; status: "REVIEW"; verification_mode: "MANUAL_FACTORY_CONFIRMATION"; requirement: string; closure_evidence: string }>;
   violations: Array<WibConstraintResult & { rule_id: string; title: string; severity: "ERROR" | "WARNING" }>;
   report_uri: string;
   report_path: string;
+  stale?: AnalysisStaleState;
 }
 
-export type DocumentAnalysis = WiringAnalysis | TestRecommendationAnalysis | WibQualificationAnalysis;
+export type DocumentAnalysis = WiringAnalysis | TestRecommendationAnalysis | LayoutTestAccessAnalysis | WibQualificationAnalysis;
 export type AnyAnalysis = AnalysisSummary | DocumentAnalysis;
 
 export interface TilePayload {
@@ -352,10 +398,17 @@ export interface ViewerApi {
     additions: Array<{ source_kind: "COMPONENT" | "FEATURE"; source_id: string }>;
   }): Promise<{ summary: DesignSummary; test_points: TestPointCandidate[] }>;
   listRulePacks(): Promise<{ rule_packs: RulePack[] }>;
-  updateRulePack(input: { rule_pack_id: string; rules: RuleDefinition[]; acknowledged_review_item_ids: string[] }): Promise<RulePack>;
+  updateRulePack(input: {
+    rule_pack_id: string;
+    rules: RuleDefinition[];
+    review_item_resolutions: Array<{ review_item_id: string } & RuleReviewResolution>;
+  }): Promise<RulePack>;
   deleteRulePack(rulePackId: string): Promise<{ id: string; deleted: true }>;
   approveRulePack(rulePackId: string, approvedBy: string): Promise<RulePack>;
   runAnalysis(designId: string, rulePackId: string): Promise<AnalysisSummary>;
+  analyzeTestAccess(input: { design_id: string; approved_test_plan_id: string; approved_rule_pack_id: string }): Promise<LayoutTestAccessAnalysis>;
+  confirmLayoutBaseline(input: { design_id: string; approved_test_plan_id: string; source_units: "MM" | "INCH" | "MIXED"; coordinate_origin: string; bottom_mirrored_in_top_view: boolean; panel_step_repeat: string; approved_by: string }): Promise<LayoutBaselineConfirmation>;
+  readLayoutBaseline(designId: string): Promise<LayoutBaselineConfirmation | null>;
   queryViolations(input: Record<string, unknown>): Promise<{ analysis_id: string; total: number; offset: number; violations: Violation[] }>;
   renderEvidence(input: Record<string, unknown>): Promise<{ analysis_id: string; evidence: Array<{ violation_id: string; png_path: string; svg_path: string }> }>;
   readAnalysis(analysisId: string): Promise<AnyAnalysis>;
@@ -363,7 +416,7 @@ export interface ViewerApi {
   chooseWorkbenchInput(kind: "RULE_DOCUMENT" | "SCHEMATIC" | "TABLE", multiple: boolean, locale: "zh-CN" | "en-US"): Promise<string[]>;
   listArtifacts(): Promise<ArtifactCatalog>;
   deleteArtifact(kind: ArtifactKind, id: string): Promise<{ id: string; kind: ArtifactKind; deleted: true }>;
-  extractRulePack(input: { paths: string[]; title?: string }): Promise<{ rule_pack: RulePack; passage_count: number; rule_count: number; rag_index_path: string }>;
+  extractRulePack(input: { paths: string[]; title?: string }): Promise<RulePackExtractionResponse>;
   importSchematic(input: { path: string; role: "PRODUCT" | "WIB"; revision?: string }): Promise<SchematicDocument>;
   readSchematic(id: string): Promise<SchematicDocument>;
   traceSchematic(input: { schematic_id: string; candidate_id: string }): Promise<SchematicDocument>;
@@ -392,15 +445,37 @@ export interface ViewerApi {
     case_sensitive: boolean;
   }): Promise<WiringAnalysis>;
   recommendTests(productPinoutId: string): Promise<TestRecommendationAnalysis>;
+  readTestPlan(id: string): Promise<TestRecommendationAnalysis>;
+  updateTestPlan(input: { test_plan_id: string; requirements: ManufacturingTestRequirement[]; method_matrix: TestMethodCoverage[] }): Promise<TestRecommendationAnalysis>;
+  approveTestPlan(input: {
+    test_plan_id: string;
+    approved_by: string;
+    variant?: string | null;
+    panel?: string | null;
+    factory: string;
+    line: string;
+    tester: string;
+    approved_rule_pack_id: string;
+  }): Promise<TestRecommendationAnalysis>;
   createConstraintSet(input: { title: string; revision: string; approved_by: string; constraints: WibConstraintDefinition[] }): Promise<WibConstraintSet>;
   readConstraintSet(id: string): Promise<WibConstraintSet>;
-  qualifyWib(input: {
+  createInterfaceContract(input: {
+    title: string;
+    revision: string;
+    approved_by: string;
     product_pinout_id: string;
     wib_pinout_id: string;
-    constraint_set_id: string;
     connector_mappings: ConnectorMapping[];
     net_aliases: Array<{ product_net: string; wib_net: string }>;
     case_sensitive: boolean;
+  }): Promise<WibInterfaceContract>;
+  readInterfaceContract(id: string): Promise<WibInterfaceContract>;
+  qualifyWib(input: {
+    product_pinout_id: string;
+    wib_pinout_id: string;
+    interface_contract_id: string;
+    approved_test_plan_id: string;
+    approved_constraint_set_id: string;
   }): Promise<WibQualificationAnalysis>;
   saveWibDraft(draft: WibWorkflowDraft): Promise<WibWorkflowDraft>;
   readWibDraft(id: string): Promise<WibWorkflowDraft>;

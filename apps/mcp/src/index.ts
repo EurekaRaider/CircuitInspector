@@ -5,21 +5,35 @@ import { pathToFileURL } from "node:url";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import type {
+  AnalysisSummary,
+  DesignSummary,
+  ManufacturingTestRequirement,
+  RulePack,
+  TestMethodCoverage
+} from "@circuit-inspector/contracts";
 import { CoreClient } from "./core-client.js";
 import {
+  analyzeTestAccess,
+  approveManufacturingTestPlan,
+  confirmLayoutBaseline,
   compareFixtureWiring,
   applySchematicCorrections,
   confirmSchematicPaths,
   confirmSchematicPinout,
   importSchematicDocument,
+  invalidateDependentAnalyses,
   traceSchematicInterface,
   readLocalDocumentAnalysis,
   readWiringAnalysis,
   recommendManufacturingTests,
+  updateManufacturingTestPlan,
+  createWibInterfaceContract,
   createWibConstraintSet,
-  extractRulePack,
-  qualifyWibDesign
+  extractRulePackWithValidation,
+  qualifyWibClosedLoop
 } from "@circuit-inspector/workflows";
+import { ruleValidationText } from "./rule-validation.js";
 
 const cacheDir = path.resolve(
   process.env.CIRCUIT_INSPECTOR_CACHE_DIR ?? path.join(os.homedir(), ".circuit-inspector", "cache")
@@ -34,6 +48,36 @@ const coverageSchema = z.object({
   pins: z.string(),
   test_points: z.string(),
   drills: z.string()
+});
+
+const ruleCitationSchema = z.object({
+  source_path: z.string(),
+  source_hash: z.string(),
+  page: z.number().int().positive().nullable(),
+  paragraph: z.number().int().positive().nullable(),
+  excerpt: z.string()
+});
+
+const ruleDefinitionSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  kind: z.enum(["MINIMUM_DISTANCE", "MINIMUM_WIDTH", "MINIMUM_ANNULAR_RING", "MINIMUM_DIAMETER"]),
+  source: z.enum(["TEST_POINT", "COMPONENT", "COPPER", "BOARD_EDGE", "DRILL", "TOOLING_HOLE", "PANEL_TAB", "BGA_CSP", "SHIELD_FENCE", "UV_GLUE"]),
+  target: z.enum(["TEST_POINT", "COMPONENT", "COPPER", "BOARD_EDGE", "DRILL", "TOOLING_HOLE", "PANEL_TAB", "BGA_CSP", "SHIELD_FENCE", "UV_GLUE"]).nullable(),
+  metric: z.enum(["CENTER_TO_CENTER", "EDGE_TO_EDGE", "BODY_TO_PAD"]).nullable(),
+  threshold_nm: z.number().int(),
+  severity: z.enum(["INFO", "WARNING", "ERROR"]).nullable(),
+  layer_functions: z.array(z.string()),
+  same_net_only: z.boolean(),
+  different_net_only: z.boolean(),
+  citation: ruleCitationSchema
+});
+
+const reviewResolutionSchema = z.object({
+  review_item_id: z.string().min(1),
+  decision: z.enum(["ACCEPT_SUGGESTION", "IGNORE", "MODIFY_RULE"]),
+  note: z.string(),
+  rule_id: z.string().min(1).nullable()
 });
 
 const schematicDocumentOutputSchema = {
@@ -159,6 +203,7 @@ server.registerTool(
   },
   async ({ schematic_id, corrected_by, candidate_id, corrections }) => {
     const document = await applySchematicCorrections(schematic_id, corrections, corrected_by, cacheDir, candidate_id);
+    await invalidateSchematicAnalyses(schematic_id, "Schematic graph corrections changed controlled connectivity evidence");
     return toolResult(document as unknown as Record<string, unknown>, `Applied ${corrections.length} correction(s); prior confirmation was invalidated and paths were retraced.`);
   }
 );
@@ -179,6 +224,7 @@ server.registerTool(
   },
   async ({ schematic_id, candidate_id, path_ids, confirmed_by }) => {
     const document = await confirmSchematicPaths(schematic_id, candidate_id, path_ids, confirmed_by, cacheDir);
+    await invalidateSchematicAnalyses(schematic_id, "Schematic path confirmation changed the authoritative analysis scope");
     return toolResult(document as unknown as Record<string, unknown>, `Confirmed ${path_ids.length} selected path(s) in scope ${document.confirmed_scopes[0]?.id ?? "-"}.`);
   }
 );
@@ -216,6 +262,7 @@ server.registerTool(
   },
   async ({ pinout_id, confirmed_by, pins, revision, design_metrics }) => {
     const document = await confirmSchematicPinout(pinout_id, confirmed_by, cacheDir, pins, revision, design_metrics);
+    await invalidateSchematicAnalyses(pinout_id, "Confirmed pinout rows, revision, or design metrics changed");
     return toolResult(document as unknown as Record<string, unknown>, `Confirmed ${document.role} pinout ${document.id} with ${document.pins.length} pin row(s).`);
   }
 );
@@ -288,11 +335,17 @@ server.registerTool(
     inputSchema: { product_pinout_id: z.string().min(1) },
     outputSchema: {
       kind: z.literal("MANUFACTURING_TEST_RECOMMENDATIONS"),
+      schema_version: z.literal(2),
       id: z.string(),
       product_pinout_id: z.string(),
       product: z.record(z.string(), z.unknown()),
+      lifecycle_status: z.enum(["DRAFT", "APPROVED", "SUPERSEDED"]),
+      baseline: z.record(z.string(), z.unknown()),
+      approval: z.record(z.string(), z.unknown()).nullable(),
       verdict: z.literal("REVIEW"),
       verification_mode: z.literal("DOCUMENT_BACKED"),
+      method_matrix: z.array(z.record(z.string(), z.unknown())),
+      requirements: z.array(z.record(z.string(), z.unknown())),
       recommendation_count: z.number(),
       recommendations: z.array(z.record(z.string(), z.unknown())),
       wib_design_recommendations: z.array(z.record(z.string(), z.unknown())),
@@ -316,6 +369,63 @@ server.registerTool(
       ],
       structuredContent: plan as unknown as Record<string, unknown>
     };
+  }
+);
+
+server.registerTool(
+  "update_manufacturing_test_plan",
+  {
+    title: "Review and update a draft manufacturing test plan",
+    description: "Replace the complete requirement and method-fault matrices of a DRAFT plan after AI or human review. The workflow validates controlled fields and rejects mutation after approval.",
+    inputSchema: {
+      test_plan_id: z.string().min(1),
+      requirements: z.array(z.record(z.string(), z.unknown())).min(1),
+      method_matrix: z.array(z.record(z.string(), z.unknown())).min(1)
+    },
+    outputSchema: { test_plan: z.record(z.string(), z.unknown()) },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+  },
+  async ({ test_plan_id, requirements, method_matrix }) => {
+    const plan = await updateManufacturingTestPlan(
+      test_plan_id,
+      requirements as unknown as ManufacturingTestRequirement[],
+      method_matrix as unknown as TestMethodCoverage[],
+      cacheDir
+    );
+    return toolResult({ test_plan: plan as unknown as Record<string, unknown> }, `Updated DRAFT DFT plan ${plan.id}; authoritative approval is still required.`);
+  }
+);
+
+server.registerTool(
+  "approve_manufacturing_test_plan",
+  {
+    title: "Approve the DFT requirement baseline",
+    description: "Freeze what manufacturing tests must cover against a confirmed product revision and an already approved factory/line/tester rule pack. This does not release the production test solution.",
+    inputSchema: {
+      test_plan_id: z.string().min(1),
+      approved_by: z.string().min(1),
+      variant: z.string().min(1).nullable().optional(),
+      panel: z.string().min(1).nullable().optional(),
+      factory: z.string().min(1),
+      line: z.string().min(1),
+      tester: z.string().min(1),
+      approved_rule_pack_id: z.string().min(1)
+    },
+    outputSchema: { test_plan: z.record(z.string(), z.unknown()) },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+  },
+  async ({ test_plan_id, approved_by, variant, panel, factory, line, tester, approved_rule_pack_id }) => {
+    await requireApprovedRulePack(approved_rule_pack_id);
+    const plan = await approveManufacturingTestPlan(test_plan_id, {
+      approvedBy: approved_by,
+      ...(variant !== undefined ? { variant } : {}),
+      ...(panel !== undefined ? { panel } : {}),
+      factory,
+      line,
+      tester,
+      approvedRulePackId: approved_rule_pack_id
+    }, cacheDir);
+    return toolResult({ test_plan: plan as unknown as Record<string, unknown> }, `Approved DFT requirement baseline ${plan.id} at SHA-256 ${plan.approval?.content_hash ?? "MISSING"}. Fixture, station, powered, throughput, and pilot release remain separate gates.`);
   }
 );
 
@@ -343,7 +453,7 @@ server.registerTool(
         comparator: z.enum(["EXACT", "ALL", "NONE", "MAXIMUM", "MINIMUM", "RANGE"]),
         required_value: constraintValueSchema,
         unit: z.string().nullable().optional(),
-        verification_mode: z.enum(["DOCUMENT_BACKED", "MANUAL_IMPLEMENTATION_CONFIRMATION", "MANUAL_FACTORY_CONFIRMATION"]),
+        verification_mode: z.enum(["DOCUMENT_BACKED", "MANUAL_FACTORY_CONFIRMATION"]),
         source_authority: z.string().min(1),
         scope: z.object({ connector: z.string().min(1).optional(), pin: z.string().min(1).optional(), net_name: z.string().min(1).optional() }).optional(),
         allowed_component_kinds: z.array(z.enum(["CONNECTOR", "IC", "PASSIVE", "PROTECTION", "POWER", "UNKNOWN"])).optional(),
@@ -394,21 +504,68 @@ server.registerTool(
 );
 
 server.registerTool(
-  "qualify_wib_design",
+  "create_wib_interface_contract",
   {
-    title: "Qualify final WIB design",
-    description: "Close the loop across a confirmed product schematic, confirmed actual WIB schematic/design metrics, and an approved WIB hard-constraint set. PASS requires every applicable constraint to have supported evidence and pass.",
+    title: "Approve a product-to-WIB pin interface contract",
+    description: "Freeze a complete explicit connector and pin mapping between confirmed product and WIB revisions. NET NAME aliases are controlled hints within this exact mapping, never a substitute for pin identity.",
     inputSchema: {
+      title: z.string().min(1),
+      revision: z.string().min(1),
+      approved_by: z.string().min(1),
       product_pinout_id: z.string().min(1),
       wib_pinout_id: z.string().min(1),
-      constraint_set_id: z.string().min(1),
       connector_mappings: z.array(z.object({
         product_connector: z.string().min(1),
         wib_connector: z.string().min(1),
-        pin_map: z.array(z.object({ product_pin: z.string().min(1), wib_pin: z.string().min(1) })).min(1).optional()
-      })).min(1).optional(),
+        pin_map: z.array(z.object({ product_pin: z.string().min(1), wib_pin: z.string().min(1) })).min(1)
+      })).min(1),
       net_aliases: z.array(z.object({ product_net: z.string().min(1), wib_net: z.string().min(1) })).optional(),
       case_sensitive: z.boolean().default(false)
+    },
+    outputSchema: {
+      id: z.string(),
+      title: z.string(),
+      revision: z.string(),
+      status: z.literal("APPROVED"),
+      product_pinout_id: z.string(),
+      wib_pinout_id: z.string(),
+      product_revision: z.string(),
+      wib_revision: z.string(),
+      connector_mappings: z.array(z.record(z.string(), z.unknown())),
+      net_aliases: z.array(z.record(z.string(), z.unknown())),
+      case_sensitive: z.boolean(),
+      approved_by: z.string(),
+      approved_at: z.string(),
+      content_hash: z.string()
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ title, revision, approved_by, product_pinout_id, wib_pinout_id, connector_mappings, net_aliases, case_sensitive }) => {
+    const contract = await createWibInterfaceContract({
+      title,
+      revision,
+      approvedBy: approved_by,
+      productPinoutId: product_pinout_id,
+      wibPinoutId: wib_pinout_id,
+      connectorMappings: connector_mappings,
+      ...(net_aliases ? { netAliases: net_aliases } : {}),
+      caseSensitive: case_sensitive
+    }, cacheDir);
+    return toolResult(contract as unknown as Record<string, unknown>, `Approved complete pin interface contract ${contract.id} revision ${contract.revision}; actual wiring is qualified separately.`);
+  }
+);
+
+server.registerTool(
+  "qualify_wib_design",
+  {
+    title: "Qualify final WIB design",
+    description: "Qualify confirmed product and actual WIB schematics against an approved pin interface contract, approved DFT baseline, and approved electrical/resource constraint set. Static design PASS never implies production release.",
+    inputSchema: {
+      product_pinout_id: z.string().min(1),
+      wib_pinout_id: z.string().min(1),
+      interface_contract_id: z.string().min(1),
+      approved_test_plan_id: z.string().min(1),
+      approved_constraint_set_id: z.string().min(1)
     },
     outputSchema: {
       kind: z.literal("WIB_DESIGN_QUALIFICATION"),
@@ -416,7 +573,15 @@ server.registerTool(
       product_pinout_id: z.string(),
       wib_pinout_id: z.string(),
       constraint_set_id: z.string(),
+      interface_contract_id: z.string(),
+      test_plan_id: z.string(),
+      product_content_hash: z.string(),
+      wib_content_hash: z.string(),
+      interface_contract_content_hash: z.string(),
+      test_plan_content_hash: z.string(),
+      constraint_set_content_hash: z.string(),
       verdict: z.enum(["PASS", "FAIL", "REVIEW", "NOT_APPLICABLE"]),
+      production_readiness_verdict: z.literal("REVIEW"),
       verification_mode: z.literal("DOCUMENT_BACKED"),
       wiring_analysis_id: z.string(),
       wiring_verdict: z.enum(["PASS", "FAIL", "REVIEW", "NOT_APPLICABLE"]),
@@ -425,6 +590,8 @@ server.registerTool(
       review_count: z.number(),
       not_applicable_count: z.number(),
       constraint_results: z.array(z.record(z.string(), z.unknown())),
+      requirement_results: z.array(z.record(z.string(), z.unknown())),
+      factory_confirmation_items: z.array(z.record(z.string(), z.unknown())),
       violations: z.array(z.record(z.string(), z.unknown())),
       report_uri: z.string(),
       report_path: z.string(),
@@ -432,17 +599,13 @@ server.registerTool(
     },
     annotations: { readOnlyHint: true, openWorldHint: false }
   },
-  async ({ product_pinout_id, wib_pinout_id, constraint_set_id, connector_mappings, net_aliases, case_sensitive }, extra) => {
-    await progress(extra, 0, 100, "Running closed-loop WIB wiring and hard-constraint qualification");
-    const qualification = await qualifyWibDesign(product_pinout_id, wib_pinout_id, constraint_set_id, cacheDir, {
-      ...(connector_mappings ? { connectorMappings: connector_mappings } : {}),
-      ...(net_aliases ? { netAliases: net_aliases } : {}),
-      caseSensitive: case_sensitive
-    });
-    await progress(extra, 100, 100, "Final WIB qualification report is ready");
+  async ({ product_pinout_id, wib_pinout_id, interface_contract_id, approved_test_plan_id, approved_constraint_set_id }, extra) => {
+    await progress(extra, 0, 100, "Running closed-loop WIB pin-contract, DFT-traceability, and constraint qualification");
+    const qualification = await qualifyWibClosedLoop(product_pinout_id, wib_pinout_id, interface_contract_id, approved_test_plan_id, approved_constraint_set_id, cacheDir);
+    await progress(extra, 100, 100, "WIB static qualification is ready; production gates remain REVIEW");
     return {
       content: [
-        { type: "text" as const, text: `Final WIB qualification ${qualification.id}: ${qualification.verdict}. PASS ${qualification.pass_count}, FAIL ${qualification.fail_count}, REVIEW ${qualification.review_count}.` },
+        { type: "text" as const, text: `WIB static qualification ${qualification.id}: ${qualification.verdict}. Production readiness: REVIEW. PASS ${qualification.pass_count}, FAIL ${qualification.fail_count}, REVIEW ${qualification.review_count}, N/A ${qualification.not_applicable_count}.` },
         { type: "resource_link" as const, name: "Open final WIB qualification report", uri: qualification.report_uri, mimeType: "text/html" },
         { type: "resource_link" as const, name: "Open final WIB qualification in CircuitInspector Viewer", uri: viewerLink(qualification.id), mimeType: "application/x-circuit-inspector" }
       ],
@@ -458,25 +621,63 @@ server.registerTool(
     description: "Extract auditable DFT/DFM rule candidates from local PDF, DOCX, Markdown, or text documents. The result remains DRAFT until approved in the Viewer.",
     inputSchema: { paths: z.array(z.string().min(1)).min(1), title: z.string().optional() },
     outputSchema: {
-      rule_pack: z.record(z.string(), z.unknown()),
+      rule_pack: z.record(z.string(), z.unknown()).nullable(),
       passage_count: z.number(),
       rule_count: z.number(),
-      rag_index_path: z.string()
+      rag_index_path: z.string(),
+      validation: z.record(z.string(), z.unknown())
     },
     annotations: { readOnlyHint: false, openWorldHint: false }
   },
   async ({ paths, title }, extra) => {
-    await progress(extra, 0, 100, "Extracting local rule evidence");
-    const extracted = await extractRulePack(paths, cacheDir, title);
-    await core.request("save_rule_pack", { cache_dir: cacheDir, rule_pack: extracted.rulePack }, extra.signal);
-    await progress(extra, 100, 100, "Draft rule pack created; human approval is still required");
+    await progress(extra, 0, 100, "Validating the rule-source template and extracting local evidence");
+    const extracted = await extractRulePackWithValidation(paths, cacheDir, title);
+    if (extracted.rulePack) {
+      await core.request("save_rule_pack", { cache_dir: cacheDir, rule_pack: extracted.rulePack }, extra.signal);
+    }
+    await progress(extra, 100, 100, extracted.rulePack
+      ? "Draft rule pack created; review the reported diagnostics before approval"
+      : "Rule-source validation failed; no rule pack was created");
     const structured = {
       rule_pack: extracted.rulePack,
       passage_count: extracted.passageCount,
       rule_count: extracted.ruleCount,
-      rag_index_path: extracted.ragIndexPath
+      rag_index_path: extracted.ragIndexPath,
+      validation: extracted.validation
     };
-    return toolResult(structured, `Created DRAFT rule pack ${extracted.rulePack.id} with ${extracted.ruleCount} candidate rules. It cannot run until approved in the Viewer.`);
+    const result = toolResult(structured, ruleValidationText(extracted.rulePack?.id ?? null, extracted.ruleCount, extracted.validation));
+    return extracted.rulePack ? result : { ...result, isError: true };
+  }
+);
+
+server.registerTool(
+  "update_rule_pack_draft",
+  {
+    title: "Resolve and edit a draft PCB rule pack",
+    description: "Update an existing DRAFT rule pack. Review items may accept the program suggestion, ignore it with a reason, or link to a manually modified candidate rule. Pass the complete current rule list and complete current resolution list. This tool never approves a rule pack.",
+    inputSchema: {
+      rule_pack_id: z.string().min(1),
+      rules: z.array(ruleDefinitionSchema),
+      review_item_resolutions: z.array(reviewResolutionSchema)
+    },
+    outputSchema: { rule_pack: z.record(z.string(), z.unknown()) },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+  },
+  async ({ rule_pack_id, rules, review_item_resolutions }) => {
+    const rulePack = await core.request<Record<string, unknown>>("update_rule_pack", {
+      cache_dir: cacheDir,
+      rule_pack_id,
+      rules,
+      review_item_resolutions
+    });
+    const counts = review_item_resolutions.reduce<Record<string, number>>((current, resolution) => {
+      current[resolution.decision] = (current[resolution.decision] ?? 0) + 1;
+      return current;
+    }, {});
+    return toolResult(
+      { rule_pack: rulePack },
+      `Updated DRAFT rule pack ${rule_pack_id}: ${rules.length} candidate rule(s); ${counts.ACCEPT_SUGGESTION ?? 0} accepted suggestion(s), ${counts.IGNORE ?? 0} ignored with recorded reasons, and ${counts.MODIFY_RULE ?? 0} linked rule modification(s). Human approval in CircuitInspector Viewer is still required.`
+    );
   }
 );
 
@@ -532,6 +733,104 @@ server.registerTool(
         { type: "resource_link" as const, name: "Open in CircuitInspector Viewer", uri: viewer, mimeType: "application/x-circuit-inspector" }
       ],
       structuredContent: result
+    };
+  }
+);
+
+server.registerTool(
+  "confirm_layout_baseline",
+  {
+    title: "Approve the controlled ODB++ Layout baseline",
+    description: "Bind an exact ODB++ hash to the approved DFT plan and record source units, coordinate origin, Top/Bottom viewing convention, mirror convention, and Panel step-repeat applicability. This is document-backed configuration approval, not factory release.",
+    inputSchema: {
+      design_id: z.string().min(1),
+      approved_test_plan_id: z.string().min(1),
+      source_units: z.enum(["MM", "INCH", "MIXED"]),
+      coordinate_origin: z.string().min(1),
+      bottom_mirrored_in_top_view: z.boolean(),
+      panel_step_repeat: z.string().min(1),
+      approved_by: z.string().min(1)
+    },
+    outputSchema: { layout_baseline: z.record(z.string(), z.unknown()) },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+  },
+  async ({ design_id, approved_test_plan_id, source_units, coordinate_origin, bottom_mirrored_in_top_view, panel_step_repeat, approved_by }, extra) => {
+    const design = await core.request<DesignSummary>("get_design_summary", { cache_dir: cacheDir, design_id }, extra.signal);
+    const baseline = await confirmLayoutBaseline({ design, approvedTestPlanId: approved_test_plan_id, sourceUnits: source_units, coordinateOrigin: coordinate_origin, bottomMirroredInTopView: bottom_mirrored_in_top_view, panelStepRepeat: panel_step_repeat, approvedBy: approved_by }, cacheDir);
+    return toolResult({ layout_baseline: baseline as unknown as Record<string, unknown> }, `Approved controlled Layout baseline ${baseline.id} for design SHA-256 ${baseline.design_content_hash}.`);
+  }
+);
+
+server.registerTool(
+  "analyze_test_access",
+  {
+    title: "Analyze approved DFT requirements against PCB test access",
+    description: "Build the approved requirement-to-access traceability matrix, distinguish physical and virtual access, apply the same approved geometry rule pack, and keep factory/fixture production release as REVIEW.",
+    inputSchema: {
+      design_id: z.string().min(1),
+      approved_test_plan_id: z.string().min(1),
+      approved_rule_pack_id: z.string().min(1)
+    },
+    outputSchema: {
+      schema_version: z.literal(1),
+      kind: z.literal("LAYOUT_TEST_ACCESS_ANALYSIS"),
+      id: z.string(),
+      design_id: z.string(),
+      design_content_hash: z.string(),
+      test_plan_id: z.string(),
+      test_plan_content_hash: z.string(),
+      rule_pack_id: z.string(),
+      rule_pack_content_hash: z.string(),
+      layout_baseline_confirmation_id: z.string().nullable(),
+      layout_baseline_content_hash: z.string().nullable(),
+      geometry_analysis_id: z.string(),
+      verdict: z.enum(["PASS", "FAIL", "REVIEW", "NOT_APPLICABLE"]),
+      production_readiness_verdict: z.literal("REVIEW"),
+      pass_count: z.number(),
+      fail_count: z.number(),
+      review_count: z.number(),
+      not_applicable_count: z.number(),
+      baseline_checks: z.array(z.record(z.string(), z.unknown())),
+      mappings: z.array(z.record(z.string(), z.unknown())),
+      factory_confirmation_items: z.array(z.record(z.string(), z.unknown())),
+      diagnostics: z.array(z.record(z.string(), z.unknown())),
+      report_uri: z.string(),
+      report_path: z.string(),
+      elapsed_ms: z.number()
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  },
+  async ({ design_id, approved_test_plan_id, approved_rule_pack_id }, extra) => {
+    await progress(extra, 0, 100, "Loading the complete layout, approved DFT baseline, and approved rule pack");
+    const [design, pointsResult, rulePacks] = await Promise.all([
+      core.request<DesignSummary>("get_design_summary", { cache_dir: cacheDir, design_id }, extra.signal),
+      core.request<{ test_points: unknown[] }>("list_test_points", { cache_dir: cacheDir, design_id }, extra.signal),
+      core.request<{ rule_packs: RulePack[] }>("list_rule_packs", { cache_dir: cacheDir }, extra.signal)
+    ]);
+    const rulePack = rulePacks.rule_packs.find((candidate) => candidate.id === approved_rule_pack_id);
+    if (!rulePack || rulePack.status !== "APPROVED" || !rulePack.approval) throw new Error(`${approved_rule_pack_id} is not an approved rule pack`);
+    await progress(extra, 35, 100, "Running approved geometry rules across all imported layers and semantics");
+    const geometry = await core.request<AnalysisSummary>("analyze_design", {
+      cache_dir: cacheDir,
+      design_id,
+      rule_pack_id: approved_rule_pack_id
+    }, extra.signal);
+    await progress(extra, 70, 100, "Building requirement-to-physical-or-virtual access traceability");
+    const analysis = await analyzeTestAccess({
+      design,
+      testPoints: pointsResult.test_points as Parameters<typeof analyzeTestAccess>[0]["testPoints"],
+      geometryAnalysis: geometry,
+      rulePack,
+      testPlanId: approved_test_plan_id
+    }, cacheDir);
+    await progress(extra, 100, 100, "Layout DFT report is ready; production readiness remains REVIEW");
+    return {
+      content: [
+        { type: "text" as const, text: `Layout DFT ${analysis.id}: design ${analysis.verdict}; production readiness REVIEW. PASS ${analysis.pass_count}, FAIL ${analysis.fail_count}, REVIEW ${analysis.review_count}, N/A ${analysis.not_applicable_count}.` },
+        { type: "resource_link" as const, name: "Open Layout DFT report", uri: analysis.report_uri, mimeType: "text/html" },
+        { type: "resource_link" as const, name: "Open Layout DFT analysis in CircuitInspector Viewer", uri: viewerLink(analysis.id), mimeType: "application/x-circuit-inspector" }
+      ],
+      structuredContent: analysis as unknown as Record<string, unknown>
     };
   }
 );
@@ -677,6 +976,29 @@ async function progress(
 
 function toolResult<T extends Record<string, unknown>>(structuredContent: T, text: string) {
   return { content: [{ type: "text" as const, text }], structuredContent };
+}
+
+async function requireApprovedRulePack(rulePackId: string): Promise<RulePack> {
+  const result = await core.request<{ rule_packs: RulePack[] }>("list_rule_packs", { cache_dir: cacheDir });
+  const rulePack = result.rule_packs.find((candidate) => candidate.id === rulePackId);
+  if (!rulePack || rulePack.status !== "APPROVED" || !rulePack.approval) throw new Error(`${rulePackId} is not an approved rule pack`);
+  return rulePack;
+}
+
+async function invalidateSchematicAnalyses(schematicId: string, reason: string) {
+  const direct = await invalidateDependentAnalyses(
+    cacheDir,
+    (analysis) => analysis.product_pinout_id === schematicId || analysis.wib_pinout_id === schematicId,
+    `${reason}: ${schematicId}`
+  );
+  if (!direct.length) return;
+  const ids = new Set(direct);
+  await invalidateDependentAnalyses(
+    cacheDir,
+    (analysis) => (typeof analysis.test_plan_id === "string" && ids.has(analysis.test_plan_id))
+      || (typeof analysis.wiring_analysis_id === "string" && ids.has(analysis.wiring_analysis_id)),
+    `A controlled schematic dependency was invalidated: ${schematicId}`
+  );
 }
 
 function viewerLink(analysisId: string, issueId?: string): string {

@@ -1,27 +1,13 @@
 import type { LayerSummary, TestPointCandidate, Violation } from "./types";
 
-const DEFAULT_FUNCTIONS = [
-  "SIGNAL",
-  "POWER_GROUND",
-  "MIXED",
-  "COPPER",
-  "SOLDER_MASK",
-  "SOLDERMASK",
-  "SILK_SCREEN",
-  "LEGEND",
-  "COMPONENT"
-];
+const SHARED_CONTEXT_FUNCTIONS = ["PROFILE", "BOARD", "ROUT", "DRILL", "TOOL", "PANEL"];
 
 export function defaultLayerIds(layers: LayerSummary[], side: "TOP" | "BOTTOM") {
-  const profiles = layers.filter((layer) => layer.function.toUpperCase().includes("PROFILE"));
-  const surfaceLayers = layers.filter((layer) =>
-    layer.side === side
-    && DEFAULT_FUNCTIONS.some((value) => layer.function.toUpperCase().includes(value))
-  );
-  const selected = [...profiles, ...surfaceLayers]
+  const sharedContext = layers.filter((layer) => layer.side === "NA" && SHARED_CONTEXT_FUNCTIONS.some((value) => layer.function.toUpperCase().includes(value)));
+  const surfaceLayers = layers.filter((layer) => layer.side === side);
+  const selected = [...sharedContext, ...surfaceLayers]
     .map((layer) => layer.id);
-  if (selected.length) return [...new Set(selected)];
-  return layers.filter((layer) => layer.side === side).map((layer) => layer.id);
+  return [...new Set(selected)];
 }
 
 export function isolatedLayerIds(layers: LayerSummary[], layerId: string) {

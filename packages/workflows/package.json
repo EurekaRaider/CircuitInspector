@@ -12,8 +12,11 @@
     "./documents": "./src/documents.ts",
     "./wiring": "./src/wiring.ts",
     "./test-recommendations": "./src/test-recommendations.ts",
+    "./test-access": "./src/test-access.ts",
+    "./layout-baseline": "./src/layout-baseline.ts",
     "./wib-qualification": "./src/wib-qualification.ts",
     "./artifacts": "./src/artifacts.ts",
+    "./invalidation": "./src/invalidation.ts",
     "./tables": "./src/tables.ts"
   },
   "dependencies": {

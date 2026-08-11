@@ -1,6 +1,18 @@
 export type CoverageLevel = "EXPLICIT" | "SUPPLEMENTED" | "INFERRED" | "MISSING";
 export type Verdict = "PASS" | "FAIL" | "REVIEW" | "NOT_APPLICABLE";
 export type DesignFormat = "ODBPP" | "GERBER_PACKAGE";
+export type VerificationMode = "AUTOMATED_GEOMETRY" | "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
+export type TestPlanLifecycle = "DRAFT" | "APPROVED" | "SUPERSEDED";
+export type ManufacturingTestMethod = "BARE_BOARD_ELECTRICAL" | "SPI" | "AOI" | "AXI" | "FLYING_PROBE" | "ICT" | "BOUNDARY_SCAN" | "PROGRAMMING" | "FCT";
+export type TestMethodDisposition = "SELECTED" | "SUPPLEMENTAL" | "NOT_SELECTED";
+export type TestAccessStrategy = "PHYSICAL_PROBE" | "CONNECTOR" | "BOUNDARY_SCAN" | "PROGRAMMING_INTERFACE" | "BIST" | "FCT" | "TO_BE_ASSIGNED";
+export type TestStage = "BARE_BOARD" | "PRE_ASSEMBLY" | "POST_REFLOW" | "PRE_SHIELD_COATING" | "FINAL_ASSEMBLY";
+
+export interface AnalysisStaleState {
+  is_stale: true;
+  reason: string;
+  invalidated_at: string;
+}
 
 export interface SemanticCoverage {
   layers: CoverageLevel;
@@ -85,7 +97,46 @@ export interface RuleReviewItem {
   code: "RELATIVE_THRESHOLD" | "AMBIGUOUS_THRESHOLD" | "NON_EXECUTABLE_GUIDANCE" | "UNSUPPORTED_TARGET" | "LEGACY_AUTO_SEVERITY";
   message: string;
   acknowledged: boolean;
+  resolution: RuleReviewResolution | null;
   citation: RuleCitation;
+}
+
+export type RuleReviewDecision = "ACCEPT_SUGGESTION" | "IGNORE" | "MODIFY_RULE";
+
+export interface RuleReviewResolution {
+  decision: RuleReviewDecision;
+  note: string;
+  rule_id: string | null;
+}
+
+export interface RuleDocumentDiagnostic {
+  id: string;
+  code: string;
+  severity: "INFO" | "WARNING" | "ERROR";
+  blocks_generation: boolean;
+  blocks_approval: boolean;
+  source_path: string;
+  page: number | null;
+  line: number | null;
+  paragraph: number | null;
+  section: string | null;
+  rule_id: string | null;
+  field: string | null;
+  excerpt: string | null;
+  message: string;
+  suggestion: string;
+  message_zh: string;
+  suggestion_zh: string;
+}
+
+export interface RuleDocumentValidation {
+  schema: "CIRCUITINSPECTOR_RULE_SOURCE_V1" | "LEGACY" | "MIXED";
+  status: "VALID" | "REVIEW" | "INVALID";
+  diagnostics: RuleDocumentDiagnostic[];
+  error_count: number;
+  warning_count: number;
+  generation_blocker_count: number;
+  approval_blocker_count: number;
 }
 
 export interface AnalysisSummary {
@@ -101,6 +152,7 @@ export interface AnalysisSummary {
   report_uri: string;
   elapsed_ms: number;
   report_path?: string;
+  stale?: AnalysisStaleState;
 }
 
 export interface RuleDefinition {
@@ -397,16 +449,76 @@ export interface WiringAnalysis {
   diagnostics: Diagnostic[];
   report_uri: string;
   report_path: string;
+  elapsed_ms: number;
+  stale?: AnalysisStaleState;
+}
+
+export interface ControlledTestBaseline {
+  product_revision: string | null;
+  product_source_hash: string;
+  variant: string | null;
+  panel: string | null;
+  factory: string | null;
+  line: string | null;
+  tester: string | null;
+  approved_rule_pack_id: string | null;
+}
+
+export interface TestPlanApproval {
+  approved_by: string;
+  approved_at: string;
+  content_hash: string;
+  statement: string;
+}
+
+export interface TestMethodCoverage {
+  method: ManufacturingTestMethod;
+  disposition: TestMethodDisposition;
+  status: "REVIEW";
+  target_fault_classes: string[];
+  prerequisites: string[];
+  residual_gaps: string[];
+  reason: string;
+}
+
+export interface ManufacturingTestRequirement {
+  id: string;
+  status: "REVIEW";
+  verification_mode: "DOCUMENT_BACKED";
+  category: string;
+  priority: "HIGH" | "MEDIUM";
+  title: string;
+  fault_classes: string[];
+  target_net_names: string[];
+  target_pins: Array<{ connector: string; pin: string; net_name: string }>;
+  target_functions: string[];
+  methods: ManufacturingTestMethod[];
+  test_stage: TestStage;
+  access_strategy: TestAccessStrategy;
+  physical_access_required: boolean;
+  allowed_sides: Array<"TOP" | "BOTTOM">;
+  stimulus: string;
+  observation: string;
+  limit_authority: string | null;
+  owner: string;
+  residual_risk: string;
+  closure_evidence: string;
+  source_evidence: Array<{ source_path: string; source_hash: string; page: number | null; excerpt: string }>;
 }
 
 export interface ManufacturingTestPlan {
-  schema_version: 1;
+  schema_version: 2;
   kind: "MANUFACTURING_TEST_RECOMMENDATIONS";
   id: string;
   product_pinout_id: string;
   product: SchematicPinout;
+  lifecycle_status: TestPlanLifecycle;
+  baseline: ControlledTestBaseline;
+  approval: TestPlanApproval | null;
   verdict: "REVIEW";
   verification_mode: "DOCUMENT_BACKED";
+  method_matrix: TestMethodCoverage[];
+  requirements: ManufacturingTestRequirement[];
   recommendations: Array<Record<string, unknown>>;
   wib_design_recommendations: Array<Record<string, unknown>>;
   wib_constraints: Array<Record<string, unknown>>;
@@ -414,6 +526,116 @@ export interface ManufacturingTestPlan {
   diagnostics: Diagnostic[];
   report_uri: string;
   report_path: string;
+  elapsed_ms: number;
+  stale?: AnalysisStaleState;
+}
+
+export interface TestAccessMapping {
+  id: string;
+  requirement_id: string;
+  status: Verdict;
+  verification_mode: VerificationMode;
+  target_net_names: string[];
+  target_functions: string[];
+  access_strategy: TestAccessStrategy;
+  physical_access_required: boolean;
+  matched_test_points: Array<{
+    id: string;
+    net_name: string | null;
+    component_ref: string | null;
+    layer_id: string | null;
+    side: "TOP" | "BOTTOM" | "INNER" | "NA";
+    confidence: CoverageLevel;
+    x_nm: number;
+    y_nm: number;
+  }>;
+  geometry_violation_ids: string[];
+  message: string;
+  evidence: string[];
+}
+
+export interface LayoutBaselineConfirmation {
+  schema_version: 1;
+  id: string;
+  status: "APPROVED";
+  design_id: string;
+  design_content_hash: string;
+  test_plan_id: string;
+  test_plan_content_hash: string;
+  product_revision: string;
+  variant: string | null;
+  panel: string | null;
+  source_units: "MM" | "INCH" | "MIXED";
+  coordinate_origin: string;
+  top_view_direction: "FROM_TOP";
+  bottom_view_direction: "FROM_BOTTOM";
+  bottom_mirrored_in_top_view: boolean;
+  panel_step_repeat: string;
+  approved_by: string;
+  approved_at: string;
+  content_hash: string;
+}
+
+export interface LayoutBaselineCheck {
+  id: string;
+  status: Verdict;
+  verification_mode: "DOCUMENT_BACKED";
+  requirement: string;
+  recorded_value: string;
+  message: string;
+}
+
+export interface LayoutTestAccessAnalysis {
+  schema_version: 1;
+  kind: "LAYOUT_TEST_ACCESS_ANALYSIS";
+  id: string;
+  design_id: string;
+  design_content_hash: string;
+  test_plan_id: string;
+  test_plan_content_hash: string;
+  rule_pack_id: string;
+  rule_pack_content_hash: string;
+  layout_baseline_confirmation_id: string | null;
+  layout_baseline_content_hash: string | null;
+  geometry_analysis_id: string;
+  verdict: Verdict;
+  production_readiness_verdict: "REVIEW";
+  pass_count: number;
+  fail_count: number;
+  review_count: number;
+  not_applicable_count: number;
+  baseline_checks: LayoutBaselineCheck[];
+  mappings: TestAccessMapping[];
+  factory_confirmation_items: Array<{
+    id: string;
+    status: "REVIEW";
+    verification_mode: "MANUAL_FACTORY_CONFIRMATION";
+    requirement: string;
+    closure_evidence: string;
+  }>;
+  diagnostics: Diagnostic[];
+  report_uri: string;
+  report_path: string;
+  elapsed_ms: number;
+  stale?: AnalysisStaleState;
+}
+
+export interface WibInterfaceContract {
+  schema_version: 1;
+  id: string;
+  title: string;
+  revision: string;
+  status: "APPROVED";
+  product_pinout_id: string;
+  wib_pinout_id: string;
+  product_revision: string;
+  wib_revision: string;
+  connector_mappings: ConnectorMapping[];
+  net_aliases: Array<{ product_net: string; wib_net: string }>;
+  case_sensitive: boolean;
+  approved_by: string;
+  approved_at: string;
+  content_hash: string;
 }
 
 export interface WibConstraintDefinition {
@@ -425,7 +647,7 @@ export interface WibConstraintDefinition {
   comparator: "EXACT" | "ALL" | "NONE" | "MAXIMUM" | "MINIMUM" | "RANGE";
   required_value: string | number | { min: number; max: number };
   unit: string | null;
-  verification_mode: "DOCUMENT_BACKED" | "MANUAL_IMPLEMENTATION_CONFIRMATION" | "MANUAL_FACTORY_CONFIRMATION";
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
   source_authority: string;
   scope?: { connector?: string; pin?: string; net_name?: string };
   allowed_component_kinds?: SchematicComponentKind[] | undefined;
@@ -452,6 +674,13 @@ export interface WibQualification {
   product_pinout_id: string;
   wib_pinout_id: string;
   constraint_set_id: string;
+  product_content_hash?: string;
+  wib_content_hash?: string;
+  interface_contract_content_hash?: string;
+  test_plan_content_hash?: string;
+  constraint_set_content_hash?: string;
+  interface_contract_id?: string;
+  test_plan_id?: string;
   verdict: Verdict;
   verification_mode: "DOCUMENT_BACKED";
   wiring_analysis_id: string;
@@ -461,14 +690,20 @@ export interface WibQualification {
   review_count: number;
   not_applicable_count: number;
   constraint_results: Array<Record<string, unknown>>;
+  requirement_results?: Array<Record<string, unknown>>;
+  production_readiness_verdict?: "REVIEW";
+  factory_confirmation_items?: Array<Record<string, unknown>>;
+  violations?: Array<Record<string, unknown>>;
   report_uri: string;
   report_path: string;
+  elapsed_ms?: number;
+  stale?: AnalysisStaleState;
 }
 
-export type DocumentAnalysis = WiringAnalysis | ManufacturingTestPlan | WibQualification;
+export type DocumentAnalysis = WiringAnalysis | ManufacturingTestPlan | LayoutTestAccessAnalysis | WibQualification;
 export type AnyAnalysis = AnalysisSummary | DocumentAnalysis;
 
-export type ArtifactKind = "DESIGN" | "RULE_PACK" | "PINOUT" | "SCHEMATIC" | "CONSTRAINT_SET" | "ANALYSIS" | "WORKFLOW_DRAFT";
+export type ArtifactKind = "DESIGN" | "RULE_PACK" | "PINOUT" | "SCHEMATIC" | "CONSTRAINT_SET" | "INTERFACE_CONTRACT" | "LAYOUT_BASELINE" | "ANALYSIS" | "WORKFLOW_DRAFT";
 
 export interface ArtifactSummary {
   id: string;
@@ -477,7 +712,7 @@ export interface ArtifactSummary {
   subtitle: string;
   status: string | null;
   verdict: Verdict | null;
-  analysis_kind: "GEOMETRY" | "WIRING_COMPARISON" | "MANUFACTURING_TEST_RECOMMENDATIONS" | "WIB_DESIGN_QUALIFICATION" | null;
+  analysis_kind: "GEOMETRY" | "WIRING_COMPARISON" | "MANUFACTURING_TEST_RECOMMENDATIONS" | "LAYOUT_TEST_ACCESS_ANALYSIS" | "WIB_DESIGN_QUALIFICATION" | null;
   source_path: string | null;
   updated_at: string;
 }
@@ -504,6 +739,8 @@ export interface WibWorkflowDraft {
   net_aliases: Array<{ product_net: string; wib_net: string }>;
   case_sensitive?: boolean;
   constraint_set_id: string | null;
+  interface_contract_id?: string | null;
+  test_plan_id?: string | null;
   constraint_title?: string;
   constraint_revision?: string;
   constraint_rows: Array<Partial<WibConstraintDefinition> & { id: string }>;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { approvalBlockers, reviewSuggestion, severityLabel } from "../src/renderer/RuleLibrary.js";
+import { approvalBlockers, reviewDecisionLabel, reviewItemResolved, reviewSuggestion, ruleDiagnosticLocation, ruleDiagnosticMessage, ruleDiagnosticSuggestion, severityLabel } from "../src/renderer/RuleLibrary.js";
 import { selectApprovedRulePack } from "../src/renderer/rule-catalog.js";
-import type { RulePack } from "../src/renderer/types.js";
+import type { RuleDocumentDiagnostic, RulePack } from "../src/renderer/types.js";
 
 function draftPack(): RulePack {
   return {
@@ -28,6 +28,7 @@ function draftPack(): RulePack {
       code: "NON_EXECUTABLE_GUIDANCE",
       message: "Pogo pitch guidance is not a test-point geometry rule.",
       acknowledged: false,
+      resolution: null,
       citation: { source_path: "rules.pdf", source_hash: "hash", page: 1, paragraph: 2, excerpt: "0.3 mm pogo pitch." }
     }],
     approval: null
@@ -45,11 +46,28 @@ describe("rule-library approval gate", () => {
 
   it("requires every severity and extracted review item to be confirmed", () => {
     const pack = draftPack();
-    expect(approvalBlockers(pack)).toEqual(["UNCONFIRMED_SEVERITY", "UNACKNOWLEDGED_REVIEW_ITEM"]);
+    expect(approvalBlockers(pack)).toEqual(["UNCONFIRMED_SEVERITY", "UNRESOLVED_REVIEW_ITEM"]);
 
     pack.rules[0]!.severity = "ERROR";
-    pack.review_items[0]!.acknowledged = true;
+    pack.review_items[0]!.resolution = { decision: "IGNORE", note: "Not applicable to this fixture", rule_id: null };
     expect(approvalBlockers(pack)).toEqual([]);
+  });
+
+  it("allows accepting, ignoring, or linking a modified rule while requiring an auditable decision", () => {
+    const pack = draftPack();
+    const item = pack.review_items[0]!;
+
+    item.resolution = { decision: "ACCEPT_SUGGESTION", note: "", rule_id: null };
+    expect(reviewItemResolved(item, pack.rules)).toBe(true);
+    item.resolution = { decision: "IGNORE", note: "", rule_id: null };
+    expect(reviewItemResolved(item, pack.rules)).toBe(false);
+    item.resolution.note = "The controlled product scope excludes this guidance";
+    expect(reviewItemResolved(item, pack.rules)).toBe(true);
+    item.resolution = { decision: "MODIFY_RULE", note: "Use the product-specific edge threshold", rule_id: null };
+    expect(reviewItemResolved(item, pack.rules)).toBe(false);
+    item.resolution.rule_id = "tp-edge";
+    expect(reviewItemResolved(item, pack.rules)).toBe(true);
+    expect(reviewDecisionLabel("IGNORE", "zh-CN")).toBe("忽略建议");
   });
 
   it("labels severity as impact after a rule is hit", () => {
@@ -72,5 +90,33 @@ describe("rule-library approval gate", () => {
     }
     expect(reviewSuggestion("AMBIGUOUS_THRESHOLD", "zh-CN")).toContain("不要猜选");
     expect(reviewSuggestion("NON_EXECUTABLE_GUIDANCE", "zh-CN")).toContain("不转换成自动 PASS/FAIL 规则");
+  });
+
+  it("shows the shared MCP diagnostic location and suggested change in the active locale", () => {
+    const diagnostic: RuleDocumentDiagnostic = {
+      id: "rule-diagnostic-1",
+      code: "RULE_METADATA_MISMATCH",
+      severity: "ERROR",
+      blocks_generation: true,
+      blocks_approval: true,
+      source_path: "/inputs/generated-rules.md",
+      page: null,
+      line: 31,
+      paragraph: null,
+      section: "自动几何候选规则",
+      rule_id: "DFT-TP-001",
+      field: "metric",
+      excerpt: "metric: CENTER_TO_CENTER",
+      message: "Metric conflicts with the normative sentence.",
+      suggestion: "Re-check the PDF and align the sentence and field.",
+      message_zh: "距离定义与规范性约束句冲突。",
+      suggestion_zh: "重新核对 PDF，使约束句与字段一致。"
+    };
+
+    expect(ruleDiagnosticMessage(diagnostic, "zh-CN")).toBe("距离定义与规范性约束句冲突。");
+    expect(ruleDiagnosticSuggestion(diagnostic, "en-US")).toContain("align");
+    expect(ruleDiagnosticLocation(diagnostic, "zh-CN")).toContain("Markdown 第31行");
+    expect(ruleDiagnosticLocation(diagnostic, "zh-CN")).toContain("规则 DFT-TP-001");
+    expect(ruleDiagnosticLocation(diagnostic, "en-US")).toContain("field metric");
   });
 });

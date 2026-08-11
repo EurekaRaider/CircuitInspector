@@ -91,7 +91,7 @@ Test-point spacing and clearance, accessibility, trace geometry, copper/edge cle
 
 #### 03 · Model integration
 
-Twelve structured MCP tools, progress and cancellation, paginated findings, evidence resources, and stdout reserved for JSON-RPC.
+Twenty-one structured MCP tools, progress and cancellation, paginated findings, evidence resources, and stdout reserved for JSON-RPC.
 
 </td>
 </tr>
@@ -209,7 +209,7 @@ Results are deliberately broader than PASS/FAIL:
 | `PASS` | The required semantics are available and the measured geometry satisfies the approved rule |
 | `FAIL` | The required semantics are available and the measured geometry violates the approved rule |
 | `REVIEW` | A human decision is required, commonly because identification is heuristic or data conflicts |
-| `NOT_APPLICABLE` | The rule cannot be evaluated for the imported data without inventing missing semantics |
+| `NOT_APPLICABLE` | The approved requirement or rule genuinely does not apply to this scope; missing or ambiguous semantics remain `REVIEW` |
 
 ## 05 / MCP surface
 
@@ -222,12 +222,18 @@ Results are deliberately broader than PASS/FAIL:
 | `confirm_schematic_paths` | Confirm only selected cross-page interface paths after evidence review |
 | `confirm_schematic_pinout` | Confirm or correct the complete pinout and optional structured WIB design metrics before formal comparison |
 | `compare_fixture_wiring` | Compare confirmed product and WIB pins one-to-one, report swaps/missing/extra pins, and return PASS only for a clean confirmed scope |
-| `recommend_manufacturing_tests` | Generate manufacturing-line test advice, corresponding WIB design guidance, and a hard-constraint/TBD matrix |
+| `recommend_manufacturing_tests` | Generate a DRAFT manufacturing-test requirement baseline and method-to-fault matrix; generated content remains `REVIEW` |
+| `update_manufacturing_test_plan` | Edit DRAFT requirements, access strategies, stages, evidence expectations, and method coverage before approval |
+| `approve_manufacturing_test_plan` | Freeze what must be covered against a product revision, Variant/Panel, factory, line, tester, and approved rule pack; this is not production release |
 | `create_wib_constraint_set` | Store explicit approved WIB requirements with comparator, value/range, unit, authority, revision, and approver |
-| `qualify_wib_design` | Close the loop across product schematic, actual WIB schematic/design metrics, and an approved constraint set |
+| `create_wib_interface_contract` | Approve a complete product-connector/pin to WIB-connector/pin contract; NET names remain supporting evidence, not proof of pin identity |
+| `qualify_wib_design` | Qualify confirmed product and WIB schematics against the approved pin contract, DFT baseline, and electrical/resource constraints |
 | `extract_rule_pack` | Extract cited candidate rules from a local PDF, DOCX, or Markdown specification |
+| `update_rule_pack_draft` | Resolve cited rule-review items and edit only a DRAFT rule pack before human approval |
 | `list_rule_packs` | List draft, approved, and immutable rule-pack versions |
 | `analyze_design` | Evaluate an imported design using an approved rule pack |
+| `confirm_layout_baseline` | Bind an exact ODB++ hash to the DFT plan and approve units, origin, Top/Bottom/mirror convention, and Panel step-repeat applicability |
+| `analyze_test_access` | Trace every approved requirement to physical test points or approved virtual access, using all imported layers and the same approved rule pack |
 | `query_violations` | Page and filter results by NET, reference, layer, rule, severity, and status |
 | `render_evidence` | Generate local SVG or high-resolution PNG evidence for an issue or selected region |
 

@@ -4,33 +4,47 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
+  AnalysisSummary,
   ArtifactCatalog,
   ArtifactKind,
   ArtifactSummary,
   ConnectorMapping,
+  DesignSummary,
+  ManufacturingTestRequirement,
+  RulePack,
   TableFormat,
   TableKind,
   WibConstraintDefinition,
+  TestMethodCoverage,
   WibWorkflowDraft
 } from "@circuit-inspector/contracts";
 import {
+  analyzeTestAccess,
+  approveManufacturingTestPlan,
+  confirmLayoutBaseline,
   compareFixtureWiring,
   applySchematicCorrections,
   confirmSchematicPaths,
   confirmSchematicPinout,
+  createWibInterfaceContract,
   createWibConstraintSet,
-  extractRulePack,
+  extractRulePackWithValidation,
   importSchematicDocument,
+  invalidateDependentAnalyses,
   listWorkflowArtifacts,
   parseTable,
-  qualifyWibDesign,
+  qualifyWibClosedLoop,
+  readManufacturingTestPlan,
+  readLayoutBaseline,
   readSchematicDocument,
   readSchematicPage,
   readSchematicThumbnail,
   readPinout,
   readWibConstraintSet,
+  readWibInterfaceContract,
   readWibWorkflowDraft,
   recommendManufacturingTests,
+  updateManufacturingTestPlan,
   saveWibWorkflowDraft,
   serializeTable,
   traceSchematicInterface
@@ -247,6 +261,8 @@ ipcMain.handle("workbench:delete-artifact", async (_event, kind: ArtifactKind, r
     PINOUT: [path.join(cacheDir, "pinouts", `${id}.json`)],
     SCHEMATIC: [path.join(cacheDir, "schematics", id)],
     CONSTRAINT_SET: [path.join(cacheDir, "wib-constraints", `${id}.json`)],
+    INTERFACE_CONTRACT: [path.join(cacheDir, "wib-interface-contracts", `${id}.json`)],
+    LAYOUT_BASELINE: [path.join(cacheDir, "layout-baselines", `${id}.json`)],
     ANALYSIS: [path.join(cacheDir, "analyses", `${id}.json`), path.join(cacheDir, "evidence", id)],
     WORKFLOW_DRAFT: [path.join(cacheDir, "workflow-drafts", `${id}.json`)]
   };
@@ -258,15 +274,20 @@ ipcMain.handle("workbench:delete-artifact", async (_event, kind: ArtifactKind, r
 ipcMain.handle("workbench:extract-rules", async (_event, input: { paths: string[]; title?: string }) => {
   if (!Array.isArray(input.paths) || input.paths.length === 0) throw new Error("At least one rule document is required");
   input.paths.forEach((file) => assertGrantedPath(grantedInputPaths, file));
-  sendWorkbenchProgress("RULE_EXTRACTION", 8, "Extracting local rule evidence");
-  const extracted = await extractRulePack(input.paths, cacheDir, input.title);
-  await core.request("save_rule_pack", { cache_dir: cacheDir, rule_pack: extracted.rulePack });
-  sendWorkbenchProgress("RULE_EXTRACTION", 100, "Draft rule pack is ready for review");
+  sendWorkbenchProgress("RULE_EXTRACTION", 8, "Validating the rule-source template and extracting local evidence");
+  const extracted = await extractRulePackWithValidation(input.paths, cacheDir, input.title);
+  if (extracted.rulePack) {
+    await core.request("save_rule_pack", { cache_dir: cacheDir, rule_pack: extracted.rulePack });
+  }
+  sendWorkbenchProgress("RULE_EXTRACTION", 100, extracted.rulePack
+    ? "Draft rule pack is ready for review"
+    : "Rule-source validation failed; no rule pack was created");
   return {
     rule_pack: extracted.rulePack,
     passage_count: extracted.passageCount,
     rule_count: extracted.ruleCount,
-    rag_index_path: extracted.ragIndexPath
+    rag_index_path: extracted.ragIndexPath,
+    validation: extracted.validation
   };
 });
 
@@ -279,14 +300,23 @@ ipcMain.handle("workbench:import-schematic", async (_event, input: { path: strin
 ipcMain.handle("workbench:read-schematic", (_event, id: string) => readSchematicDocument(assertArtifactId(id), cacheDir));
 ipcMain.handle("workbench:trace-schematic", (_event, input: { schematic_id: string; candidate_id: string }) =>
   traceSchematicInterface(assertArtifactId(input.schematic_id), assertArtifactId(input.candidate_id), cacheDir));
-ipcMain.handle("workbench:correct-schematic", (_event, input: {
+ipcMain.handle("workbench:correct-schematic", async (_event, input: {
   schematic_id: string;
   corrected_by: string;
   candidate_id?: string;
   corrections: Array<{ operation: "UPDATE" | "ADD" | "DELETE" | "MERGE_NETS" | "SPLIT_NET" | "SET_JUNCTION" | "SET_OFF_PAGE" | "SET_PASSTHROUGH"; entity_kind: "COMPONENT" | "PIN" | "NET" | "WIRE" | "JUNCTION" | "LABEL"; entity_id: string; after?: Record<string, unknown> | null }>;
-}) => applySchematicCorrections(assertArtifactId(input.schematic_id), input.corrections, input.corrected_by, cacheDir, input.candidate_id));
-ipcMain.handle("workbench:confirm-schematic-paths", (_event, input: { schematic_id: string; candidate_id: string; path_ids: string[]; confirmed_by: string }) =>
-  confirmSchematicPaths(assertArtifactId(input.schematic_id), assertArtifactId(input.candidate_id), input.path_ids.map(assertArtifactId), input.confirmed_by, cacheDir));
+}) => {
+  const schematicId = assertArtifactId(input.schematic_id);
+  const document = await applySchematicCorrections(schematicId, input.corrections, input.corrected_by, cacheDir, input.candidate_id);
+  await invalidateSchematicAnalyses(schematicId, "Schematic graph corrections changed controlled connectivity evidence");
+  return document;
+});
+ipcMain.handle("workbench:confirm-schematic-paths", async (_event, input: { schematic_id: string; candidate_id: string; path_ids: string[]; confirmed_by: string }) => {
+  const schematicId = assertArtifactId(input.schematic_id);
+  const document = await confirmSchematicPaths(schematicId, assertArtifactId(input.candidate_id), input.path_ids.map(assertArtifactId), input.confirmed_by, cacheDir);
+  await invalidateSchematicAnalyses(schematicId, "Schematic path confirmation changed the authoritative analysis scope");
+  return document;
+});
 ipcMain.handle("workbench:schematic-page", async (_event, input: { schematic_id: string; page: number }) => {
   if (!Number.isSafeInteger(input.page) || input.page < 1) throw new Error("Invalid schematic page number");
   const result = await readSchematicPage(assertArtifactId(input.schematic_id), input.page, cacheDir);
@@ -302,13 +332,18 @@ ipcMain.handle("workbench:schematic-thumbnail", async (_event, input: { schemati
   return { page: result.page, bytes: result.bytes.buffer.slice(result.bytes.byteOffset, result.bytes.byteOffset + result.bytes.byteLength) };
 });
 ipcMain.handle("workbench:read-pinout", (_event, id: string) => readPinout(assertArtifactId(id), cacheDir));
-ipcMain.handle("workbench:confirm-pinout", (_event, input: {
+ipcMain.handle("workbench:confirm-pinout", async (_event, input: {
   pinout_id: string;
   confirmed_by: string;
   revision?: string;
   pins: Array<{ connector: string; pin: string; net_name: string }>;
   design_metrics: Array<{ id: string; value: string | number; unit?: string | null }>;
-}) => confirmSchematicPinout(assertArtifactId(input.pinout_id), input.confirmed_by, cacheDir, input.pins, input.revision, input.design_metrics));
+}) => {
+  const pinoutId = assertArtifactId(input.pinout_id);
+  const document = await confirmSchematicPinout(pinoutId, input.confirmed_by, cacheDir, input.pins, input.revision, input.design_metrics);
+  await invalidateSchematicAnalyses(pinoutId, "Confirmed pinout rows, revision, or design metrics changed");
+  return document;
+});
 
 ipcMain.handle("workbench:compare-wiring", async (_event, input: {
   product_pinout_id: string;
@@ -333,6 +368,55 @@ ipcMain.handle("workbench:recommend-tests", async (_event, productPinoutId: stri
   sendWorkbenchProgress("TEST_RECOMMENDATIONS", 100, "Test and WIB recommendations are ready");
   return plan;
 });
+ipcMain.handle("workbench:read-test-plan", (_event, id: string) => readManufacturingTestPlan(assertArtifactId(id), cacheDir));
+ipcMain.handle("workbench:update-test-plan", (_event, input: {
+  test_plan_id: string;
+  requirements: ManufacturingTestRequirement[];
+  method_matrix: TestMethodCoverage[];
+}) => updateManufacturingTestPlan(assertArtifactId(input.test_plan_id), input.requirements, input.method_matrix, cacheDir));
+ipcMain.handle("workbench:approve-test-plan", async (_event, input: {
+  test_plan_id: string;
+  approved_by: string;
+  variant?: string | null;
+  panel?: string | null;
+  factory: string;
+  line: string;
+  tester: string;
+  approved_rule_pack_id: string;
+}) => {
+  await requireApprovedRulePack(input.approved_rule_pack_id);
+  return approveManufacturingTestPlan(assertArtifactId(input.test_plan_id), {
+    approvedBy: input.approved_by,
+    ...(input.variant !== undefined ? { variant: input.variant } : {}),
+    ...(input.panel !== undefined ? { panel: input.panel } : {}),
+    factory: input.factory,
+    line: input.line,
+    tester: input.tester,
+    approvedRulePackId: assertArtifactId(input.approved_rule_pack_id)
+  }, cacheDir);
+});
+
+ipcMain.handle("workbench:confirm-layout-baseline", async (_event, input: {
+  design_id: string;
+  approved_test_plan_id: string;
+  source_units: "MM" | "INCH" | "MIXED";
+  coordinate_origin: string;
+  bottom_mirrored_in_top_view: boolean;
+  panel_step_repeat: string;
+  approved_by: string;
+}) => {
+  const design = await core.request<DesignSummary>("get_design_summary", { cache_dir: cacheDir, design_id: assertArtifactId(input.design_id) });
+  return confirmLayoutBaseline({
+    design,
+    approvedTestPlanId: assertArtifactId(input.approved_test_plan_id),
+    sourceUnits: assertOneOf(input.source_units, ["MM", "INCH", "MIXED"] as const, "source units"),
+    coordinateOrigin: input.coordinate_origin,
+    bottomMirroredInTopView: input.bottom_mirrored_in_top_view,
+    panelStepRepeat: input.panel_step_repeat,
+    approvedBy: input.approved_by
+  }, cacheDir);
+});
+ipcMain.handle("workbench:read-layout-baseline", (_event, designId: string) => readLayoutBaseline(assertArtifactId(designId), cacheDir));
 
 ipcMain.handle("workbench:create-constraint-set", (_event, input: {
   title: string;
@@ -341,24 +425,44 @@ ipcMain.handle("workbench:create-constraint-set", (_event, input: {
   constraints: WibConstraintDefinition[];
 }) => createWibConstraintSet({ title: input.title, revision: input.revision, approvedBy: input.approved_by, constraints: input.constraints }, cacheDir));
 ipcMain.handle("workbench:read-constraint-set", (_event, id: string) => readWibConstraintSet(assertArtifactId(id), cacheDir));
+ipcMain.handle("workbench:create-interface-contract", (_event, input: {
+  title: string;
+  revision: string;
+  approved_by: string;
+  product_pinout_id: string;
+  wib_pinout_id: string;
+  connector_mappings: ConnectorMapping[];
+  net_aliases: Array<{ product_net: string; wib_net: string }>;
+  case_sensitive: boolean;
+}) => createWibInterfaceContract({
+  title: input.title,
+  revision: input.revision,
+  approvedBy: input.approved_by,
+  productPinoutId: assertArtifactId(input.product_pinout_id),
+  wibPinoutId: assertArtifactId(input.wib_pinout_id),
+  connectorMappings: input.connector_mappings,
+  netAliases: input.net_aliases,
+  caseSensitive: input.case_sensitive
+}, cacheDir));
+ipcMain.handle("workbench:read-interface-contract", (_event, id: string) => readWibInterfaceContract(assertArtifactId(id), cacheDir));
 
 ipcMain.handle("workbench:qualify-wib", async (_event, input: {
   product_pinout_id: string;
   wib_pinout_id: string;
-  constraint_set_id: string;
-  connector_mappings: ConnectorMapping[];
-  net_aliases: Array<{ product_net: string; wib_net: string }>;
-  case_sensitive: boolean;
+  interface_contract_id: string;
+  approved_test_plan_id: string;
+  approved_constraint_set_id: string;
 }) => {
-  sendWorkbenchProgress("WIB_QUALIFICATION", 10, "Running closed-loop WIB qualification");
-  const qualification = await qualifyWibDesign(
+  sendWorkbenchProgress("WIB_QUALIFICATION", 10, "Checking controlled revisions and approved WIB/DFT baselines");
+  const qualification = await qualifyWibClosedLoop(
     assertArtifactId(input.product_pinout_id),
     assertArtifactId(input.wib_pinout_id),
-    assertArtifactId(input.constraint_set_id),
-    cacheDir,
-    { connectorMappings: input.connector_mappings, netAliases: input.net_aliases, caseSensitive: input.case_sensitive }
+    assertArtifactId(input.interface_contract_id),
+    assertArtifactId(input.approved_test_plan_id),
+    assertArtifactId(input.approved_constraint_set_id),
+    cacheDir
   );
-  sendWorkbenchProgress("WIB_QUALIFICATION", 100, "Final WIB qualification is ready");
+  sendWorkbenchProgress("WIB_QUALIFICATION", 100, "WIB static qualification is ready; production release remains REVIEW");
   return qualification;
 });
 
@@ -425,9 +529,16 @@ ipcMain.handle("design:pick", (_event, input: Record<string, unknown>) =>
 ipcMain.handle("design:test-points", (_event, designId: string) =>
   core.request("list_test_points", { design_id: assertArtifactId(designId), cache_dir: cacheDir })
 );
-ipcMain.handle("design:review-test-points", (_event, input: Record<string, unknown>) =>
-  core.request("review_test_points", { ...withArtifactId(input, "design_id"), cache_dir: cacheDir })
-);
+ipcMain.handle("design:review-test-points", async (_event, input: Record<string, unknown>) => {
+  const secured = withArtifactId(input, "design_id");
+  const result = await core.request("review_test_points", { ...secured, cache_dir: cacheDir });
+  await invalidateDependentAnalyses(
+    cacheDir,
+    (analysis) => analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS" && analysis.design_id === secured.design_id,
+    `Test-point semantic review changed imported design ${secured.design_id}`
+  );
+  return result;
+});
 
 ipcMain.handle("rules:list", () => core.request("list_rule_packs", { cache_dir: cacheDir }));
 ipcMain.handle("rules:update-draft", (_event, value: unknown) => {
@@ -436,7 +547,7 @@ ipcMain.handle("rules:update-draft", (_event, value: unknown) => {
     cache_dir: cacheDir,
     rule_pack_id: input.rule_pack_id,
     rules: input.rules,
-    acknowledged_review_item_ids: input.acknowledged_review_item_ids
+    review_item_resolutions: input.review_item_resolutions
   });
 });
 ipcMain.handle("rules:delete", (_event, rulePackId: string) =>
@@ -448,6 +559,31 @@ ipcMain.handle("rules:approve", (_event, rulePackId: string, approvedBy: string)
 ipcMain.handle("analysis:run", (_event, designId: string, rulePackId: string) =>
   core.request("analyze_design", { cache_dir: cacheDir, design_id: assertArtifactId(designId), rule_pack_id: assertArtifactId(rulePackId) })
 );
+ipcMain.handle("analysis:test-access", async (_event, input: {
+  design_id: string;
+  approved_test_plan_id: string;
+  approved_rule_pack_id: string;
+}) => {
+  const designId = assertArtifactId(input.design_id);
+  const rulePackId = assertArtifactId(input.approved_rule_pack_id);
+  const rulePack = await requireApprovedRulePack(rulePackId);
+  sendWorkbenchProgress("LAYOUT_TEST_ACCESS", 10, "Loading complete PCB semantics and approved DFT baseline");
+  const [design, pointsResult, geometry] = await Promise.all([
+    core.request<DesignSummary>("get_design_summary", { cache_dir: cacheDir, design_id: designId }),
+    core.request<{ test_points: unknown[] }>("list_test_points", { cache_dir: cacheDir, design_id: designId }),
+    core.request<AnalysisSummary>("analyze_design", { cache_dir: cacheDir, design_id: designId, rule_pack_id: rulePackId })
+  ]);
+  sendWorkbenchProgress("LAYOUT_TEST_ACCESS", 70, "Building approved requirement-to-access traceability");
+  const analysis = await analyzeTestAccess({
+    design,
+    testPoints: pointsResult.test_points as Parameters<typeof analyzeTestAccess>[0]["testPoints"],
+    geometryAnalysis: geometry,
+    rulePack,
+    testPlanId: assertArtifactId(input.approved_test_plan_id)
+  }, cacheDir);
+  sendWorkbenchProgress("LAYOUT_TEST_ACCESS", 100, "Layout DFT report is ready; production release remains REVIEW");
+  return analysis;
+});
 ipcMain.handle("analysis:query", (_event, input: Record<string, unknown>) =>
   core.request("query_violations", { cache_dir: cacheDir, ...withArtifactId(input, "analysis_id") })
 );
@@ -459,7 +595,7 @@ ipcMain.handle("analysis:read", async (_event, analysisId: string) => {
   const localAnalysis = path.join(cacheDir, "evidence", analysisId, "analysis.json");
   try {
     const parsed = JSON.parse(await readFile(localAnalysis, "utf8")) as { kind?: string };
-    if (["WIRING_COMPARISON", "MANUFACTURING_TEST_RECOMMENDATIONS", "WIB_DESIGN_QUALIFICATION"].includes(parsed.kind ?? "")) return parsed;
+    if (["WIRING_COMPARISON", "MANUFACTURING_TEST_RECOMMENDATIONS", "LAYOUT_TEST_ACCESS_ANALYSIS", "WIB_DESIGN_QUALIFICATION"].includes(parsed.kind ?? "")) return parsed;
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
   }
@@ -475,4 +611,27 @@ ipcMain.handle("evidence:open", async (_event, filePath: string) => {
 
 function sendWorkbenchProgress(phase: string, progress: number, message: string): void {
   window?.webContents.send("core-progress", { phase, progress, message });
+}
+
+async function requireApprovedRulePack(rulePackId: string): Promise<RulePack> {
+  const result = await core.request<{ rule_packs: RulePack[] }>("list_rule_packs", { cache_dir: cacheDir });
+  const rulePack = result.rule_packs.find((candidate) => candidate.id === assertArtifactId(rulePackId));
+  if (!rulePack || rulePack.status !== "APPROVED" || !rulePack.approval) throw new Error(`${rulePackId} is not an approved rule pack`);
+  return rulePack;
+}
+
+async function invalidateSchematicAnalyses(schematicId: string, reason: string) {
+  const direct = await invalidateDependentAnalyses(
+    cacheDir,
+    (analysis) => analysis.product_pinout_id === schematicId || analysis.wib_pinout_id === schematicId,
+    `${reason}: ${schematicId}`
+  );
+  if (!direct.length) return;
+  const ids = new Set(direct);
+  await invalidateDependentAnalyses(
+    cacheDir,
+    (analysis) => (typeof analysis.test_plan_id === "string" && ids.has(analysis.test_plan_id))
+      || (typeof analysis.wiring_analysis_id === "string" && ids.has(analysis.wiring_analysis_id)),
+    `A controlled schematic dependency was invalidated: ${schematicId}`
+  );
 }

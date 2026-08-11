@@ -62,11 +62,31 @@ pub struct RuleDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RuleReviewDecision {
+    AcceptSuggestion,
+    Ignore,
+    ModifyRule,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuleReviewResolution {
+    pub decision: RuleReviewDecision,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub rule_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleReviewItem {
     pub id: String,
     pub code: String,
     pub message: String,
+    #[serde(default)]
     pub acknowledged: bool,
+    #[serde(default)]
+    pub resolution: Option<RuleReviewResolution>,
     pub citation: RuleCitation,
 }
 
@@ -97,11 +117,37 @@ impl RulePack {
                 self.id
             )));
         }
-        if self.review_items.iter().any(|item| !item.acknowledged) {
-            return Err(CoreError::Rule(format!(
-                "rule pack {} has unacknowledged extraction review items",
-                self.id
-            )));
+        for item in &self.review_items {
+            let Some(resolution) = &item.resolution else {
+                if item.acknowledged {
+                    continue;
+                }
+                return Err(CoreError::Rule(format!(
+                    "rule pack {} has unresolved extraction review item {}",
+                    self.id, item.id
+                )));
+            };
+            match resolution.decision {
+                RuleReviewDecision::AcceptSuggestion => {}
+                RuleReviewDecision::Ignore if resolution.note.trim().is_empty() => {
+                    return Err(CoreError::Rule(format!(
+                        "ignored review item {} requires a reason",
+                        item.id
+                    )));
+                }
+                RuleReviewDecision::ModifyRule => {
+                    let rule_id = resolution.rule_id.as_deref().unwrap_or_default();
+                    if resolution.note.trim().is_empty()
+                        || !self.rules.iter().any(|rule| rule.id == rule_id)
+                    {
+                        return Err(CoreError::Rule(format!(
+                            "modified review item {} requires a note and an existing rule",
+                            item.id
+                        )));
+                    }
+                }
+                RuleReviewDecision::Ignore => {}
+            }
         }
         for rule in &self.rules {
             if rule.severity.is_none() {
@@ -201,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_requires_confirmed_severity_and_review_acknowledgement() {
+    fn approval_requires_confirmed_severity_and_complete_review_decisions() {
         let citation = RuleCitation {
             source_path: "rules.pdf".into(),
             source_hash: "hash".into(),
@@ -233,6 +279,7 @@ mod tests {
                 code: "NON_EXECUTABLE_GUIDANCE".into(),
                 message: "Not executable".into(),
                 acknowledged: false,
+                resolution: None,
                 citation,
             }],
             approval: None,
@@ -240,7 +287,24 @@ mod tests {
 
         assert!(pack.validate_for_approval().is_err());
         pack.rules[0].severity = Some(Severity::Error);
-        pack.review_items[0].acknowledged = true;
+        pack.review_items[0].resolution = Some(RuleReviewResolution {
+            decision: RuleReviewDecision::Ignore,
+            note: "Not applicable to this product".into(),
+            rule_id: None,
+        });
+        assert!(pack.validate_for_approval().is_ok());
+
+        pack.review_items[0].resolution = Some(RuleReviewResolution {
+            decision: RuleReviewDecision::ModifyRule,
+            note: String::new(),
+            rule_id: Some("tp-edge".into()),
+        });
+        assert!(pack.validate_for_approval().is_err());
+        pack.review_items[0].resolution = Some(RuleReviewResolution {
+            decision: RuleReviewDecision::ModifyRule,
+            note: "Changed to the product-specific threshold".into(),
+            rule_id: Some("tp-edge".into()),
+        });
         assert!(pack.validate_for_approval().is_ok());
     }
 }

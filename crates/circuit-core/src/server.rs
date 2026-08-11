@@ -10,7 +10,10 @@ use crate::model::{
     TestPoint, Verdict,
 };
 use crate::parsers::import_design;
-use crate::rules::{RuleApproval, RuleDefinition, RulePack, RulePackStatus, RuleReviewItem};
+use crate::rules::{
+    RuleApproval, RuleDefinition, RulePack, RulePackStatus, RuleReviewDecision, RuleReviewItem,
+    RuleReviewResolution,
+};
 use crate::tile::write_tile;
 use crate::{CoreError, CoreResult};
 use serde::{Deserialize, Serialize};
@@ -779,12 +782,24 @@ fn save_rule_pack_request(params: Value) -> CoreResult<Value> {
 
 fn update_rule_pack_request(params: Value) -> CoreResult<Value> {
     #[derive(Deserialize)]
+    struct ReviewResolutionUpdate {
+        review_item_id: String,
+        decision: RuleReviewDecision,
+        #[serde(default)]
+        note: String,
+        #[serde(default)]
+        rule_id: Option<String>,
+    }
+
+    #[derive(Deserialize)]
     struct Params {
         cache_dir: PathBuf,
         rule_pack_id: String,
         rules: Vec<RuleDefinition>,
         #[serde(default)]
         acknowledged_review_item_ids: Vec<String>,
+        #[serde(default)]
+        review_item_resolutions: Vec<ReviewResolutionUpdate>,
     }
     let params: Params = serde_json::from_value(params)?;
     let cache = CacheStore::new(&params.cache_dir)?;
@@ -833,8 +848,51 @@ fn update_rule_pack_request(params: Value) -> CoreResult<Value> {
             "draft contains an unknown review item acknowledgement".into(),
         ));
     }
+    let resolution_ids = params
+        .review_item_resolutions
+        .iter()
+        .map(|update| update.review_item_id.as_str())
+        .collect::<HashSet<_>>();
+    if resolution_ids.len() != params.review_item_resolutions.len()
+        || resolution_ids
+            .iter()
+            .any(|id| !pack.review_items.iter().any(|item| item.id == *id))
+    {
+        return Err(CoreError::Rule(
+            "draft contains duplicate or unknown review item resolutions".into(),
+        ));
+    }
+    for update in &params.review_item_resolutions {
+        if let Some(rule_id) = update.rule_id.as_deref()
+            && (!matches!(update.decision, RuleReviewDecision::ModifyRule)
+                || !submitted_ids.contains(rule_id))
+        {
+            return Err(CoreError::Rule(format!(
+                "review item {} references an invalid modified rule",
+                update.review_item_id
+            )));
+        }
+    }
     for item in &mut pack.review_items {
-        item.acknowledged = acknowledged.contains(item.id.as_str());
+        item.resolution = params
+            .review_item_resolutions
+            .iter()
+            .find(|update| update.review_item_id == item.id)
+            .map(|update| RuleReviewResolution {
+                decision: update.decision.clone(),
+                note: update.note.clone(),
+                rule_id: update.rule_id.clone(),
+            })
+            .or_else(|| {
+                acknowledged
+                    .contains(item.id.as_str())
+                    .then_some(RuleReviewResolution {
+                        decision: RuleReviewDecision::AcceptSuggestion,
+                        note: String::new(),
+                        rule_id: None,
+                    })
+            });
+        item.acknowledged = item.resolution.is_some();
     }
     pack.rules = params.rules;
     cache.save_json(&path, &pack)?;
@@ -942,6 +1000,7 @@ fn prepare_legacy_draft(pack: &mut RulePack) {
                 code: "LEGACY_AUTO_SEVERITY".into(),
                 message: "This severity came from the legacy automatic default and must be confirmed again.".into(),
                 acknowledged: false,
+                resolution: None,
                 citation,
             });
         }
@@ -1376,7 +1435,12 @@ mod tests {
                 "cache_dir": cache_dir,
                 "rule_pack_id": "legacy-draft",
                 "rules": [rule],
-                "acknowledged_review_item_ids": [review_id]
+                "review_item_resolutions": [{
+                    "review_item_id": review_id,
+                    "decision": "MODIFY_RULE",
+                    "note": "Confirmed the severity from controlled project requirements",
+                    "rule_id": "tp-edge"
+                }]
             }),
         )
         .unwrap();
@@ -1387,6 +1451,10 @@ mod tests {
         .unwrap();
         assert_eq!(approved["status"], "APPROVED");
         assert_eq!(approved["rules"][0]["severity"], "ERROR");
+        assert_eq!(
+            approved["review_items"][0]["resolution"]["decision"],
+            "MODIFY_RULE"
+        );
     }
 
     #[test]

@@ -27,6 +27,7 @@ import type {
   BoundsNm,
   DesignSummary,
   LayerSummary,
+  LayoutBaselineConfirmation,
   ProgressEvent,
   RuleDefinition,
   RulePack,
@@ -66,6 +67,14 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const [activeViolation, setActiveViolation] = useState<Violation | null>(null);
   const [rulePacks, setRulePacks] = useState<RulePack[]>([]);
   const [selectedRulePack, setSelectedRulePack] = useState("");
+  const [approvedTestPlans, setApprovedTestPlans] = useState<Array<{ id: string; title: string }>>([]);
+  const [selectedTestPlan, setSelectedTestPlan] = useState("");
+  const [layoutBaseline, setLayoutBaseline] = useState<LayoutBaselineConfirmation | null>(null);
+  const [layoutUnits, setLayoutUnits] = useState<"MM" | "INCH" | "MIXED">("MM");
+  const [layoutOrigin, setLayoutOrigin] = useState("");
+  const [panelStepRepeat, setPanelStepRepeat] = useState("");
+  const [bottomMirroredInTopView, setBottomMirroredInTopView] = useState(true);
+  const [layoutApprover, setLayoutApprover] = useState(() => localStorage.getItem("circuit-inspector.approver") ?? "");
   const [progress, setProgress] = useState<ProgressEvent>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -83,9 +92,15 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
 
   const loadRules = useCallback(async () => {
     try {
-      const result = await window.circuitInspector.listRulePacks();
+      const [result, catalog] = await Promise.all([
+        window.circuitInspector.listRulePacks(),
+        window.circuitInspector.listArtifacts()
+      ]);
       setRulePacks(result.rule_packs);
       setSelectedRulePack((current) => selectApprovedRulePack(result.rule_packs, current));
+      const plans = catalog.artifacts.filter((artifact) => artifact.analysis_kind === "MANUFACTURING_TEST_RECOMMENDATIONS" && artifact.status === "APPROVED").map(({ id, title }) => ({ id, title }));
+      setApprovedTestPlans(plans);
+      setSelectedTestPlan((current) => plans.some((plan) => plan.id === current) ? current : plans[0]?.id ?? "");
     } catch (cause) {
       setError(message(cause));
     }
@@ -137,8 +152,20 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     setActiveTestPoint(null);
     setInitialViolationFocus(focusedViolation);
     setDesign(summary);
+    setLayoutBaseline(null);
     void window.circuitInspector.listTestPoints(summary.id)
       .then((result) => setTestPoints(result.test_points))
+      .catch((cause) => setError(message(cause)));
+    void window.circuitInspector.readLayoutBaseline(summary.id)
+      .then((baseline) => {
+        setLayoutBaseline(baseline);
+        if (!baseline) return;
+        setLayoutUnits(baseline.source_units);
+        setLayoutOrigin(baseline.coordinate_origin);
+        setPanelStepRepeat(baseline.panel_step_repeat);
+        setBottomMirroredInTopView(baseline.bottom_mirrored_in_top_view);
+        setLayoutApprover(baseline.approved_by);
+      })
       .catch((cause) => setError(message(cause)));
   }
 
@@ -322,6 +349,49 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     }
   }
 
+  async function runTestAccessAnalysis() {
+    if (!design || !selectedRulePack || !selectedTestPlan) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await window.circuitInspector.analyzeTestAccess({
+        design_id: design.id,
+        approved_test_plan_id: selectedTestPlan,
+        approved_rule_pack_id: selectedRulePack
+      });
+      setDocumentAnalysis(result);
+      onCatalogChanged?.();
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function approveLayoutBaseline() {
+    if (!design || !selectedTestPlan || !layoutOrigin.trim() || !panelStepRepeat.trim() || !layoutApprover.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      localStorage.setItem("circuit-inspector.approver", layoutApprover.trim());
+      const baseline = await window.circuitInspector.confirmLayoutBaseline({
+        design_id: design.id,
+        approved_test_plan_id: selectedTestPlan,
+        source_units: layoutUnits,
+        coordinate_origin: layoutOrigin.trim(),
+        bottom_mirrored_in_top_view: bottomMirroredInTopView,
+        panel_step_repeat: panelStepRepeat.trim(),
+        approved_by: layoutApprover.trim()
+      });
+      setLayoutBaseline(baseline);
+      onCatalogChanged?.();
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runSearch() {
     if (!design || !search.trim()) return;
     try {
@@ -423,7 +493,13 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       analysis={documentAnalysis}
       locale={locale}
       onLocaleChange={onLocaleChange}
-      onOpenDesign={() => void chooseDesign()}
+      onOpenDesign={() => design ? setDocumentAnalysis(undefined) : void chooseDesign()}
+      onLocateTestPoint={(id) => {
+        const point = testPoints.find((candidate) => candidate.id === id);
+        if (!point) return;
+        setDocumentAnalysis(undefined);
+        window.requestAnimationFrame(() => focusTestPoint(point));
+      }}
       {...(onReviewWiring ? { onReviewWiring } : {})}
     />;
   }
@@ -575,6 +651,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
           ) : (
             <EmptyCanvas onOpen={() => void chooseDesign()} t={t} />
           )}
+          {design && <div className="pointer-events-none absolute right-5 top-5 rounded-lg border border-white/[0.09] bg-[#101315]/90 px-3 py-2 font-mono text-[9px] text-[#b8b5ae] backdrop-blur-md">{viewSide} TEST CONTACT VIEW · {viewSide === "BOTTOM" ? (locale === "zh-CN" ? "已镜像 · 从板底外侧观看" : "MIRRORED · VIEWED FROM BOTTOM OUTSIDE") : (locale === "zh-CN" ? "未镜像 · 从板顶外侧观看" : "UNMIRRORED · VIEWED FROM TOP OUTSIDE")}</div>}
           {busy && <LoadingRail label={progressLabel} progress={progress?.progress ?? 12} />}
           {activeTestPoint && (
             <div className="popover-surface absolute left-1/2 top-5 flex max-w-[min(680px,calc(100%-40px))] -translate-x-1/2 items-center gap-3 rounded-xl px-4 py-3">
@@ -666,6 +743,20 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                 {busy ? <CircleNotchIcon size={15} className="animate-spin" /> : <ShieldCheckIcon size={15} />}
                 {t("analyze")}
               </button>
+            </div>
+            <div className="mt-4 border-t border-white/[0.065] pt-3">
+              <label className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.13em] text-[#6e6f6c]" htmlFor="test-plan">{locale === "zh-CN" ? "Approved DFT 需求基线" : "Approved DFT baseline"}</label>
+              <select id="test-plan" value={selectedTestPlan} onChange={(event) => setSelectedTestPlan(event.target.value)} className="h-9 w-full min-w-0 rounded-lg border border-white/[0.09] bg-[#101214] px-2.5 text-[11px] text-[#d0cfca]"><option value="">{locale === "zh-CN" ? "选择已批准测试计划" : "Select approved test plan"}</option>{approvedTestPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title} · {plan.id}</option>)}</select>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <select value={layoutUnits} onChange={(event) => setLayoutUnits(event.target.value as "MM" | "INCH" | "MIXED")} className="workbench-input h-8 text-[10px]"><option value="MM">MM</option><option value="INCH">INCH</option><option value="MIXED">MIXED</option></select>
+                <input value={layoutOrigin} onChange={(event) => setLayoutOrigin(event.target.value)} className="workbench-input h-8 text-[10px]" placeholder={locale === "zh-CN" ? "坐标原点定义" : "Coordinate origin"} />
+                <input value={panelStepRepeat} onChange={(event) => setPanelStepRepeat(event.target.value)} className="workbench-input h-8 text-[10px]" placeholder={locale === "zh-CN" ? "Panel step-repeat / UNIT" : "Panel step-repeat / UNIT"} />
+                <input value={layoutApprover} onChange={(event) => setLayoutApprover(event.target.value)} className="workbench-input h-8 text-[10px]" placeholder={locale === "zh-CN" ? "基线批准人" : "Baseline approver"} />
+              </div>
+              <label className="mt-2 flex items-center gap-2 text-[9px] text-[#777b77]"><input type="checkbox" checked={bottomMirroredInTopView} onChange={(event) => setBottomMirroredInTopView(event.target.checked)} />{locale === "zh-CN" ? "Bottom 在 Top 坐标视图中为镜像；Bottom 接触视图仍从 Bottom 观看" : "Bottom is mirrored in Top coordinates; contact view is still viewed from Bottom"}</label>
+              <button className="secondary-button mt-2 w-full" disabled={!design || !selectedTestPlan || !layoutOrigin.trim() || !panelStepRepeat.trim() || !layoutApprover.trim() || busy} onClick={() => void approveLayoutBaseline()}><CheckCircleIcon size={15} />{layoutBaseline && layoutBaseline.design_id === design?.id && layoutBaseline.test_plan_id === selectedTestPlan ? (locale === "zh-CN" ? "Layout 基线已批准" : "Layout baseline approved") : (locale === "zh-CN" ? "批准 Layout 基线" : "Approve Layout baseline")}</button>
+              <button className="primary-button mt-2 w-full" disabled={!design || !selectedRulePack || !selectedTestPlan || layoutBaseline?.design_id !== design.id || layoutBaseline.test_plan_id !== selectedTestPlan || busy} onClick={() => void runTestAccessAnalysis()}><ShieldCheckIcon size={15} />{locale === "zh-CN" ? "运行 Layout DFT 闭环" : "Run Layout DFT closure"}</button>
+              <p className="mt-2 text-[9px] leading-4 text-[#70736f]">{locale === "zh-CN" ? "Viewer 默认显示当前外层接触面；分析仍读取全部层、钻孔、网络和语义。生产放行不会由静态 PASS 自动完成。" : "The Viewer defaults to the contact surface; analysis still reads all layers, drills, nets, and semantics. Static PASS never auto-releases production."}</p>
             </div>
             {rulePacks.some((pack) => pack.status === "DRAFT") && (
               <div className="mt-4 border-t border-white/[0.065] pt-3">

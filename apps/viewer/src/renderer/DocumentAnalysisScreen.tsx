@@ -1,6 +1,6 @@
 import { ArrowLeftIcon, ArrowRightIcon, CheckCircleIcon, FileHtmlIcon, FolderOpenIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import type { DocumentAnalysis, TestRecommendationAnalysis, WibQualificationAnalysis, WiringAnalysis } from "./types";
+import type { DocumentAnalysis, LayoutTestAccessAnalysis, TestRecommendationAnalysis, WibQualificationAnalysis, WiringAnalysis } from "./types";
 import type { Locale } from "./i18n";
 
 interface Props {
@@ -10,27 +10,31 @@ interface Props {
   onOpenDesign(): void;
   onBack?(): void;
   onReviewWiring?(analysis: WiringAnalysis): void;
+  onLocateTestPoint?(id: string): void;
 }
 
-export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpenDesign, onBack, onReviewWiring }: Props) {
+export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpenDesign, onBack, onReviewWiring, onLocateTestPoint }: Props) {
   const chinese = locale === "zh-CN";
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     analysis.kind === "WIRING_COMPARISON" ? analysis.violations[0]?.id ?? analysis.connections[0]?.id ?? null
       : analysis.kind === "WIB_DESIGN_QUALIFICATION" ? analysis.constraint_results.find((result) => result.status !== "PASS")?.id ?? analysis.constraint_results[0]?.id ?? null
-        : analysis.recommendations[0]?.id ?? null
+        : analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS" ? analysis.mappings.find((result) => result.status !== "PASS")?.id ?? analysis.mappings[0]?.id ?? null
+          : analysis.recommendations[0]?.id ?? null
   );
   const title = analysis.kind === "WIRING_COMPARISON"
     ? chinese ? "产品 ↔ WIB 接线检查" : "Product ↔ WIB wiring check"
     : analysis.kind === "MANUFACTURING_TEST_RECOMMENDATIONS"
       ? chinese ? "制造测试与 WIB 设计建议" : "Manufacturing test and WIB design plan"
-      : chinese ? "最终 WIB 设计闭环验证" : "Final WIB design qualification";
+      : analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS"
+        ? chinese ? "Layout DFT 测试访问闭环" : "Layout DFT test-access closure"
+        : chinese ? "最终 WIB 设计闭环验证" : "Final WIB design qualification";
 
   return (
-    <main className="app-shell grid h-full min-w-[1000px] grid-rows-[64px_minmax(0,1fr)_32px] overflow-hidden text-[#ecebe7]">
+    <main className="app-shell relative grid h-full min-w-[1000px] grid-rows-[64px_minmax(0,1fr)_32px] overflow-hidden text-[#ecebe7]">
       <header className="topbar title-drag grid grid-cols-[minmax(320px,1fr)_auto] items-center px-5">
         <div className={`min-w-0 ${window.circuitInspector.platform === "darwin" ? "pl-[70px]" : ""}`}>
           <div className="text-[14px] font-semibold tracking-[-0.018em] text-[#f0efeb]">CircuitInspector</div>
-          <div className="mt-0.5 truncate font-mono text-[10px] tracking-[0.025em] text-[#777875]">{title} · {analysis.id}</div>
+          <div className="mt-0.5 truncate font-mono text-[10px] tracking-[0.025em] text-[#777875]">{title} · {analysis.id}{analysis.stale ? " · STALE" : ""}</div>
         </div>
         <div className="title-no-drag flex items-center gap-2">
           {onBack && <button className="icon-button" onClick={onBack} aria-label={chinese ? "返回结果资料库" : "Back to results"}><ArrowLeftIcon size={15} /></button>}
@@ -39,18 +43,21 @@ export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpe
           <button className="primary-button" onClick={onOpenDesign}><FolderOpenIcon size={15} />{chinese ? "打开 PCB" : "Open PCB"}</button>
         </div>
       </header>
+      {analysis.stale && <div className="pointer-events-none absolute left-0 right-0 top-16 z-30 border-b border-[#bd735f]/45 bg-[#4a241d]/95 px-5 py-2.5 font-mono text-[10px] text-[#ffd0c3] backdrop-blur-md">{chinese ? "过期分析" : "STALE ANALYSIS"} · {analysis.stale.reason} · {analysis.stale.invalidated_at}</div>}
 
       {analysis.kind === "WIRING_COMPARISON" ? (
         <WiringContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} {...(onReviewWiring ? { onReview: () => onReviewWiring(analysis) } : {})} chinese={chinese} />
       ) : analysis.kind === "MANUFACTURING_TEST_RECOMMENDATIONS" ? (
         <RecommendationContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} chinese={chinese} />
+      ) : analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS" ? (
+        <LayoutAccessContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} {...(onLocateTestPoint ? { onLocateTestPoint } : {})} chinese={chinese} />
       ) : (
         <QualificationContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} chinese={chinese} />
       )}
 
       <footer className="grid grid-cols-[272px_minmax(0,1fr)_360px] items-center border-t border-white/[0.07] bg-[#131517] font-mono text-[9px] tracking-[0.02em] text-[#696a67]">
         <div className="truncate border-r border-white/[0.07] px-4">{analysis.kind}</div>
-        <div className="px-4">{chinese ? "证据模式" : "EVIDENCE MODE"} · {analysis.verification_mode}</div>
+        <div className="px-4">{chinese ? "证据模式" : "EVIDENCE MODE"} · {analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS" ? "AUTOMATED_GEOMETRY + DOCUMENT_BACKED" : analysis.verification_mode}</div>
         <div className="border-l border-white/[0.07] px-4 text-right">{chinese ? "仅本地 · 报告已生成" : "LOCAL ONLY · REPORT READY"}</div>
       </footer>
     </main>
@@ -118,20 +125,23 @@ export function wiringReviewGuidance(ruleId: string | undefined, chinese: boolea
 }
 
 function RecommendationContent({ analysis, selectedId, onSelect, chinese }: { analysis: TestRecommendationAnalysis; selectedId: string | null; onSelect(id: string): void; chinese: boolean }) {
-  const [section, setSection] = useState<"TEST" | "WIB" | "CONSTRAINTS">("TEST");
+  const [section, setSection] = useState<"REQUIREMENTS" | "METHODS" | "TEST" | "WIB" | "CONSTRAINTS">("REQUIREMENTS");
   return (
     <section className="grid min-h-0 grid-cols-[272px_minmax(0,1fr)_360px]">
       <aside className="sidebar-surface min-h-0 overflow-y-auto border-r border-white/[0.07] p-5">
         <SectionLabel>{chinese ? "产品原理图" : "PRODUCT SCHEMATIC"}</SectionLabel>
         <SourceCard label="PRODUCT" source={analysis.product.source_path} revision={analysis.product.revision} status={analysis.product.status} count={analysis.product.pins.length} />
-        <SectionLabel>{chinese ? "输出清单" : "OUTPUT LISTS"}</SectionLabel>
-        <div className="space-y-2"><Metric label={chinese ? "制造测试" : "LINE TESTS"} value={analysis.recommendations.length} /><Metric label={chinese ? "WIB 设计" : "WIB DESIGN"} value={analysis.wib_design_recommendations.length} /><Metric label={chinese ? "硬约束" : "HARD CONSTRAINTS"} value={analysis.wib_constraints.length} /></div>
+        <SectionLabel>{chinese ? "受控计划" : "CONTROLLED PLAN"}</SectionLabel>
+        <div className="space-y-2"><Metric label="LIFECYCLE" value={analysis.lifecycle_status} /><Metric label={chinese ? "测试需求" : "REQUIREMENTS"} value={analysis.requirements.length} /><Metric label={chinese ? "方法矩阵" : "METHOD MATRIX"} value={analysis.method_matrix.length} /><Metric label={chinese ? "规则包" : "RULE PACK"} value={analysis.baseline.approved_rule_pack_id ?? "-"} /></div>
+        {analysis.approval && <div className="mt-4 rounded-xl border border-[#779166]/25 bg-[#779166]/[0.055] p-3 text-[9px] leading-4 text-[#9db18f]">{analysis.approval.statement}<div className="mt-2 break-all font-mono text-[8px]">SHA-256 {analysis.approval.content_hash}</div></div>}
         <div className="mt-5 rounded-xl border border-[#c79d57]/25 bg-[#2a2519] p-3 text-[10px] leading-5 text-[#a9946b]">{chinese ? "数值硬指标无权威来源时保持 TBD/REVIEW；Viewer 不会自动补值。" : "Numeric hard metrics remain TBD/REVIEW without an applicable authority."}</div>
       </aside>
       <div className="canvas-stage min-h-0 overflow-y-auto p-6">
         <div className="mx-auto max-w-[1080px]">
-          <div className="mb-5 flex gap-2">{(["TEST", "WIB", "CONSTRAINTS"] as const).map((item) => <button key={item} onClick={() => setSection(item)} className={`rounded-lg px-3 py-2 text-[11px] font-medium ${section === item ? "bg-[#c5a063] text-[#241d14]" : "border border-white/[0.08] bg-[#15191b] text-[#989e9b]"}`}>{item === "TEST" ? chinese ? "制造测试建议" : "Manufacturing tests" : item === "WIB" ? chinese ? "WIB 设计建议" : "WIB design" : chinese ? "约束与硬指标" : "Constraints"}</button>)}</div>
-          {section === "TEST" ? <div className="grid grid-cols-2 gap-4">{analysis.recommendations.map((item) => <RecommendationCard key={item.id} selected={selectedId === item.id} onClick={() => onSelect(item.id)} priority={item.priority} title={item.title} nets={item.net_names} body={item.suggested_test} foot={item.observation} />)}</div>
+          <div className="mb-5 flex flex-wrap gap-2">{(["REQUIREMENTS", "METHODS", "TEST", "WIB", "CONSTRAINTS"] as const).map((item) => <button key={item} onClick={() => setSection(item)} className={`rounded-lg px-3 py-2 text-[11px] font-medium ${section === item ? "bg-[#c5a063] text-[#241d14]" : "border border-white/[0.08] bg-[#15191b] text-[#989e9b]"}`}>{item === "REQUIREMENTS" ? chinese ? "测试需求" : "Requirements" : item === "METHODS" ? chinese ? "方法—故障矩阵" : "Method-fault matrix" : item === "TEST" ? chinese ? "候选建议" : "Candidates" : item === "WIB" ? chinese ? "WIB 设计建议" : "WIB design" : chinese ? "约束与硬指标" : "Constraints"}</button>)}</div>
+          {section === "REQUIREMENTS" ? <div className="space-y-3">{analysis.requirements.map((item) => <button key={item.id} onClick={() => onSelect(item.id)} className={`grid w-full grid-cols-[90px_minmax(180px,1fr)_150px_140px] gap-3 rounded-xl border p-4 text-left ${selectedId === item.id ? "border-[#c5a063]/50 bg-[#c5a063]/[0.06]" : "border-white/[0.07] bg-[#15191b]"}`}><span className="font-mono text-[9px] text-[#c4a167]">{item.priority}</span><div><div className="font-mono text-[9px] text-[#717773]">{item.id}</div><h3 className="mt-1 text-[12px]">{item.title}</h3><p className="mt-2 text-[10px] leading-4 text-[#7f8582]">{item.fault_classes.join(" · ")}</p></div><Value label={chinese ? "访问" : "ACCESS"} value={`${item.access_strategy}${item.physical_access_required ? " · PHYSICAL" : ""}`} /><Value label={chinese ? "方法" : "METHODS"} value={item.methods.join(", ")} /></button>)}</div>
+            : section === "METHODS" ? <div className="space-y-3">{analysis.method_matrix.map((item) => <div key={item.method} className="grid grid-cols-[160px_120px_1fr_1fr] gap-3 rounded-xl border border-white/[0.07] bg-[#15191b] p-4"><Value label="METHOD" value={item.method} /><Value label="DISPOSITION" value={item.disposition} /><Value label={chinese ? "目标故障" : "TARGET FAULTS"} value={item.target_fault_classes.join(", ")} /><Value label={chinese ? "残余缺口" : "RESIDUAL GAPS"} value={item.residual_gaps.join(", ")} /></div>)}</div>
+            : section === "TEST" ? <div className="grid grid-cols-2 gap-4">{analysis.recommendations.map((item) => <RecommendationCard key={item.id} selected={selectedId === item.id} onClick={() => onSelect(item.id)} priority={item.priority} title={item.title} nets={item.net_names} body={item.suggested_test} foot={item.observation} />)}</div>
             : section === "WIB" ? <div className="grid grid-cols-2 gap-4">{analysis.wib_design_recommendations.map((item) => <RecommendationCard key={item.id} selected={selectedId === item.id} onClick={() => onSelect(item.id)} priority={item.priority} title={item.title} nets={item.related_net_names} body={item.recommendation} foot={item.validation_needed} />)}</div>
               : <div className="space-y-3">{analysis.wib_constraints.map((item) => <button key={item.id} onClick={() => onSelect(item.id)} className={`w-full rounded-xl border p-4 text-left ${selectedId === item.id ? "border-[#c5a063]/50 bg-[#c5a063]/[0.06]" : "border-white/[0.07] bg-[#15191b]"}`}><div className="flex items-center justify-between"><span className="font-mono text-[10px] text-[#c4a167]">{item.id}</span><span className="font-mono text-[9px] text-[#787e7b]">{item.verification_mode}</span></div><h3 className="mt-2 text-[13px] font-medium">{item.requirement}</h3><div className="mt-3 grid grid-cols-3 gap-3 text-[10px] text-[#7f8683]"><span>{item.area}</span><span>{item.comparator}</span><span className={item.required_value == null ? "text-[#cba45e]" : "text-[#9cb18c]"}>{item.required_value == null ? "TBD" : `${item.required_value}${item.unit ? ` ${item.unit}` : ""}`}</span></div></button>)}</div>}
         </div>
@@ -144,26 +154,58 @@ function RecommendationContent({ analysis, selectedId, onSelect, chinese }: { an
   );
 }
 
+function LayoutAccessContent({ analysis, selectedId, onSelect, onLocateTestPoint, chinese }: { analysis: LayoutTestAccessAnalysis; selectedId: string | null; onSelect(id: string): void; onLocateTestPoint?: (id: string) => void; chinese: boolean }) {
+  const selected = analysis.mappings.find((mapping) => mapping.id === selectedId);
+  return (
+    <section className="grid min-h-0 grid-cols-[272px_minmax(0,1fr)_360px]">
+      <aside className="sidebar-surface min-h-0 overflow-y-auto border-r border-white/[0.07] p-5">
+        <SectionLabel>{chinese ? "冻结基线" : "FROZEN BASELINES"}</SectionLabel>
+        {[['PCB', analysis.design_id], ['LAYOUT BASELINE', analysis.layout_baseline_confirmation_id ?? 'MISSING'], ['DFT PLAN', analysis.test_plan_id], ['RULE PACK', analysis.rule_pack_id], ['GEOMETRY', analysis.geometry_analysis_id]].map(([label, value]) => <div key={label} className="mb-2 rounded-lg border border-white/[0.07] bg-[#15191b] p-3"><div className="font-mono text-[9px] text-[#777e7b]">{label}</div><div className="mt-1 break-all font-mono text-[10px] text-[#c9c7c1]">{value}</div></div>)}
+        <SectionLabel>{chinese ? "设计裁决" : "DESIGN VERDICT"}</SectionLabel>
+        <div className="grid grid-cols-2 gap-2"><Metric label="PASS" value={analysis.pass_count} /><Metric label="FAIL" value={analysis.fail_count} /><Metric label="REVIEW" value={analysis.review_count} /><Metric label="N/A" value={analysis.not_applicable_count} /></div>
+        <div className="mt-4 rounded-xl border border-[#c79d57]/25 bg-[#2a2519] p-3 text-[10px] leading-5 text-[#b59a69]">{chinese ? `生产放行：${analysis.production_readiness_verdict}。夹具接触、板弯、资源、带电安全、节拍和试产证据不由静态 Layout PASS 代替。` : `Production release: ${analysis.production_readiness_verdict}. Static Layout PASS does not replace fixture, safety, throughput, or pilot evidence.`}</div>
+      </aside>
+      <div className="canvas-stage min-h-0 overflow-y-auto p-6">
+        <div className="mx-auto max-w-[1120px]">
+          <div className="mb-5 flex items-center justify-between"><div><h2 className="text-[16px] font-semibold">{chinese ? "Approved Requirement → TestAccessMapping" : "Approved Requirement → TestAccessMapping"}</h2><p className="mt-1 text-[11px] text-[#7d8380]">{chinese ? "物理探针与连接器、边界扫描、烧录、BIST/FCT 分开裁决；启发式身份只能 REVIEW。" : "Physical probes and virtual methods are adjudicated separately; inferred identity remains REVIEW."}</p></div><Verdict verdict={analysis.verdict} /></div>
+          <div className="mb-5 rounded-xl border border-white/[0.07] bg-[#121618]"><div className="border-b border-white/[0.06] px-4 py-3 font-mono text-[9px] text-[#8a908d]">{chinese ? "ODB++ 基线与语义可判定性" : "ODB++ BASELINE AND SEMANTIC DETERMINACY"}</div>{(analysis.baseline_checks ?? []).map((check) => <div key={check.id} className="grid grid-cols-[82px_160px_minmax(0,1fr)] gap-3 border-b border-white/[0.05] px-4 py-3"><Verdict verdict={check.status} compact /><div><div className="font-mono text-[9px] text-[#777e7b]">{check.id}</div><div className="mt-1 break-all text-[9px] text-[#9aa19e]">{check.recorded_value}</div></div><div><div className="text-[10px] text-[#d0cfca]">{check.requirement}</div><p className="mt-1 text-[9px] leading-4 text-[#777e7b]">{check.message}</p></div></div>)}</div>
+          <div className="space-y-3">{analysis.mappings.map((mapping) => <button key={mapping.id} onClick={() => { onSelect(mapping.id); const point = mapping.matched_test_points[0]; if (point) onLocateTestPoint?.(point.id); }} className={`grid w-full grid-cols-[92px_minmax(190px,1fr)_140px_120px] items-start gap-3 rounded-xl border p-4 text-left ${selectedId === mapping.id ? "border-[#c5a063]/55 bg-[#c5a063]/[0.06]" : "border-white/[0.07] bg-[#15191b]"}`}><Verdict verdict={mapping.status} compact /><div><div className="font-mono text-[9px] text-[#777e7b]">{mapping.requirement_id}</div><div className="mt-1 text-[11px] leading-5 text-[#d3d2cd]">{mapping.message}</div><div className="mt-2 font-mono text-[9px] text-[#82938d]">{mapping.target_net_names.join(", ") || mapping.target_functions?.join(", ") || "NO NET / FUNCTION"}</div></div><Value label={chinese ? "访问方式" : "ACCESS"} value={mapping.access_strategy} /><Value label={chinese ? "匹配目标" : "TARGETS"} value={`${mapping.matched_test_points.length}${mapping.matched_test_points.length ? (chinese ? " · 点击定位" : " · CLICK TO LOCATE") : ""}`} /></button>)}</div>
+          {selected && <div className="mt-5 rounded-xl border border-white/[0.08] bg-[#111416] p-4"><div className="font-mono text-[9px] text-[#c5a063]">{selected.verification_mode} · {selected.geometry_violation_ids.length} geometry finding(s)</div><p className="mt-2 text-[12px] leading-5 text-[#969c99]">{selected.evidence.join(" · ") || (chinese ? "无证据链接" : "No evidence links")}</p></div>}
+        </div>
+      </div>
+      <aside className="sidebar-surface min-h-0 overflow-y-auto border-l border-white/[0.07]">
+        <PanelHead title={chinese ? "工厂关闭项" : "FACTORY CLOSURE"} verdict="REVIEW" />
+        {analysis.factory_confirmation_items.map((item) => <div key={item.id} className="border-b border-white/[0.06] px-4 py-4"><div className="flex items-center gap-2"><Verdict verdict="REVIEW" compact /><span className="text-[10px] font-medium">{item.requirement}</span></div><p className="mt-2 text-[10px] leading-4 text-[#777e7b]">{item.closure_evidence}</p></div>)}
+      </aside>
+    </section>
+  );
+}
+
 function QualificationContent({ analysis, selectedId, onSelect, chinese }: { analysis: WibQualificationAnalysis; selectedId: string | null; onSelect(id: string): void; chinese: boolean }) {
   const selected = analysis.constraint_results.find((result) => result.id === selectedId);
+  const selectedRequirement = analysis.requirement_results?.find((result) => result.id === selectedId);
   return (
     <section className="grid min-h-0 grid-cols-[272px_minmax(0,1fr)_360px]">
       <aside className="sidebar-surface min-h-0 overflow-y-auto border-r border-white/[0.07] p-5">
         <SectionLabel>{chinese ? "闭环输入" : "CLOSED-LOOP INPUTS"}</SectionLabel>
-        {[['PRODUCT', analysis.product_pinout_id], ['WIB', analysis.wib_pinout_id], ['CONSTRAINTS', analysis.constraint_set_id]].map(([label, value]) => <div key={label} className="mb-2 rounded-lg border border-white/[0.07] bg-[#15191b] p-3"><div className="font-mono text-[9px] text-[#777e7b]">{label}</div><div className="mt-1 break-all font-mono text-[10px] text-[#c9c7c1]">{value}</div></div>)}
+        {[['PRODUCT', analysis.product_pinout_id], ['WIB', analysis.wib_pinout_id], ['INTERFACE', analysis.interface_contract_id], ['DFT PLAN', analysis.test_plan_id], ['CONSTRAINTS', analysis.constraint_set_id]].map(([label, value]) => <div key={label} className="mb-2 rounded-lg border border-white/[0.07] bg-[#15191b] p-3"><div className="font-mono text-[9px] text-[#777e7b]">{label}</div><div className="mt-1 break-all font-mono text-[10px] text-[#c9c7c1]">{value ?? "MISSING"}</div></div>)}
         <SectionLabel>{chinese ? "裁决" : "VERDICT"}</SectionLabel>
         <div className="grid grid-cols-2 gap-2"><Metric label="PASS" value={analysis.pass_count} /><Metric label="FAIL" value={analysis.fail_count} /><Metric label="REVIEW" value={analysis.review_count} /><Metric label="WIRING" value={analysis.wiring_verdict} /></div>
+        {analysis.production_readiness_verdict && <div className="mt-3 rounded-xl border border-[#c79d57]/25 bg-[#2a2519] p-3 text-[10px] text-[#b99c69]">PRODUCTION READINESS · {analysis.production_readiness_verdict}</div>}
       </aside>
       <div className="canvas-stage min-h-0 overflow-y-auto p-6">
         <div className="mx-auto max-w-[1080px]">
           <div className="mb-5 flex items-center justify-between"><div><h2 className="text-[16px] font-semibold">{chinese ? "WIB 硬约束逐条验证" : "WIB hard-constraint qualification"}</h2><p className="mt-1 text-[11px] text-[#7d8380]">{chinese ? "只有全部适用约束有证据且通过，最终状态才是 PASS。" : "Final PASS requires supported evidence and PASS for every applicable constraint."}</p></div><Verdict verdict={analysis.verdict} /></div>
           <div className="space-y-3">{analysis.constraint_results.map((result) => <button key={result.id} onClick={() => onSelect(result.id)} className={`grid w-full grid-cols-[100px_1fr_160px_160px] items-start gap-3 rounded-xl border p-4 text-left ${selectedId === result.id ? "border-[#c5a063]/55 bg-[#c5a063]/[0.06]" : "border-white/[0.07] bg-[#15191b]"}`}><Verdict verdict={result.status} compact /><div><div className="font-mono text-[9px] text-[#777e7b]">{result.constraint_id} · {result.area}</div><div className="mt-1 text-[12px] leading-5 text-[#d3d2cd]">{result.requirement}</div></div><Value label={chinese ? "要求" : "REQUIRED"} value={formatRequired(result.required_value, result.unit)} /><Value label={chinese ? "实际" : "ACTUAL"} value={result.actual_value == null ? "MISSING" : `${result.actual_value}${result.unit ? ` ${result.unit}` : ""}`} /></button>)}</div>
           {selected && <div className="mt-5 rounded-xl border border-white/[0.08] bg-[#111416] p-4"><div className="font-mono text-[9px] text-[#c5a063]">{selected.verification_mode}</div><p className="mt-2 text-[12px] leading-5 text-[#969c99]">{selected.message}</p></div>}
+          {analysis.requirement_results && <><h2 className="mb-3 mt-8 text-[15px] font-semibold">{chinese ? "Approved DFT Requirement → WIB 路径" : "Approved DFT Requirement → WIB path"}</h2><div className="space-y-3">{analysis.requirement_results.map((result) => <button key={result.id} onClick={() => onSelect(result.id)} className={`grid w-full grid-cols-[100px_1fr_160px] items-start gap-3 rounded-xl border p-4 text-left ${selectedId === result.id ? "border-[#c5a063]/55 bg-[#c5a063]/[0.06]" : "border-white/[0.07] bg-[#15191b]"}`}><Verdict verdict={result.status} compact /><div><div className="font-mono text-[9px] text-[#777e7b]">{result.requirement_id} · {result.access_strategy}</div><div className="mt-1 text-[11px] leading-5 text-[#d3d2cd]">{result.message}</div><div className="mt-2 font-mono text-[9px] text-[#82938d]">{result.target_net_names.join(", ")}</div></div><Value label={chinese ? "责任边界" : "RESPONSIBILITY"} value={result.responsibility_boundary} /></button>)}</div></>}
+          {selectedRequirement && <div className="mt-5 rounded-xl border border-white/[0.08] bg-[#111416] p-4"><div className="font-mono text-[9px] text-[#c5a063]">{selectedRequirement.verification_mode}</div><p className="mt-2 text-[12px] leading-5 text-[#969c99]">{selectedRequirement.evidence.join(" · ")}</p></div>}
         </div>
       </div>
       <aside className="sidebar-surface min-h-0 overflow-y-auto border-l border-white/[0.07]">
         <PanelHead title={chinese ? "未关闭项" : "OPEN FINDINGS"} verdict={analysis.verdict} />
         {analysis.violations.length ? analysis.violations.map((finding) => <FindingButton key={finding.id} id={finding.id} selected={selectedId === finding.id} verdict={finding.status} title={finding.constraint_id} message={finding.message} onSelect={onSelect} />) : <PassState chinese={chinese} />}
+        {(analysis.factory_confirmation_items ?? []).map((item) => <div key={item.id} className="border-t border-white/[0.06] px-4 py-3"><div className="flex items-center gap-2"><Verdict verdict="REVIEW" compact /><span className="text-[10px]">{item.requirement}</span></div><p className="mt-2 text-[9px] leading-4 text-[#747a77]">{item.closure_evidence}</p></div>)}
       </aside>
     </section>
   );

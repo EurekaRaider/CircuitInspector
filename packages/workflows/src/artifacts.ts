@@ -9,6 +9,8 @@ export async function listWorkflowArtifacts(cacheDir: string): Promise<ArtifactC
     scanJsonDirectory(path.join(cacheDir, "pinouts"), diagnostics, pinoutArtifact),
     scanSchematicDirectory(path.join(cacheDir, "schematics"), diagnostics),
     scanJsonDirectory(path.join(cacheDir, "wib-constraints"), diagnostics, constraintArtifact),
+    scanJsonDirectory(path.join(cacheDir, "wib-interface-contracts"), diagnostics, interfaceContractArtifact),
+    scanJsonDirectory(path.join(cacheDir, "layout-baselines"), diagnostics, layoutBaselineArtifact),
     scanAnalysisDirectory(path.join(cacheDir, "evidence"), diagnostics),
     scanJsonDirectory(path.join(cacheDir, "workflow-drafts"), diagnostics, draftArtifact)
   ]);
@@ -177,28 +179,69 @@ function constraintArtifact(value: Record<string, unknown>, updatedAt: string): 
   };
 }
 
+function interfaceContractArtifact(value: Record<string, unknown>, updatedAt: string): ArtifactSummary | null {
+  if (value.schema_version !== 1 || typeof value.id !== "string" || value.status !== "APPROVED" || !Array.isArray(value.connector_mappings)) return null;
+  const pinCount = value.connector_mappings.reduce((count, mapping) => {
+    if (!mapping || typeof mapping !== "object") return count;
+    const pinMap = (mapping as { pin_map?: unknown }).pin_map;
+    return count + (Array.isArray(pinMap) ? pinMap.length : 0);
+  }, 0);
+  return {
+    id: value.id,
+    kind: "INTERFACE_CONTRACT",
+    title: typeof value.title === "string" ? value.title : value.id,
+    subtitle: `${String(value.revision ?? "-")} · ${pinCount} explicit pin mapping(s)`,
+    status: "APPROVED",
+    verdict: null,
+    analysis_kind: null,
+    source_path: null,
+    updated_at: updatedAtValue(value.approved_at, updatedAt)
+  };
+}
+
+function layoutBaselineArtifact(value: Record<string, unknown>, updatedAt: string): ArtifactSummary | null {
+  if (value.schema_version !== 1 || typeof value.id !== "string" || value.status !== "APPROVED" || typeof value.design_id !== "string") return null;
+  return {
+    id: value.id,
+    kind: "LAYOUT_BASELINE",
+    title: `Controlled Layout baseline · ${value.design_id}`,
+    subtitle: `${String(value.product_revision ?? "-")} · ${String(value.variant ?? "N/A")} · ${String(value.panel ?? "N/A")}`,
+    status: "APPROVED",
+    verdict: null,
+    analysis_kind: null,
+    source_path: null,
+    updated_at: updatedAtValue(value.approved_at, updatedAt)
+  };
+}
+
 function analysisArtifact(value: Record<string, unknown>, updatedAt: string): ArtifactSummary | null {
   const kind = String(value.kind ?? "");
-  if (typeof value.id !== "string" || !["WIRING_COMPARISON", "MANUFACTURING_TEST_RECOMMENDATIONS", "WIB_DESIGN_QUALIFICATION"].includes(kind)) return null;
+  if (typeof value.id !== "string" || !["WIRING_COMPARISON", "MANUFACTURING_TEST_RECOMMENDATIONS", "LAYOUT_TEST_ACCESS_ANALYSIS", "WIB_DESIGN_QUALIFICATION"].includes(kind)) return null;
   const titles: Record<string, string> = {
     WIRING_COMPARISON: "Product ↔ WIB wiring comparison",
-    MANUFACTURING_TEST_RECOMMENDATIONS: "Manufacturing test recommendations",
+    MANUFACTURING_TEST_RECOMMENDATIONS: "Controlled manufacturing test plan",
+    LAYOUT_TEST_ACCESS_ANALYSIS: "Layout DFT test-access qualification",
     WIB_DESIGN_QUALIFICATION: "Final WIB design qualification"
   };
   const verdict = ["PASS", "FAIL", "REVIEW", "NOT_APPLICABLE"].includes(String(value.verdict))
     ? value.verdict as ArtifactSummary["verdict"]
     : null;
+  const stale = value.stale && typeof value.stale === "object" && (value.stale as { is_stale?: unknown }).is_stale === true;
   return {
     id: value.id,
     kind: "ANALYSIS",
     title: titles[kind] ?? value.id,
     subtitle: value.id,
-    status: verdict,
+    status: stale ? "STALE" : kind === "MANUFACTURING_TEST_RECOMMENDATIONS" && typeof value.lifecycle_status === "string" ? value.lifecycle_status : verdict,
     verdict,
     analysis_kind: kind as NonNullable<ArtifactSummary["analysis_kind"]>,
     source_path: typeof value.report_path === "string" ? value.report_path : null,
     updated_at: updatedAt
   };
+}
+
+function updatedAtValue(value: unknown, fallback: string) {
+  return typeof value === "string" ? value : fallback;
 }
 
 function draftArtifact(value: Record<string, unknown>, updatedAt: string): ArtifactSummary | null {

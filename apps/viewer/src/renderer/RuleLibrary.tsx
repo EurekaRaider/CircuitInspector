@@ -10,10 +10,11 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import type { Locale } from "./i18n";
-import type { RuleDefinition, RulePack } from "./types";
+import type { RuleDefinition, RuleDocumentDiagnostic, RuleDocumentValidation, RulePack, RuleReviewDecision, RuleReviewItem, RuleReviewResolution } from "./types";
 
 const APPROVER_KEY = "circuit-inspector.approver";
 const ENTITY_OPTIONS = ["TEST_POINT", "COMPONENT", "COPPER", "BOARD_EDGE", "DRILL", "TOOLING_HOLE", "PANEL_TAB", "BGA_CSP", "SHIELD_FENCE", "UV_GLUE"] as const;
+const KIND_OPTIONS = ["MINIMUM_DISTANCE", "MINIMUM_WIDTH", "MINIMUM_ANNULAR_RING", "MINIMUM_DIAMETER"] as const;
 const METRIC_OPTIONS = ["CENTER_TO_CENTER", "EDGE_TO_EDGE", "BODY_TO_PAD"] as const;
 const SEVERITY_OPTIONS = ["ERROR", "WARNING", "INFO"] as const;
 
@@ -29,13 +30,22 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
   const [dirtyIds, setDirtyIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [validation, setValidation] = useState<RuleDocumentValidation | null>(null);
   const rulesTableRef = useRef<HTMLDivElement>(null);
 
   const selected = packs.find((pack) => pack.id === selectedId) ?? packs[0];
 
   async function loadRules(preferredId?: string) {
     const result = await window.circuitInspector.listRulePacks();
-    const normalized = result.rule_packs.map((pack) => ({ ...pack, review_items: pack.review_items ?? [] }));
+    const normalized = result.rule_packs.map((pack) => ({
+      ...pack,
+      review_items: (pack.review_items ?? []).map((item) => ({
+        ...item,
+        resolution: item.resolution ?? (item.acknowledged
+          ? { decision: "ACCEPT_SUGGESTION" as const, note: "", rule_id: null }
+          : null)
+      }))
+    }));
     setPacks(normalized);
     const next = preferredId ?? selectedId;
     setSelectedId(normalized.some((pack) => pack.id === next) ? next : normalized.find((pack) => pack.status === "DRAFT")?.id ?? normalized[0]?.id ?? "");
@@ -55,8 +65,11 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
     if (!paths.length) return;
     setBusy(true);
     setError("");
+    setValidation(null);
     try {
       const result = await window.circuitInspector.extractRulePack({ paths, ...(title.trim() ? { title: title.trim() } : {}) });
+      setValidation(result.validation);
+      if (!result.rule_pack) return;
       setPaths([]);
       setTitle("");
       await loadRules(result.rule_pack.id);
@@ -118,15 +131,39 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
 
   function removeRule(ruleId: string) {
     if (!selected || selected.status !== "DRAFT") return;
-    setPacks((current) => current.map((pack) => pack.id === selected.id ? { ...pack, rules: pack.rules.filter((rule) => rule.id !== ruleId) } : pack));
+    setPacks((current) => current.map((pack) => pack.id === selected.id ? {
+      ...pack,
+      rules: pack.rules.filter((rule) => rule.id !== ruleId),
+      review_items: pack.review_items.map((item) => item.resolution?.rule_id === ruleId
+        ? { ...item, resolution: { ...item.resolution, rule_id: null } }
+        : item)
+    } : pack));
     markDirty(selected.id);
   }
 
-  function acknowledgeReviewItem(itemId: string, acknowledged: boolean) {
+  function chooseReviewDecision(itemId: string, decision: RuleReviewDecision) {
     if (!selected || selected.status !== "DRAFT") return;
     setPacks((current) => current.map((pack) => pack.id === selected.id ? {
       ...pack,
-      review_items: pack.review_items.map((item) => item.id === itemId ? { ...item, acknowledged } : item)
+      review_items: pack.review_items.map((item) => item.id === itemId ? {
+        ...item,
+        acknowledged: true,
+        resolution: item.resolution?.decision === decision
+          ? item.resolution
+          : { decision, note: "", rule_id: null }
+      } : item)
+    } : pack));
+    markDirty(selected.id);
+  }
+
+  function updateReviewResolution(itemId: string, update: Partial<RuleReviewResolution>) {
+    if (!selected || selected.status !== "DRAFT") return;
+    setPacks((current) => current.map((pack) => pack.id === selected.id ? {
+      ...pack,
+      review_items: pack.review_items.map((item) => item.id === itemId && item.resolution ? {
+        ...item,
+        resolution: { ...item.resolution, ...update }
+      } : item)
     } : pack));
     markDirty(selected.id);
   }
@@ -139,7 +176,7 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
     const saved = await window.circuitInspector.updateRulePack({
       rule_pack_id: pack.id,
       rules: pack.rules,
-      acknowledged_review_item_ids: pack.review_items.filter((item) => item.acknowledged).map((item) => item.id)
+      review_item_resolutions: pack.review_items.flatMap((item) => item.resolution ? [{ review_item_id: item.id, ...item.resolution }] : [])
     });
     setPacks((current) => current.map((item) => item.id === saved.id ? saved : item));
     setDirtyIds((current) => current.filter((id) => id !== saved.id));
@@ -162,8 +199,8 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
 
   const blockers = selected ? approvalBlockers(selected) : [];
   const selectedIsDirty = selected ? dirtyIds.includes(selected.id) : false;
-  const acknowledgedReviewCount = selected?.review_items.filter((item) => item.acknowledged).length ?? 0;
-  const reviewItemsComplete = Boolean(selected?.review_items.length) && acknowledgedReviewCount === selected?.review_items.length;
+  const resolvedReviewCount = selected?.review_items.filter((item) => reviewItemResolved(item, selected.rules)).length ?? 0;
+  const reviewItemsComplete = Boolean(selected?.review_items.length) && resolvedReviewCount === selected?.review_items.length;
 
   return (
     <div className="grid h-full grid-rows-[64px_minmax(0,1fr)] overflow-hidden">
@@ -206,6 +243,7 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
 
         <div className="min-h-0 overflow-y-auto px-8 py-7">
           {error && <div role="alert" className="mb-5 flex gap-2 rounded-xl border border-[#b76755]/35 bg-[#35231f]/75 px-4 py-3 text-[12px] text-[#efc1b6]"><WarningCircleIcon size={16} className="shrink-0" />{error}</div>}
+          {validation && <RuleDocumentDiagnostics validation={validation} locale={locale} />}
           {busy && !selected ? <RuleSkeleton /> : selected ? (
             <div className="mx-auto max-w-[1280px]">
               <div className="flex items-start justify-between gap-8 border-b border-white/[0.07] pb-6">
@@ -223,20 +261,31 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
               {selected.review_items.length > 0 && (
                 <div className="mt-5 rounded-xl border border-white/[0.08] bg-[#111315] p-4">
                   <div className="flex items-start justify-between gap-5">
-                    <div><div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8c8e89]">{chinese ? "抽取复核项" : "Extraction review items"}</div><p className="mt-1 text-[10px] leading-5 text-[#6f726e]">{chinese ? "勾选表示你已按建议决定如何处理该段原文；勾选不会自动生成或修改规则。" : "Checking an item means you handled the passage as suggested; it does not create or modify a rule automatically."}</p></div>
-                    <div className="shrink-0 font-mono text-[10px] text-[#b99a65]">{acknowledgedReviewCount}/{selected.review_items.length} {chinese ? "已处理" : "handled"}</div>
+                    <div><div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8c8e89]">{chinese ? "抽取复核项" : "Extraction review items"}</div><p className="mt-1 text-[10px] leading-5 text-[#6f726e]">{chinese ? "每项都可采纳建议、说明理由后忽略，或关联并修改候选规则。决定会随草稿保存；模板安全错误不能在这里绕过。" : "For each item, accept the suggestion, ignore it with a reason, or link and modify a candidate rule. Decisions are saved with the draft; template safety errors cannot be bypassed here."}</p></div>
+                    <div className="shrink-0 font-mono text-[10px] text-[#b99a65]">{resolvedReviewCount}/{selected.review_items.length} {chinese ? "已决定" : "decided"}</div>
                   </div>
                   <div className="mt-4 space-y-3">{selected.review_items.map((item) => {
-                    const inputId = `review-item-${item.id}`;
+                    const resolved = reviewItemResolved(item, selected.rules);
+                    const decision = item.resolution?.decision ?? null;
                     return (
-                      <div key={item.id} className={`flex items-start gap-3 rounded-lg border px-3 py-3 ${item.acknowledged ? "border-[#7f925b]/25 bg-[#24301d]/20" : "border-white/[0.055] bg-white/[0.012]"}`}>
-                        <input id={inputId} type="checkbox" className="mt-1" checked={item.acknowledged} disabled={selected.status !== "DRAFT"} onChange={(event) => acknowledgeReviewItem(item.id, event.target.checked)} />
-                        <label htmlFor={inputId} className="min-w-0 flex-1 cursor-pointer text-[10px] leading-5 text-[#aaa9a4]">
-                          <span><strong className="text-[#d3ad6d]">{item.code}</strong> · {reviewMessage(item.code, item.message, locale)}</span>
-                          <small className="mt-1 block font-mono text-[9px] text-[#666966]">{item.citation.excerpt}</small>
-                          <span className="mt-2 block rounded-md border border-[#c5a063]/15 bg-[#c5a063]/[0.045] px-2.5 py-2 text-[#b8aa91]"><strong className="text-[#d4b77f]">{chinese ? "建议：" : "Suggestion: "}</strong>{reviewSuggestion(item.code, locale)}</span>
-                          <span className="mt-2 block text-[#858883]">{item.acknowledged ? chinese ? "已标记为按建议处理" : "Marked as handled" : chinese ? "我已按建议处理" : "I handled this as suggested"}</span>
-                        </label>
+                      <div key={item.id} className={`rounded-lg border px-3 py-3 ${resolved ? "border-[#7f925b]/25 bg-[#24301d]/20" : "border-white/[0.055] bg-white/[0.012]"}`}>
+                        <div className="text-[10px] leading-5 text-[#aaa9a4]"><strong className="text-[#d3ad6d]">{item.code}</strong> · {reviewMessage(item.code, item.message, locale)}</div>
+                        <div className="mt-1 font-mono text-[9px] leading-4 text-[#666966]">{item.citation.excerpt}</div>
+                        <div className="mt-2 rounded-md border border-[#c5a063]/15 bg-[#c5a063]/[0.045] px-2.5 py-2 text-[10px] leading-5 text-[#b8aa91]"><strong className="text-[#d4b77f]">{chinese ? "程序建议：" : "Program suggestion: "}</strong>{reviewSuggestion(item.code, locale)}</div>
+                        <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={`${item.code} ${chinese ? "复核决定" : "review decision"}`}>
+                          {(["ACCEPT_SUGGESTION", "IGNORE", "MODIFY_RULE"] as const).map((value) => (
+                            <button key={value} className={decision === value ? "primary-button" : "secondary-button"} disabled={selected.status !== "DRAFT"} onClick={() => chooseReviewDecision(item.id, value)}>{reviewDecisionLabel(value, locale)}</button>
+                          ))}
+                        </div>
+                        {decision === "IGNORE" && <label className="mt-3 block text-[10px] leading-5 text-[#858883]">{chinese ? "忽略理由（批准前必填）" : "Reason for ignoring (required before approval)"}<textarea className="workbench-input mt-1 min-h-20 resize-y" value={item.resolution?.note ?? ""} onChange={(event) => updateReviewResolution(item.id, { note: event.target.value, rule_id: null })} /></label>}
+                        {decision === "MODIFY_RULE" && (
+                          <div className="mt-3 grid gap-2 rounded-md border border-white/[0.06] bg-black/10 p-3 sm:grid-cols-[minmax(180px,0.4fr)_minmax(260px,1fr)_auto]">
+                            <label className="text-[10px] leading-5 text-[#858883]">{chinese ? "关联候选规则" : "Candidate rule"}<select className="workbench-input mt-1" value={item.resolution?.rule_id ?? ""} onChange={(event) => updateReviewResolution(item.id, { rule_id: event.target.value || null })}><option value="">{chinese ? "请选择" : "Select"}</option>{selected.rules.map((rule) => <option key={rule.id} value={rule.id}>{rule.id} · {rule.title}</option>)}</select></label>
+                            <label className="text-[10px] leading-5 text-[#858883]">{chinese ? "修改内容与依据（批准前必填）" : "Change and rationale (required before approval)"}<textarea className="workbench-input mt-1 min-h-20 resize-y" value={item.resolution?.note ?? ""} onChange={(event) => updateReviewResolution(item.id, { note: event.target.value })} /></label>
+                            <button className="secondary-button self-end" onClick={() => rulesTableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>{chinese ? "前往编辑规则" : "Edit rule"}</button>
+                          </div>
+                        )}
+                        <div className={`mt-2 text-[9px] ${resolved ? "text-[#91a778]" : "text-[#a57c70]"}`}>{resolved ? chinese ? "该复核项已有完整决定" : "This review item has a complete decision" : decision ? chinese ? "决定尚未完整，不能批准" : "Decision is incomplete; approval remains blocked" : chinese ? "尚未选择复核决定" : "No review decision selected"}</div>
                       </div>
                     );
                   })}</div>
@@ -262,7 +311,7 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
                   <thead><tr><th>{chinese ? "规则" : "Rule"}</th><th>{chinese ? "对象与目标" : "Source / target"}</th><th>{chinese ? "距离定义" : "Metric"}</th><th>{chinese ? "阈值" : "Threshold"}</th><th>{chinese ? "过滤" : "Filters"}</th><th>{chinese ? "违规严重度（命中后）" : "Violation severity (when hit)"}</th><th>{chinese ? "引用证据" : "Citation"}</th>{selected.status === "DRAFT" && <th>{chinese ? "操作" : "Action"}</th>}</tr></thead>
                   <tbody>{selected.rules.map((rule) => (
                     <tr key={rule.id}>
-                      <td><strong>{rule.title}</strong><code>{rule.kind}</code><small>{rule.id}</small></td>
+                      <td><strong>{rule.title}</strong>{selected.status === "DRAFT" ? <select aria-label={`${rule.id} kind`} value={rule.kind} onChange={(event) => updateRule(rule.id, { kind: event.target.value as RuleDefinition["kind"] })}>{KIND_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select> : <code>{rule.kind}</code>}<small>{rule.id}</small></td>
                       <td>{selected.status === "DRAFT" ? <div className="space-y-1"><select aria-label={`${rule.id} source`} value={rule.source} onChange={(event) => updateRule(rule.id, { source: event.target.value as RuleDefinition["source"] })}>{ENTITY_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select><select aria-label={`${rule.id} target`} value={rule.target ?? ""} onChange={(event) => updateRule(rule.id, { target: (event.target.value || null) as RuleDefinition["target"] })}><option value="">-</option>{ENTITY_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></div> : <><code>{rule.source}</code><span>→</span><code>{rule.target ?? "-"}</code></>}</td>
                       <td>{selected.status === "DRAFT" ? <div className="space-y-1"><select aria-label={`${rule.id} metric`} value={rule.metric ?? ""} onChange={(event) => updateRule(rule.id, { metric: (event.target.value || null) as RuleDefinition["metric"] })}><option value="">-</option>{METRIC_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select><input aria-label={`${rule.id} layers`} value={rule.layer_functions.join(", ")} placeholder="ALL LAYERS" onChange={(event) => updateRule(rule.id, { layer_functions: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) })} /></div> : <><code>{rule.metric ?? "-"}</code><small>{rule.layer_functions.join(", ") || "ALL LAYERS"}</small></>}</td>
                       <td>{selected.status === "DRAFT" ? <div className="flex items-center gap-1"><input aria-label={`${rule.id} threshold`} type="number" min="0.001" step="0.001" value={rule.threshold_nm > 0 ? rule.threshold_nm / 1_000_000 : ""} onChange={(event) => updateRule(rule.id, { threshold_nm: Math.round(Number(event.target.value) * 1_000_000) || 0 })} /><span className="font-mono text-[9px]">mm</span></div> : <span className="font-mono text-[#d3ae70]">{(rule.threshold_nm / 1_000_000).toFixed(3)} mm</span>}</td>
@@ -275,7 +324,7 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
                 </table>
               </div>
             </div>
-          ) : <div className="grid h-full place-items-center text-[12px] text-[#777875]">{chinese ? "选择或创建规则包" : "Select or create a rule pack"}</div>}
+          ) : validation ? null : <div className="grid h-full place-items-center text-[12px] text-[#777875]">{chinese ? "选择或创建规则包" : "Select or create a rule pack"}</div>}
         </div>
       </section>
 
@@ -303,6 +352,77 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
   );
 }
 
+function RuleDocumentDiagnostics({ validation, locale }: { validation: RuleDocumentValidation; locale: Locale }) {
+  const chinese = locale === "zh-CN";
+  const invalid = validation.status === "INVALID";
+  const clean = validation.status === "VALID";
+  const tone = invalid
+    ? "border-[#b76755]/35 bg-[#35231f]/65 text-[#efc1b6]"
+    : clean
+      ? "border-[#7f925b]/30 bg-[#24301d]/45 text-[#bed0aa]"
+      : "border-[#9b7a45]/35 bg-[#2c261a]/65 text-[#d9b777]";
+  return (
+    <section role={invalid ? "alert" : "status"} aria-label={chinese ? "规则文档校验结果" : "Rule document validation"} className={`mb-6 rounded-xl border p-4 ${tone}`}>
+      <div className="flex items-start justify-between gap-5">
+        <div className="flex min-w-0 items-start gap-3">
+          {clean ? <CheckCircleIcon size={18} className="mt-0.5 shrink-0" /> : <WarningCircleIcon size={18} className="mt-0.5 shrink-0" />}
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em]">{chinese ? "规则源模板校验" : "Rule-source template validation"} · {validation.status}</div>
+            <p className="mt-1 text-[10px] leading-5 opacity-80">{clean
+              ? chinese ? "模板结构有效；抽取结果仍需人工审查并批准。" : "The template structure is valid; extracted rules still require human review and approval."
+              : invalid
+                ? chinese ? "存在阻断生成的问题，未创建规则包。请按下列位置和建议修改 Markdown 后重新抽取。" : "Blocking issues prevented rule-pack creation. Correct the Markdown at the locations below and extract it again."
+                : chinese ? "已创建 DRAFT，但仍有需要处理或确认的问题。" : "A DRAFT was created, but reported issues still require attention."}</p>
+          </div>
+        </div>
+        <div className="shrink-0 text-right font-mono text-[9px] leading-5 opacity-75">
+          <div>{validation.error_count} ERROR · {validation.warning_count} WARNING</div>
+          <div>{validation.generation_blocker_count} {chinese ? "生成阻断" : "GENERATION BLOCKERS"} · {validation.approval_blocker_count} {chinese ? "批准阻断" : "APPROVAL BLOCKERS"}</div>
+        </div>
+      </div>
+      {validation.diagnostics.length > 0 && (
+        <div className="mt-4 space-y-2 border-t border-current/15 pt-4">
+          {validation.diagnostics.map((diagnostic) => (
+            <article key={diagnostic.id} className="rounded-lg border border-white/[0.07] bg-[#101315]/70 px-3 py-3 text-[#c8c7c2]">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded px-1.5 py-0.5 font-mono text-[8px] font-semibold ${diagnostic.severity === "ERROR" ? "bg-[#6b3128]/65 text-[#f0b0a2]" : diagnostic.severity === "WARNING" ? "bg-[#5c4926]/65 text-[#e2c17f]" : "bg-[#30434a]/65 text-[#a8cad6]"}`}>{diagnostic.severity}</span>
+                <strong className="font-mono text-[9px] text-[#d4b77f]">{diagnostic.code}</strong>
+                {diagnostic.blocks_generation && <span className="rounded border border-[#b76755]/30 px-1.5 py-0.5 font-mono text-[8px] text-[#d99484]">{chinese ? "阻断生成" : "BLOCKS GENERATION"}</span>}
+                {!diagnostic.blocks_generation && diagnostic.blocks_approval && <span className="rounded border border-[#9b7a45]/30 px-1.5 py-0.5 font-mono text-[8px] text-[#cfad6d]">{chinese ? "阻断批准" : "BLOCKS APPROVAL"}</span>}
+              </div>
+              <div className="mt-2 break-all font-mono text-[9px] text-[#747873]">{ruleDiagnosticLocation(diagnostic, locale)}</div>
+              <p className="mt-2 text-[10px] leading-5 text-[#c7c5c0]">{ruleDiagnosticMessage(diagnostic, locale)}</p>
+              {diagnostic.excerpt && <blockquote className="mt-2 border-l-2 border-white/[0.09] pl-2 font-mono text-[9px] leading-4 text-[#777a76]">{diagnostic.excerpt}</blockquote>}
+              <div className="mt-2 rounded-md border border-[#c5a063]/15 bg-[#c5a063]/[0.04] px-2.5 py-2 text-[10px] leading-5 text-[#b8aa91]"><strong className="text-[#d4b77f]">{chinese ? "建议修改：" : "Suggested change: "}</strong>{ruleDiagnosticSuggestion(diagnostic, locale)}</div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function ruleDiagnosticMessage(diagnostic: RuleDocumentDiagnostic, locale: Locale): string {
+  return locale === "zh-CN" ? diagnostic.message_zh : diagnostic.message;
+}
+
+export function ruleDiagnosticSuggestion(diagnostic: RuleDocumentDiagnostic, locale: Locale): string {
+  return locale === "zh-CN" ? diagnostic.suggestion_zh : diagnostic.suggestion;
+}
+
+export function ruleDiagnosticLocation(diagnostic: RuleDocumentDiagnostic, locale: Locale): string {
+  const chinese = locale === "zh-CN";
+  const positions = [
+    diagnostic.page !== null ? `${chinese ? "PDF 第" : "PDF page "}${diagnostic.page}${chinese ? "页" : ""}` : null,
+    diagnostic.line !== null ? `${chinese ? "Markdown 第" : "Markdown line "}${diagnostic.line}${chinese ? "行" : ""}` : null,
+    diagnostic.paragraph !== null ? `${chinese ? "第" : "paragraph "}${diagnostic.paragraph}${chinese ? "段" : ""}` : null,
+    diagnostic.section ? `${chinese ? "章节 " : "section "}${diagnostic.section}` : null,
+    diagnostic.rule_id ? `${chinese ? "规则 " : "rule "}${diagnostic.rule_id}` : null,
+    diagnostic.field ? `${chinese ? "字段 " : "field "}${diagnostic.field}` : null
+  ].filter(Boolean);
+  return `${diagnostic.source_path}${positions.length ? ` · ${positions.join(" · ")}` : ""}`;
+}
+
 function RuleSkeleton() {
   return <div className="mx-auto max-w-[1200px] animate-pulse space-y-4"><div className="h-20 rounded-xl bg-white/[0.025]" /><div className="h-72 rounded-xl bg-white/[0.02]" /></div>;
 }
@@ -315,13 +435,35 @@ export function approvalBlockers(pack: RulePack): string[] {
   const blockers: string[] = [];
   if (pack.rules.length === 0) blockers.push("NO_EXECUTABLE_RULES");
   if (pack.rules.some((rule) => rule.severity === null)) blockers.push("UNCONFIRMED_SEVERITY");
-  if (pack.review_items.some((item) => !item.acknowledged)) blockers.push("UNACKNOWLEDGED_REVIEW_ITEM");
+  if (pack.review_items.some((item) => !reviewItemResolved(item, pack.rules))) blockers.push("UNRESOLVED_REVIEW_ITEM");
   if (pack.rules.some((rule) => rule.threshold_nm <= 0
     || (rule.kind === "MINIMUM_DISTANCE" && (!rule.target || !rule.metric))
     || (rule.kind === "MINIMUM_WIDTH" && (rule.source !== "COPPER" || rule.target !== null || rule.metric !== null))
     || (rule.kind === "MINIMUM_ANNULAR_RING" && (rule.source !== "DRILL" || rule.target !== "COPPER" || rule.metric !== null))
     || (rule.kind === "MINIMUM_DIAMETER" && (rule.source !== "TEST_POINT" || rule.target !== null || rule.metric !== null)))) blockers.push("INCOMPLETE_RULE");
   return blockers;
+}
+
+export function reviewItemResolved(item: RuleReviewItem, rules: RuleDefinition[]): boolean {
+  if (!item.resolution) return item.acknowledged;
+  if (item.resolution.decision === "ACCEPT_SUGGESTION") return true;
+  if (item.resolution.decision === "IGNORE") return item.resolution.note.trim().length > 0;
+  return item.resolution.note.trim().length > 0
+    && item.resolution.rule_id !== null
+    && rules.some((rule) => rule.id === item.resolution?.rule_id);
+}
+
+export function reviewDecisionLabel(decision: RuleReviewDecision, locale: Locale): string {
+  const labels = locale === "zh-CN" ? {
+    ACCEPT_SUGGESTION: "采纳建议",
+    IGNORE: "忽略建议",
+    MODIFY_RULE: "修改规则"
+  } : {
+    ACCEPT_SUGGESTION: "Accept suggestion",
+    IGNORE: "Ignore suggestion",
+    MODIFY_RULE: "Modify rule"
+  };
+  return labels[decision];
 }
 
 export function severityLabel(severity: RuleDefinition["severity"], locale: Locale): string {
@@ -337,12 +479,12 @@ function approvalMessage(blockers: string[], locale: Locale): string {
   const labels: Record<string, string> = chinese ? {
     NO_EXECUTABLE_RULES: "至少保留一条可执行规则",
     UNCONFIRMED_SEVERITY: "逐条确认违规命中后的严重度",
-    UNACKNOWLEDGED_REVIEW_ITEM: "确认所有抽取复核项",
+    UNRESOLVED_REVIEW_ITEM: "为每个抽取复核项选择处置方式并补全理由或关联规则",
     INCOMPLETE_RULE: "补全对象、定义和有效阈值"
   } : {
     NO_EXECUTABLE_RULES: "Keep at least one executable rule",
     UNCONFIRMED_SEVERITY: "Confirm the post-hit severity of every rule",
-    UNACKNOWLEDGED_REVIEW_ITEM: "Acknowledge every extraction review item",
+    UNRESOLVED_REVIEW_ITEM: "Resolve every extraction review item with any required reason or linked rule",
     INCOMPLETE_RULE: "Complete entity, metric, and threshold fields"
   };
   return `${chinese ? "批准前必须：" : "Before approval: "}${blockers.map((blocker) => labels[blocker] ?? blocker).join(chinese ? "；" : "; ")}`;

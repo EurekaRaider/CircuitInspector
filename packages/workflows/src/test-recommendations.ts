@@ -1,7 +1,18 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { invalidateDependentAnalyses } from "./invalidation.js";
+import type {
+  ControlledTestBaseline,
+  ManufacturingTestMethod,
+  ManufacturingTestPlan as ContractManufacturingTestPlan,
+  ManufacturingTestRequirement,
+  TestMethodCoverage,
+  TestPlanApproval
+} from "@circuit-inspector/contracts";
 import { readAnalysisPinout, type PinoutDocument } from "./wiring.js";
+
+export type { ManufacturingTestRequirement, TestMethodCoverage } from "@circuit-inspector/contracts";
 
 export interface ManufacturingTestRecommendation {
   id: string;
@@ -20,24 +31,6 @@ export interface ManufacturingTestRecommendation {
   closure_evidence: string;
 }
 
-export interface ManufacturingTestPlan {
-  schema_version: 1;
-  kind: "MANUFACTURING_TEST_RECOMMENDATIONS";
-  id: string;
-  product_pinout_id: string;
-  product: PinoutDocument;
-  verdict: "REVIEW";
-  verification_mode: "DOCUMENT_BACKED";
-  recommendation_count: number;
-  recommendations: ManufacturingTestRecommendation[];
-  wib_design_recommendations: WibDesignRecommendation[];
-  wib_constraints: WibDesignConstraint[];
-  diagnostics: Array<{ code: string; severity: "INFO" | "WARNING"; message: string }>;
-  report_uri: string;
-  report_path: string;
-  elapsed_ms: number;
-}
-
 export interface WibDesignRecommendation {
   id: string;
   status: "REVIEW";
@@ -51,10 +44,20 @@ export interface WibDesignRecommendation {
   validation_needed: string;
 }
 
+export interface TestPlanApprovalInput {
+  approvedBy: string;
+  variant?: string | null;
+  panel?: string | null;
+  factory: string;
+  line: string;
+  tester: string;
+  approvedRulePackId: string;
+}
+
 export interface WibDesignConstraint {
   id: string;
   status: "REVIEW";
-  verification_mode: "DOCUMENT_BACKED" | "MANUAL_IMPLEMENTATION_CONFIRMATION" | "MANUAL_FACTORY_CONFIRMATION";
+  verification_mode: "DOCUMENT_BACKED" | "MANUAL_FACTORY_CONFIRMATION";
   requirement_level: "HARD";
   area: "CONNECTIVITY" | "ELECTRICAL" | "SIGNAL_INTEGRITY" | "MEASUREMENT" | "FIXTURE_GEOMETRY" | "MECHANICAL" | "TESTER_CAPACITY" | "THROUGHPUT";
   requirement: string;
@@ -66,6 +69,15 @@ export interface WibDesignConstraint {
   related_net_names: string[];
   owner: string;
   closure_evidence: string;
+}
+
+export interface ManufacturingTestPlan extends Omit<ContractManufacturingTestPlan, "product" | "recommendations" | "wib_design_recommendations" | "wib_constraints" | "diagnostics"> {
+  product: PinoutDocument;
+  recommendations: ManufacturingTestRecommendation[];
+  wib_design_recommendations: WibDesignRecommendation[];
+  wib_constraints: WibDesignConstraint[];
+  diagnostics: Array<{ code: string; severity: "INFO" | "WARNING" | "ERROR"; message: string }>;
+  elapsed_ms: number;
 }
 
 interface RecommendationTemplate {
@@ -216,8 +228,10 @@ export async function recommendManufacturingTests(productPinoutId: string, cache
   }
   const wibDesignRecommendations = createWibDesignRecommendations(recommendations);
   const wibConstraints = createWibConstraints(product, recommendations);
+  const requirements = createRequirements(product, recommendations);
+  const methodMatrix = createMethodMatrix(recommendations);
 
-  const identity = JSON.stringify({ product: product.confirmation?.content_hash ?? product.source_hash, model: "manufacturing-test-recommendations-v1" });
+  const identity = JSON.stringify({ product: product.confirmation?.content_hash ?? product.source_hash, model: "manufacturing-test-plan-v2" });
   const id = `test-plan-${createHash("sha256").update(identity).digest("hex").slice(0, 20)}`;
   const directory = path.join(cacheDir, "evidence", safeSegment(id));
   await mkdir(directory, { recursive: true });
@@ -227,13 +241,27 @@ export async function recommendManufacturingTests(productPinoutId: string, cache
   if (!product.revision) diagnostics.push({ code: "MISSING_PRODUCT_REVISION", severity: "WARNING", message: "The product schematic revision is missing and must be established before approving a line test plan." });
   diagnostics.push({ code: "CONNECTOR_NET_SCOPE", severity: "INFO", message: "V1 recommendations cover NET NAME values present in the imported connector pinout. Internal schematic nets and components require a controlled full-netlist export or manual review." });
   const plan: ManufacturingTestPlan = {
-    schema_version: 1,
+    schema_version: 2,
     kind: "MANUFACTURING_TEST_RECOMMENDATIONS",
     id,
     product_pinout_id: product.id,
     product,
+    lifecycle_status: "DRAFT",
+    baseline: {
+      product_revision: product.revision,
+      product_source_hash: product.confirmation?.content_hash ?? product.source_hash,
+      variant: null,
+      panel: null,
+      factory: null,
+      line: null,
+      tester: null,
+      approved_rule_pack_id: null
+    },
+    approval: null,
     verdict: "REVIEW",
     verification_mode: "DOCUMENT_BACKED",
+    method_matrix: methodMatrix,
+    requirements,
     recommendation_count: recommendations.length,
     recommendations,
     wib_design_recommendations: wibDesignRecommendations,
@@ -245,14 +273,121 @@ export async function recommendManufacturingTests(productPinoutId: string, cache
   };
   await writeFile(reportPath, renderReport(plan), "utf8");
   await writeFile(path.join(directory, "analysis.json"), JSON.stringify(plan, null, 2), "utf8");
+  const priorPlans = await invalidateDependentAnalyses(
+    cacheDir,
+    (analysis) => analysis.kind === "MANUFACTURING_TEST_RECOMMENDATIONS"
+      && analysis.product_pinout_id === product.id
+      && analysis.id !== plan.id,
+    `Product schematic/pinout evidence changed and generated replacement DFT plan ${plan.id}`
+  );
+  if (priorPlans.length) {
+    const replaced = new Set(priorPlans);
+    await invalidateDependentAnalyses(
+      cacheDir,
+      (analysis) => typeof analysis.test_plan_id === "string" && replaced.has(analysis.test_plan_id),
+      `The DFT baseline used by this analysis was invalidated by replacement plan ${plan.id}`
+    );
+  }
   return plan;
+}
+
+export async function readManufacturingTestPlan(planId: string, cacheDir: string): Promise<ManufacturingTestPlan> {
+  const value = JSON.parse(await readFile(planFile(cacheDir, planId), "utf8")) as ManufacturingTestPlan;
+  if (value.kind !== "MANUFACTURING_TEST_RECOMMENDATIONS" || value.schema_version !== 2) {
+    throw new Error(`${planId} is not a controlled manufacturing test plan`);
+  }
+  return {
+    ...value,
+    requirements: value.requirements.map((requirement) => ({ ...requirement, target_functions: requirement.target_functions ?? [] }))
+  };
+}
+
+export async function updateManufacturingTestPlan(
+  planId: string,
+  requirements: ManufacturingTestRequirement[],
+  methodMatrix: TestMethodCoverage[],
+  cacheDir: string
+): Promise<ManufacturingTestPlan> {
+  const plan = await readManufacturingTestPlan(planId, cacheDir);
+  if (plan.lifecycle_status !== "DRAFT") throw new Error(`test plan ${plan.id} is immutable after approval`);
+  validateRequirementUpdate(plan.requirements, requirements, false);
+  validateMethodMatrix(methodMatrix);
+  const updated: ManufacturingTestPlan = {
+    ...plan,
+    requirements,
+    method_matrix: methodMatrix,
+    recommendation_count: requirements.length,
+    elapsed_ms: plan.elapsed_ms
+  };
+  await persistPlan(updated, cacheDir);
+  return updated;
+}
+
+export async function approveManufacturingTestPlan(
+  planId: string,
+  input: TestPlanApprovalInput,
+  cacheDir: string
+): Promise<ManufacturingTestPlan> {
+  const plan = await readManufacturingTestPlan(planId, cacheDir);
+  if (plan.lifecycle_status !== "DRAFT") throw new Error(`test plan ${plan.id} is not a DRAFT`);
+  if (plan.product.status !== "CONFIRMED") throw new Error("product schematic/pinout must be CONFIRMED before DFT baseline approval");
+  if (!plan.product.revision) throw new Error("product revision is required before DFT baseline approval");
+  if (!input.approvedBy.trim() || !input.factory.trim() || !input.line.trim() || !input.tester.trim() || !input.approvedRulePackId.trim()) {
+    throw new Error("approver, factory, line, tester, and approved rule pack are required");
+  }
+  validateRequirementUpdate(plan.requirements, plan.requirements, true);
+  validateMethodMatrix(plan.method_matrix);
+  const baseline: ControlledTestBaseline = {
+    ...plan.baseline,
+    product_revision: plan.product.revision,
+    variant: input.variant?.trim() || null,
+    panel: input.panel?.trim() || null,
+    factory: input.factory.trim(),
+    line: input.line.trim(),
+    tester: input.tester.trim(),
+    approved_rule_pack_id: input.approvedRulePackId.trim()
+  };
+  const approvalPayload = {
+    schema_version: plan.schema_version,
+    product_pinout_id: plan.product_pinout_id,
+    baseline,
+    method_matrix: plan.method_matrix,
+    requirements: plan.requirements
+  };
+  const approval: TestPlanApproval = {
+    approved_by: input.approvedBy.trim(),
+    approved_at: new Date().toISOString(),
+    content_hash: createHash("sha256").update(JSON.stringify(approvalPayload)).digest("hex"),
+    statement: "Approved as the DFT requirement baseline. Factory fixture, station, powered, throughput, and pilot acceptance remain separate evidence gates."
+  };
+  const approved: ManufacturingTestPlan = { ...plan, lifecycle_status: "APPROVED", baseline, approval };
+  await persistPlan(approved, cacheDir);
+  return approved;
+}
+
+export async function supersedeManufacturingTestPlan(planId: string, supersededBy: string, cacheDir: string): Promise<ManufacturingTestPlan> {
+  const plan = await readManufacturingTestPlan(planId, cacheDir);
+  if (plan.lifecycle_status !== "APPROVED") throw new Error(`only an APPROVED test plan can be superseded`);
+  if (!supersededBy.trim()) throw new Error("superseding plan identifier is required");
+  const superseded: ManufacturingTestPlan = {
+    ...plan,
+    lifecycle_status: "SUPERSEDED",
+    diagnostics: [...plan.diagnostics, { code: "TEST_PLAN_SUPERSEDED", severity: "WARNING", message: `This DFT baseline was superseded by ${supersededBy.trim()}; rerun Layout and WIB qualification against the replacement.` }]
+  };
+  await persistPlan(superseded, cacheDir);
+  await invalidateDependentAnalyses(
+    cacheDir,
+    (analysis) => analysis.id !== plan.id && analysis.test_plan_id === plan.id,
+    `DFT requirement baseline ${plan.id} was superseded by ${supersededBy.trim()}`
+  );
+  return superseded;
 }
 
 export async function readLocalDocumentAnalysis(analysisId: string, cacheDir: string): Promise<ManufacturingTestPlan | Record<string, unknown> | null> {
   const file = path.join(cacheDir, "evidence", safeSegment(analysisId), "analysis.json");
   try {
     const parsed = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
-    return parsed.kind === "MANUFACTURING_TEST_RECOMMENDATIONS" || parsed.kind === "WIRING_COMPARISON" || parsed.kind === "WIB_DESIGN_QUALIFICATION" ? parsed : null;
+    return parsed.kind === "MANUFACTURING_TEST_RECOMMENDATIONS" || parsed.kind === "WIRING_COMPARISON" || parsed.kind === "LAYOUT_TEST_ACCESS_ANALYSIS" || parsed.kind === "WIB_DESIGN_QUALIFICATION" ? parsed : null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -277,6 +412,81 @@ function createRecommendation(template: RecommendationTemplate, pins: PinoutDocu
     missing_inputs: template.missingInputs,
     closure_evidence: template.closureEvidence
   };
+}
+
+function createRequirements(product: PinoutDocument, recommendations: ManufacturingTestRecommendation[]): ManufacturingTestRequirement[] {
+  return recommendations.flatMap((recommendation) => recommendation.net_names.map((netName) => {
+    const pins = product.pins.filter((pin) => key(pin.net_name) === key(netName));
+    const policy = requirementPolicy(recommendation.category);
+    const sourceEvidence = pins.map((pin) => ({
+      source_path: pin.evidence.source_path,
+      source_hash: pin.evidence.source_hash,
+      page: pin.evidence.page,
+      excerpt: pin.evidence.excerpt
+    }));
+    return {
+      id: `requirement-${recommendation.category.toLowerCase()}-${createHash("sha256").update(key(netName)).digest("hex").slice(0, 10)}`,
+      status: "REVIEW",
+      verification_mode: "DOCUMENT_BACKED",
+      category: recommendation.category,
+      priority: recommendation.priority,
+      title: `${recommendation.title} · ${netName}`,
+      fault_classes: policy.faultClasses,
+      target_net_names: [netName],
+      target_pins: pins.map((pin) => ({ connector: pin.connector, pin: pin.pin, net_name: pin.net_name })),
+      target_functions: [],
+      methods: policy.methods,
+      test_stage: policy.stage,
+      access_strategy: policy.accessStrategy,
+      physical_access_required: policy.physicalAccessRequired,
+      allowed_sides: ["TOP", "BOTTOM"],
+      stimulus: recommendation.stimulus,
+      observation: recommendation.observation,
+      limit_authority: null,
+      owner: "Product test engineering requirement owner",
+      residual_risk: policy.residualRisk,
+      closure_evidence: recommendation.closure_evidence,
+      source_evidence: sourceEvidence
+    } satisfies ManufacturingTestRequirement;
+  }));
+}
+
+function requirementPolicy(category: ManufacturingTestRecommendation["category"]): {
+  methods: ManufacturingTestMethod[];
+  stage: ManufacturingTestRequirement["test_stage"];
+  accessStrategy: ManufacturingTestRequirement["access_strategy"];
+  physicalAccessRequired: boolean;
+  faultClasses: string[];
+  residualRisk: string;
+} {
+  const policies: Record<ManufacturingTestRecommendation["category"], ReturnType<typeof requirementPolicy>> = {
+    GROUND: { methods: ["FLYING_PROBE", "ICT", "FCT"], stage: "PRE_SHIELD_COATING", accessStrategy: "PHYSICAL_PROBE", physicalAccessRequired: true, faultClasses: ["assembly open", "resistive connection", "wrong ground-domain join"], residualRisk: "Powered and low-level measurement behavior still needs fixture/station validation." },
+    POWER: { methods: ["FLYING_PROBE", "ICT", "FCT"], stage: "PRE_SHIELD_COATING", accessStrategy: "PHYSICAL_PROBE", physicalAccessRequired: true, faultClasses: ["short", "assembly open", "wrong rail", "sequencing fault"], residualRisk: "Static access does not prove safe injection, current limiting, sequencing, or discharge." },
+    PROGRAMMING_DEBUG: { methods: ["BOUNDARY_SCAN", "PROGRAMMING"], stage: "POST_REFLOW", accessStrategy: "PROGRAMMING_INTERFACE", physicalAccessRequired: false, faultClasses: ["blank device", "wrong image", "programming access fault", "digital interconnect fault"], residualRisk: "Exact device/BSDL, algorithm, security state, retry, and production execution remain to be demonstrated." },
+    RESET_BOOT: { methods: ["ICT", "FCT"], stage: "POST_REFLOW", accessStrategy: "CONNECTOR", physicalAccessRequired: false, faultClasses: ["reset fault", "boot-strap fault", "unsafe default state"], residualRisk: "Control direction, pulls, contention, and blank-device behavior need document and powered evidence." },
+    CLOCK: { methods: ["ICT", "FCT"], stage: "POST_REFLOW", accessStrategy: "FCT", physicalAccessRequired: false, faultClasses: ["missing clock", "wrong frequency", "startup fault"], residualRisk: "Loading, bandwidth, uncertainty, and startup limits need controlled station evidence." },
+    DIGITAL_INTERFACE: { methods: ["BOUNDARY_SCAN", "FCT"], stage: "FINAL_ASSEMBLY", accessStrategy: "FCT", physicalAccessRequired: false, faultClasses: ["open", "short", "swap", "protocol path fault"], residualRisk: "Voltage domain, direction, termination, speed, and executable endpoint remain to be confirmed." },
+    ANALOG_SENSOR: { methods: ["FCT"], stage: "FINAL_ASSEMBLY", accessStrategy: "FCT", physicalAccessRequired: false, faultClasses: ["analog path open", "wrong value", "sensor fault", "calibration fault"], residualRisk: "Limits, uncertainty, guard band, calibration, and environmental conditions remain factory-confirmation items." },
+    ACTUATOR_SAFETY: { methods: ["FCT"], stage: "FINAL_ASSEMBLY", accessStrategy: "FCT", physicalAccessRequired: false, faultClasses: ["unsafe default", "output fault", "protection fault", "interlock fault"], residualRisk: "Hazard controls and powered negative cases require safety approval and witnessed execution." },
+    GENERAL_SIGNAL: { methods: ["ICT", "FLYING_PROBE", "BOUNDARY_SCAN", "FCT"], stage: "POST_REFLOW", accessStrategy: "FCT", physicalAccessRequired: false, faultClasses: ["open", "short", "swap", "unobserved manufacturing fault"], residualRisk: "The responsible engineer must confirm signal function, method assignment, expected state, and intentionally uncovered risk before approval." }
+  };
+  return policies[category];
+}
+
+function createMethodMatrix(recommendations: ManufacturingTestRecommendation[]): TestMethodCoverage[] {
+  const categories = new Set(recommendations.map((item) => item.category));
+  const rows: Array<Omit<TestMethodCoverage, "status">> = [
+    { method: "BARE_BOARD_ELECTRICAL", disposition: "SELECTED", target_fault_classes: ["bare-board open", "bare-board short"], prerequisites: ["Supplier electrical-test program and matching board revision"], residual_gaps: ["Assembly and powered behavior"], reason: "Catch fabrication interconnect faults before assembly." },
+    { method: "SPI", disposition: "SUPPLEMENTAL", target_fault_classes: ["solder-paste volume and alignment defect"], prerequisites: ["Stencil/process program"], residual_gaps: ["Electrical connectivity and component function"], reason: "Inspection evidence complements electrical test and is not a substitute for it." },
+    { method: "AOI", disposition: "SUPPLEMENTAL", target_fault_classes: ["visible placement, polarity, and solder defect"], prerequisites: ["Approved inspection program and golden data"], residual_gaps: ["Hidden joints and electrical behavior"], reason: "Use visual inspection where the defect is observable." },
+    { method: "AXI", disposition: "SUPPLEMENTAL", target_fault_classes: ["hidden solder-joint defect"], prerequisites: ["Applicable package risk and approved X-ray program"], residual_gaps: ["Electrical and functional behavior"], reason: "Apply where hidden-joint risk justifies it." },
+    { method: "FLYING_PROBE", disposition: "SUPPLEMENTAL", target_fault_classes: ["assembly open", "short", "passive-value fault"], prerequisites: ["Accessible targets and production-volume decision"], residual_gaps: ["High-throughput and powered functional behavior"], reason: "Candidate for prototypes, changing designs, or low-volume production." },
+    { method: "ICT", disposition: "SUPPLEMENTAL", target_fault_classes: ["assembly open", "short", "wrong or missing component", "passive-value fault"], prerequisites: ["Approved physical access, fixture, and stable-volume business case"], residual_gaps: ["Limited-access devices and end-to-end behavior"], reason: "Candidate where repeatability, diagnostics, access, and volume justify a fixture." },
+    { method: "BOUNDARY_SCAN", disposition: categories.has("PROGRAMMING_DEBUG") || categories.has("DIGITAL_INTERFACE") ? "SUPPLEMENTAL" : "NOT_SELECTED", target_fault_classes: ["limited-access digital interconnect fault"], prerequisites: ["Exact devices, packages, validated BSDL files, chain topology, and executable patterns"], residual_gaps: ["Analog, non-scan, and powered product behavior"], reason: "Use only for compatible, controllable, and observable digital structures." },
+    { method: "PROGRAMMING", disposition: categories.has("PROGRAMMING_DEBUG") ? "SELECTED" : "NOT_SELECTED", target_fault_classes: ["blank, corrupt, wrong-version, or misconfigured device"], prerequisites: ["Authoritative image, algorithm, identity, security, retry, and recovery process"], residual_gaps: ["Unrelated assembly and product-function faults"], reason: "Selected only when the imported interface exposes programming/debug intent." },
+    { method: "FCT", disposition: "SELECTED", target_fault_classes: ["powered interface, sensor, actuator, calibration, safety, and end-to-end fault"], prerequisites: ["Approved limits, loads, fixtures, firmware state, and station procedure"], residual_gaps: ["Structural fault localization without complementary methods"], reason: "Close product behaviors that structural and inspection methods cannot establish." }
+  ];
+  return rows.map((row) => ({ ...row, status: "REVIEW" }));
 }
 
 function createWibDesignRecommendations(recommendations: ManufacturingTestRecommendation[]): WibDesignRecommendation[] {
@@ -387,7 +597,7 @@ function createWibConstraints(product: PinoutDocument, recommendations: Manufact
   ): WibDesignConstraint => ({
     id,
     status: "REVIEW",
-    verification_mode: "MANUAL_IMPLEMENTATION_CONFIRMATION",
+    verification_mode: "MANUAL_FACTORY_CONFIRMATION",
     requirement_level: "HARD",
     area,
     requirement,
@@ -420,12 +630,59 @@ function createWibConstraints(product: PinoutDocument, recommendations: Manufact
   return constraints;
 }
 
+function validateRequirementUpdate(original: ManufacturingTestRequirement[], next: ManufacturingTestRequirement[], forApproval: boolean) {
+  if (!next.length) throw new Error("at least one manufacturing test requirement is required");
+  const originalIds = new Set(original.map((item) => item.id));
+  const nextIds = new Set<string>();
+  for (const requirement of next) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(requirement.id)) throw new Error(`invalid test requirement identifier ${requirement.id}`);
+    if (nextIds.has(requirement.id)) throw new Error(`duplicate test requirement ${requirement.id}`);
+    nextIds.add(requirement.id);
+    if (!requirement.title.trim() || !requirement.owner.trim() || (!requirement.target_net_names.length && !requirement.target_pins.length && !requirement.target_functions.length) || !requirement.methods.length) {
+      throw new Error(`test requirement ${requirement.id} is incomplete`);
+    }
+    if (!requirement.fault_classes.length || !requirement.stimulus.trim() || !requirement.observation.trim() || !requirement.closure_evidence.trim() || !requirement.residual_risk.trim() || !requirement.source_evidence.length) {
+      throw new Error(`test requirement ${requirement.id} lacks a controlled fault model, stimulus/observation, residual risk, source evidence, or closure evidence`);
+    }
+    if (requirement.physical_access_required && !requirement.allowed_sides.length) {
+      throw new Error(`physical-access requirement ${requirement.id} needs at least one allowed side`);
+    }
+    if (forApproval && requirement.access_strategy === "TO_BE_ASSIGNED") {
+      throw new Error(`test requirement ${requirement.id} still has TO_BE_ASSIGNED access`);
+    }
+  }
+  if ([...originalIds].some((id) => !nextIds.has(id))) throw new Error("generated test requirements cannot be silently removed during draft review");
+}
+
+function validateMethodMatrix(rows: TestMethodCoverage[]) {
+  const expected: ManufacturingTestMethod[] = ["BARE_BOARD_ELECTRICAL", "SPI", "AOI", "AXI", "FLYING_PROBE", "ICT", "BOUNDARY_SCAN", "PROGRAMMING", "FCT"];
+  const ids = new Set(rows.map((row) => row.method));
+  if (ids.size !== rows.length) throw new Error("manufacturing test method matrix contains duplicates");
+  const missing = expected.filter((method) => !ids.has(method));
+  if (missing.length) throw new Error(`manufacturing test method matrix is missing ${missing.join(", ")}`);
+  for (const row of rows) {
+    if (!row.target_fault_classes.length || !row.reason.trim()) throw new Error(`method ${row.method} lacks a fault model or reason`);
+  }
+}
+
+async function persistPlan(plan: ManufacturingTestPlan, cacheDir: string) {
+  await mkdir(path.dirname(planFile(cacheDir, plan.id)), { recursive: true });
+  await writeFile(plan.report_path, renderReport(plan), "utf8");
+  await writeFile(planFile(cacheDir, plan.id), JSON.stringify(plan, null, 2), "utf8");
+}
+
+function planFile(cacheDir: string, planId: string) {
+  return path.join(cacheDir, "evidence", safeSegment(planId), "analysis.json");
+}
+
 function renderReport(plan: ManufacturingTestPlan) {
+  const methodRows = plan.method_matrix.map((row) => `<tr><td><code>${html(row.method)}</code></td><td>${html(row.disposition)}</td><td>${html(row.target_fault_classes.join(", "))}</td><td>${html(row.prerequisites.join("; "))}</td><td>${html(row.residual_gaps.join("; "))}</td><td>${html(row.reason)}</td></tr>`).join("");
+  const requirementRows = plan.requirements.map((requirement) => `<tr><td><code>${html(requirement.id)}</code></td><td>${html(requirement.priority)}</td><td>${html(requirement.target_net_names.join(", ") || requirement.target_functions.join(", ") || requirement.target_pins.map((pin) => `${pin.connector}.${pin.pin}`).join(", "))}</td><td>${html(requirement.methods.join(", "))}</td><td>${html(requirement.test_stage)}</td><td>${html(requirement.access_strategy)}</td><td>${requirement.physical_access_required ? html(requirement.allowed_sides.join(", ")) : "NOT REQUIRED"}</td><td>${html(requirement.owner)}</td><td>${html(requirement.residual_risk)}</td></tr>`).join("");
   const cards = plan.recommendations.map((item) => `<article><div class="card-head"><span class="priority ${item.priority.toLowerCase()}">${html(item.priority)}</span><span>${html(item.category)}</span></div><h2>${html(item.title)}</h2><p>${html(item.rationale)}</p><dl><dt>NET NAME evidence</dt><dd>${item.net_names.map((net) => `<code>${html(net)}</code>`).join(" ")}</dd><dt>Suggested test</dt><dd>${html(item.suggested_test)}</dd><dt>Stimulus</dt><dd>${html(item.stimulus)}</dd><dt>Observation</dt><dd>${html(item.observation)}</dd><dt>Missing inputs</dt><dd><ul>${item.missing_inputs.map((input) => `<li>${html(input)}</li>`).join("")}</ul></dd><dt>Evidence required to close REVIEW</dt><dd>${html(item.closure_evidence)}</dd></dl></article>`).join("");
   const wibCards = plan.wib_design_recommendations.map((item) => `<article><div class="card-head"><span class="priority ${item.priority.toLowerCase()}">${html(item.priority)}</span><span>${html(item.category)}</span></div><h2>${html(item.title)}</h2><p>${html(item.recommendation)}</p><dl><dt>Related NET NAME values</dt><dd>${item.related_net_names.map((net) => `<code>${html(net)}</code>`).join(" ")}</dd><dt>Why</dt><dd>${html(item.rationale)}</dd><dt>Validation needed</dt><dd>${html(item.validation_needed)}</dd></dl></article>`).join("");
   const constraintRows = plan.wib_constraints.map((constraint) => `<tr><td><code>${html(constraint.id)}</code></td><td>${html(constraint.area)}</td><td>${html(constraint.requirement)}</td><td>${html(constraint.metric)}</td><td>${html(constraint.comparator)}</td><td>${constraint.required_value == null ? '<span class="missing">TBD by authority</span>' : html(constraint.required_value)}${constraint.unit ? ` ${html(constraint.unit)}` : ""}</td><td>${html(constraint.verification_mode)}</td><td>${html(constraint.owner)}</td></tr>`).join("");
   const diagnostics = plan.diagnostics.map((diagnostic) => `<li><strong>${html(diagnostic.code)}</strong> — ${html(diagnostic.message)}</li>`).join("");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Manufacturing test and WIB design recommendations</title><style>${css()}</style></head><body><main><header><div><p class="eyebrow">CircuitInspector · DOCUMENT_BACKED</p><h1>Manufacturing test and WIB design plan</h1><p>${html(plan.product.source_path)} · revision ${html(plan.product.revision ?? "not supplied")}</p></div><span class="verdict">REVIEW</span></header><section class="summary"><strong>${plan.recommendation_count}</strong><span>test groups, ${plan.wib_design_recommendations.length} WIB design recommendations, and ${plan.wib_constraints.length} hard-constraint rows generated from ${new Set(plan.product.pins.map((pin) => pin.net_name)).size} NET NAME values</span></section><section class="diagnostics"><h2>Scope and missing evidence</h2><ul>${diagnostics}</ul></section><h1 class="section-title">Manufacturing-line test recommendations</h1><section class="cards">${cards || "<p>No test recommendations could be derived from the imported connector NET NAME values.</p>"}</section><h1 class="section-title">Corresponding WIB design recommendations</h1><section class="cards">${wibCards || "<p>No WIB design recommendations could be derived.</p>"}</section><h1 class="section-title">WIB constraints and hard metrics</h1><p class="constraint-note">Connectivity constraints are anchored to the product schematic. Responsible engineering defines and approves electrical, probe, geometry, mechanical, tester, and throughput requirements; suppliers and factories confirm capability, compliant selection, deviations, and station results.</p><section class="table-wrap"><table><thead><tr><th>ID</th><th>Area</th><th>Hard requirement</th><th>Metric</th><th>Comparator</th><th>Required value</th><th>Verification</th><th>Owner</th></tr></thead><tbody>${constraintRows}</tbody></table></section><footer>This is a schematic-backed planning list, not production acceptance. Engineering owns the requirement baseline; factory, fixture, and tester evidence closes implementation and production acceptance.</footer></main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Manufacturing test and WIB design plan</title><style>${css()}</style></head><body><main><header><div><p class="eyebrow">CircuitInspector · DOCUMENT_BACKED · ${html(plan.lifecycle_status)}</p><h1>Manufacturing test and WIB design plan</h1><p>${html(plan.product.source_path)} · revision ${html(plan.product.revision ?? "not supplied")}</p><p>Factory ${html(plan.baseline.factory ?? "not assigned")} · line ${html(plan.baseline.line ?? "not assigned")} · tester ${html(plan.baseline.tester ?? "not assigned")} · rule pack ${html(plan.baseline.approved_rule_pack_id ?? "not assigned")}</p></div><span class="verdict">${html(plan.lifecycle_status)} · REVIEW</span></header><section class="summary"><strong>${plan.requirements.length}</strong><span>traceable test requirements across ${plan.method_matrix.length} manufacturing methods; approval freezes test intent only and never proves factory readiness</span></section><section class="diagnostics"><h2>Scope and missing evidence</h2><ul>${diagnostics}</ul></section><h1 class="section-title">Method-to-fault matrix</h1><section class="table-wrap"><table><thead><tr><th>Method</th><th>Disposition</th><th>Target faults</th><th>Prerequisites</th><th>Residual gaps</th><th>Reason</th></tr></thead><tbody>${methodRows}</tbody></table></section><h1 class="section-title">Controlled DFT requirements</h1><section class="table-wrap"><table><thead><tr><th>ID</th><th>Priority</th><th>Target NET / pin / function</th><th>Methods</th><th>Stage</th><th>Access</th><th>Physical sides</th><th>Owner</th><th>Residual risk</th></tr></thead><tbody>${requirementRows}</tbody></table></section><h1 class="section-title">Manufacturing-line recommendation groups</h1><section class="cards">${cards || "<p>No test recommendations could be derived from the imported connector NET NAME values.</p>"}</section><h1 class="section-title">Corresponding WIB design recommendations</h1><section class="cards">${wibCards || "<p>No WIB design recommendations could be derived.</p>"}</section><h1 class="section-title">WIB constraints and hard metrics</h1><p class="constraint-note">Connectivity constraints are anchored to the product schematic. Responsible engineering defines and approves electrical, probe, geometry, mechanical, tester, and throughput requirements; suppliers and factories confirm capability, compliant selection, deviations, and station results.</p><section class="table-wrap"><table><thead><tr><th>ID</th><th>Area</th><th>Hard requirement</th><th>Metric</th><th>Comparator</th><th>Required value</th><th>Verification</th><th>Owner</th></tr></thead><tbody>${constraintRows}</tbody></table></section><footer>${plan.approval ? `Approved by ${html(plan.approval.approved_by)} at ${html(plan.approval.approved_at)} · SHA-256 ${html(plan.approval.content_hash)}. ` : "DRAFT: test engineering approval is still required. "}This is not production acceptance. Factory, fixture, tester, powered, throughput, and pilot evidence remain separate closure gates.</footer></main></body></html>`;
 }
 
 function css() {
@@ -439,6 +696,10 @@ function isNoConnect(net: string) {
 function safeSegment(value: string) {
   if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error("Invalid CircuitInspector identifier");
   return value;
+}
+
+function key(value: string) {
+  return value.trim().toLocaleUpperCase("en-US");
 }
 
 function html(value: unknown) {

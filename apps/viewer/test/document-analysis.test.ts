@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocumentAnalysisScreen, wiringReviewGuidance } from "../src/renderer/DocumentAnalysisScreen";
-import type { WiringAnalysis } from "../src/renderer/types";
+import type { LayoutTestAccessAnalysis, WiringAnalysis } from "../src/renderer/types";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -68,5 +68,49 @@ describe("wiring REVIEW entry", () => {
     }));
     expect(markup).toContain('data-testid="wiring-review-entry"');
     expect(markup).toContain("进入映射与路径复核");
+  });
+});
+
+describe("Layout DFT baseline evidence", () => {
+  it("renders controlled ODB++ baseline checks separately from factory release gates", () => {
+    vi.stubGlobal("window", { circuitInspector: { platform: "linux" } });
+    const analysis = {
+      schema_version: 1,
+      kind: "LAYOUT_TEST_ACCESS_ANALYSIS",
+      id: "layout-a",
+      design_id: "design-a",
+      design_content_hash: "design-hash",
+      test_plan_id: "plan-a",
+      test_plan_content_hash: "plan-hash",
+      rule_pack_id: "rules-a",
+      rule_pack_content_hash: "rules-hash",
+      layout_baseline_confirmation_id: "layout-baseline-design-a",
+      layout_baseline_content_hash: "layout-hash",
+      geometry_analysis_id: "geometry-a",
+      verdict: "PASS",
+      production_readiness_verdict: "REVIEW",
+      pass_count: 1,
+      fail_count: 0,
+      review_count: 0,
+      not_applicable_count: 0,
+      baseline_checks: [{ id: "TOP-BOTTOM-ORIENTATION", status: "PASS", verification_mode: "DOCUMENT_BACKED", requirement: "Confirm viewing convention", recorded_value: "FROM_TOP / FROM_BOTTOM", message: "Controlled orientation recorded." }],
+      mappings: [],
+      factory_confirmation_items: [{ id: "FACTORY-PILOT", status: "REVIEW", verification_mode: "MANUAL_FACTORY_CONFIRMATION", requirement: "Confirm pilot acceptance", closure_evidence: "Signed pilot release" }],
+      diagnostics: [],
+      report_uri: "circuit://analysis/layout-a/report",
+      report_path: "/tmp/layout.html",
+      elapsed_ms: 1
+    } satisfies LayoutTestAccessAnalysis;
+
+    const markup = renderToStaticMarkup(createElement(DocumentAnalysisScreen, {
+      analysis,
+      locale: "zh-CN",
+      onLocaleChange: () => undefined,
+      onOpenDesign: () => undefined
+    }));
+    expect(markup).toContain("ODB++ 基线与语义可判定性");
+    expect(markup).toContain("TOP-BOTTOM-ORIENTATION");
+    expect(markup).toContain("生产放行：REVIEW");
+    expect(markup).toContain("Confirm pilot acceptance");
   });
 });
