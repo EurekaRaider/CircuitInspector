@@ -75,6 +75,11 @@ export interface TestPointCandidate {
   layer_id: string | null;
   source: string;
   geometry_source: string | null;
+  confirmation?: {
+    method: "HUMAN_REVIEW" | "MANUAL_ADDITION";
+    confirmed_by: string;
+    confirmed_at: string;
+  } | null;
   review_context?: {
     metric: "EDGE_TO_EDGE";
     board_edge: { distance_nm: number | null; point: { x: number; y: number } | null; confidence: CoverageLevel };
@@ -82,6 +87,14 @@ export interface TestPointCandidate {
     nearest_tooling_hole: NearestGeometry | null;
     nearest_component: NearestGeometry | null;
     nearest_shield: NearestGeometry | null;
+  };
+}
+
+export interface TestPointListResult {
+  test_points: TestPointCandidate[];
+  confirmed_test_points_report: {
+    report_path: string;
+    confirmed_count: number;
   };
 }
 
@@ -143,6 +156,7 @@ export interface Violation {
   net_names: string[];
   component_refs: string[];
   layer_ids: string[];
+  entity_ids?: string[];
   x_nm: number;
   y_nm: number;
   measured_value_nm?: number;
@@ -389,14 +403,14 @@ export interface ViewerApi {
   getTile(input: Record<string, unknown>): Promise<TilePayload>;
   searchDesign(input: Record<string, unknown>): Promise<{ results: SearchResult[] }>;
   pickDesign(input: Record<string, unknown>): Promise<{ results: PickResult[] }>;
-  listTestPoints(designId: string): Promise<{ test_points: TestPointCandidate[] }>;
+  listTestPoints(designId: string): Promise<TestPointListResult>;
   reviewTestPoints(input: {
     design_id: string;
     reviewed_by: string;
     confirm_ids: string[];
     reject_ids: string[];
     additions: Array<{ source_kind: "COMPONENT" | "FEATURE"; source_id: string }>;
-  }): Promise<{ summary: DesignSummary; test_points: TestPointCandidate[] }>;
+  }): Promise<{ summary: DesignSummary } & TestPointListResult>;
   listRulePacks(): Promise<{ rule_packs: RulePack[] }>;
   updateRulePack(input: {
     rule_pack_id: string;

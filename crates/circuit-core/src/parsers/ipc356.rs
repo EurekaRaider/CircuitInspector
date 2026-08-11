@@ -90,6 +90,7 @@ pub fn parse_ipc356(text: &str, source: &Path) -> Ipc356Data {
                 layer_id: None,
                 source: source.display().to_string(),
                 geometry_source: None,
+                confirmation: None,
             });
         }
     }

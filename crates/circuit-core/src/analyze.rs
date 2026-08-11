@@ -126,14 +126,13 @@ fn evaluate_rule(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> R
             violations.push(inferred_review_violation(design, rule, analysis_id));
         }
         for violation in &mut violations {
-            violation.verdict = Verdict::Review;
-            violation.semantic_confidence = violation
-                .semantic_confidence
-                .weakest(CoverageLevel::Inferred);
-            if !violation.message.to_ascii_lowercase().contains("inferred") {
-                violation.message.push_str(
-                    "; entity identity is inferred and must be confirmed before PASS/FAIL",
-                );
+            if violation.semantic_confidence == CoverageLevel::Inferred {
+                violation.verdict = Verdict::Review;
+                if !violation.message.to_ascii_lowercase().contains("inferred") {
+                    violation.message.push_str(
+                        "; entity identity is inferred and must be confirmed before PASS/FAIL",
+                    );
+                }
             }
         }
         return RuleOutcome {
@@ -274,6 +273,7 @@ fn evaluate_width(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> 
                     net_names: feature.net_name.iter().cloned().collect(),
                     component_refs: feature.component_ref.iter().cloned().collect(),
                     layer_ids: vec![layer.id.clone()],
+                    entity_ids: vec![feature.id.clone()],
                     x_nm: center.x,
                     y_nm: center.y,
                     measured_value_nm: Some(width),
@@ -375,6 +375,7 @@ fn diameter_violation(
             .map(ToOwned::to_owned)
             .collect(),
         layer_ids: point.layer_id.into_iter().map(ToOwned::to_owned).collect(),
+        entity_ids: vec![point.id.to_owned()],
         x_nm: point.center.x,
         y_nm: point.center.y,
         measured_value_nm: Some(diameter),
@@ -870,6 +871,7 @@ fn distance_violation(
         net_names: nets,
         component_refs: components,
         layer_ids: layers,
+        entity_ids: vec![source.id.to_owned(), target.id.to_owned()],
         x_nm: midpoint.x,
         y_nm: midpoint.y,
         measured_value_nm: Some(measurement.measured_nm),
@@ -917,6 +919,7 @@ fn unmeasured_geometry_violation(
             .flatten()
             .map(ToOwned::to_owned)
             .collect(),
+        entity_ids: vec![source.id.to_owned(), target.id.to_owned()],
         x_nm: source.center.x,
         y_nm: source.center.y,
         measured_value_nm: None,
@@ -955,6 +958,7 @@ fn review_violation(
         net_names: Vec::new(),
         component_refs: Vec::new(),
         layer_ids: Vec::new(),
+        entity_ids: Vec::new(),
         x_nm: center.x,
         y_nm: center.y,
         measured_value_nm: None,
@@ -1140,6 +1144,7 @@ mod tests {
                     layer_id: None,
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
+                    confirmation: None,
                 },
                 TestPoint {
                     id: "b".into(),
@@ -1154,6 +1159,7 @@ mod tests {
                     layer_id: None,
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
+                    confirmation: None,
                 },
             ],
             coverage: SemanticCoverage {
@@ -1247,6 +1253,7 @@ mod tests {
                     layer_id: None,
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
+                    confirmation: None,
                 },
                 TestPoint {
                     id: "b".into(),
@@ -1261,6 +1268,7 @@ mod tests {
                     layer_id: None,
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
+                    confirmation: None,
                 },
             ],
             coverage: SemanticCoverage {
@@ -1334,6 +1342,31 @@ mod tests {
         assert_eq!(finding.x_nm, 1_000_000);
         assert_eq!(finding.y_nm, 1_000_000);
 
+        design.test_points[1].confidence = CoverageLevel::Explicit;
+        let partially_confirmed = analyze_design(&design, &pack).unwrap();
+        assert_eq!(partially_confirmed.verdict, Verdict::Fail);
+        assert_eq!(partially_confirmed.fail_count, 1);
+        assert_eq!(partially_confirmed.review_count, 2);
+        assert_eq!(
+            partially_confirmed
+                .violations
+                .iter()
+                .find(|finding| finding.id == "zz-tp-diameter:b")
+                .unwrap()
+                .verdict,
+            Verdict::Fail
+        );
+        assert_eq!(
+            partially_confirmed
+                .violations
+                .iter()
+                .find(|finding| finding.id == "zz-tp-diameter:a")
+                .unwrap()
+                .verdict,
+            Verdict::Review
+        );
+        design.test_points[1].confidence = CoverageLevel::Inferred;
+
         design.test_points[0].component_ref = None;
         let incomplete = analyze_design(&design, &pack).unwrap();
         assert_eq!(incomplete.verdict, Verdict::Review);
@@ -1390,6 +1423,7 @@ mod tests {
                 layer_id: None,
                 source: "fixture".into(),
                 geometry_source: Some("fixture".into()),
+                confirmation: None,
             }],
             coverage: SemanticCoverage {
                 test_points: CoverageLevel::Explicit,
@@ -1517,6 +1551,7 @@ mod tests {
                 layer_id: None,
                 source: "fixture".into(),
                 geometry_source: Some("fixture".into()),
+                confirmation: None,
             }],
             coverage: SemanticCoverage {
                 components: CoverageLevel::Explicit,
@@ -1618,6 +1653,7 @@ mod tests {
                     layer_id: None,
                     source: "fixture".into(),
                     geometry_source: None,
+                    confirmation: None,
                 })
                 .collect(),
             coverage: SemanticCoverage {
@@ -1661,6 +1697,7 @@ mod tests {
             layer_id: Some("top".into()),
             source: "components".into(),
             geometry_source: None,
+            confirmation: None,
         };
         let component = |reference: &str, min_x: i64, max_x: i64| Component {
             refdes: reference.into(),

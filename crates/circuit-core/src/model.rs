@@ -390,6 +390,22 @@ pub struct TestPoint {
     pub layer_id: Option<String>,
     pub source: String,
     pub geometry_source: Option<String>,
+    #[serde(default)]
+    pub confirmation: Option<TestPointConfirmation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TestPointConfirmationMethod {
+    HumanReview,
+    ManualAddition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TestPointConfirmation {
+    pub method: TestPointConfirmationMethod,
+    pub confirmed_by: String,
+    pub confirmed_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -623,6 +639,8 @@ pub struct Violation {
     pub net_names: Vec<String>,
     pub component_refs: Vec<String>,
     pub layer_ids: Vec<String>,
+    #[serde(default)]
+    pub entity_ids: Vec<String>,
     pub x_nm: i64,
     pub y_nm: i64,
     pub measured_value_nm: Option<i64>,

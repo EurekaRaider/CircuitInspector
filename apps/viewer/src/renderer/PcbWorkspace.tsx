@@ -7,6 +7,7 @@ import {
   FunnelIcon,
   ImageSquareIcon,
   FileHtmlIcon,
+  FileTextIcon,
   MagnifyingGlassIcon,
   RulerIcon,
   ShieldCheckIcon,
@@ -19,7 +20,7 @@ import { BoardCanvas, type BoardCanvasHandle } from "./BoardCanvas";
 import { DocumentAnalysisScreen } from "./DocumentAnalysisScreen";
 import { translate, type Locale, type Translator } from "./i18n";
 import { defaultLayerIds, isolatedLayerIds, layerIdsForTestPoint, layerIdsForViolation, testPointFocusZoom, violationFocusZoom, violationHasLocation } from "./pcb-layers";
-import { findingVerdictCounts, reviewRoute, type ReviewRoute } from "./pcb-review";
+import { findingVerdictCounts, inferredTestPointsForViolation, reviewRoute, type ReviewRoute } from "./pcb-review";
 import { selectApprovedRulePack } from "./rule-catalog";
 import type {
   AnalysisSummary,
@@ -47,6 +48,8 @@ interface Props {
   onOpenRuleLibrary?(): void;
   onReviewWiring?(analysis: Extract<DocumentAnalysis, { kind: "WIRING_COMPARISON" }>): void;
 }
+
+type BusyAction = "ANALYSIS" | "TEST_POINT_REVIEW" | null;
 
 export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesignId, onCatalogChanged, onOpenRuleLibrary, onReviewWiring }: Props) {
   const canvasRef = useRef<BoardCanvasHandle>(null);
@@ -77,6 +80,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const [layoutApprover, setLayoutApprover] = useState(() => localStorage.getItem("circuit-inspector.approver") ?? "");
   const [progress, setProgress] = useState<ProgressEvent>();
   const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -89,6 +93,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const [testPoints, setTestPoints] = useState<TestPointCandidate[]>([]);
   const [activeTestPoint, setActiveTestPoint] = useState<TestPointCandidate | null>(null);
   const [testPointReviewer, setTestPointReviewer] = useState(() => localStorage.getItem("circuit-inspector.approver") ?? "");
+  const [confirmedTestPointReport, setConfirmedTestPointReport] = useState<{ report_path: string; confirmed_count: number } | null>(null);
 
   const loadRules = useCallback(async () => {
     try {
@@ -154,7 +159,10 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     setDesign(summary);
     setLayoutBaseline(null);
     void window.circuitInspector.listTestPoints(summary.id)
-      .then((result) => setTestPoints(result.test_points))
+      .then((result) => {
+        setTestPoints(result.test_points);
+        setConfirmedTestPointReport(result.confirmed_test_points_report);
+      })
       .catch((cause) => setError(message(cause)));
     void window.circuitInspector.readLayoutBaseline(summary.id)
       .then((baseline) => {
@@ -214,13 +222,13 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     canvasRef.current?.focus(violation.x_nm, violation.y_nm, violationFocusZoom(violation));
   }
 
-  function openTestPointReview() {
-    const candidate = testPoints.find((point) => point.confidence === "INFERRED");
+  function openTestPointReview(violation: Violation) {
+    const candidates = inferredTestPointsForViolation(violation, testPoints);
     testPointReviewRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-    if (candidate) {
-      focusTestPoint(candidate);
+    if (candidates[0]) {
+      focusTestPoint(candidates[0]);
     } else {
-      setError(locale === "zh-CN" ? "没有待确认的推断测试点；请重新导入包含测试点属性的 ODB++/IPC-356，或在板图中点选焊盘后人工标记。" : "There are no inferred test points to confirm. Re-import ODB++/IPC-356 with test-point attributes, or pick a pad in the board view and mark it manually.");
+      setError(locale === "zh-CN" ? "该 REVIEW 是测试点整体语义问题，当前没有可唯一关联的待复核测试点；请在左侧逐项核对，而不是自动跳到第一项。" : "This REVIEW concerns overall test-point semantics and has no uniquely related pending candidate. Review the candidates in the left panel instead of defaulting to the first item.");
     }
   }
 
@@ -333,6 +341,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   async function runAnalysis() {
     if (!design || !selectedRulePack) return;
     setBusy(true);
+    setBusyAction("ANALYSIS");
     setError("");
     try {
       const result = await window.circuitInspector.runAnalysis(design.id, selectedRulePack);
@@ -345,6 +354,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     } catch (cause) {
       setError(message(cause));
     } finally {
+      setBusyAction(null);
       setBusy(false);
     }
   }
@@ -457,7 +467,9 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       return;
     }
     setBusy(true);
+    setBusyAction("TEST_POINT_REVIEW");
     setError("");
+    const priorRulePackId = analysis?.rule_pack_id ?? null;
     try {
       localStorage.setItem("circuit-inspector.approver", testPointReviewer.trim());
       const result = await window.circuitInspector.reviewTestPoints({
@@ -468,22 +480,37 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
         additions
       });
       setTestPoints(result.test_points);
+      setConfirmedTestPointReport(result.confirmed_test_points_report);
       showDesign(result.summary);
-      setAnalysis(undefined);
-      setActiveViolation(null);
+      if (priorRulePackId) {
+        const refreshed = await window.circuitInspector.runAnalysis(result.summary.id, priorRulePackId);
+        setAnalysis(refreshed);
+        setQueriedViolations(null);
+        setActiveViolation(refreshed.violations.find((violation) => violation.verdict === "FAIL") ?? refreshed.violations[0] ?? null);
+      } else {
+        setAnalysis(undefined);
+        setActiveViolation(null);
+      }
       setPicked(null);
       onCatalogChanged?.();
     } catch (cause) {
       setError(message(cause));
     } finally {
+      setBusyAction(null);
       setBusy(false);
     }
   }
 
   const violations = queriedViolations ?? analysis?.violations ?? [];
   const findingCounts = findingVerdictCounts(violations);
+  const inferredTestPoints = testPoints.filter((point) => point.confidence === "INFERRED");
+  const confirmedTestPointCount = testPoints.filter((point) => point.confidence === "EXPLICIT").length;
   const sourceName = design?.source_path.split(/[\\/]/).at(-1);
-  const progressLabel = progress?.phase === "IMPORT"
+  const progressLabel = busyAction === "TEST_POINT_REVIEW"
+    ? analysis
+      ? locale === "zh-CN" ? "正在保存测试点复核、刷新 Markdown 并重新分析" : "Saving test-point review, refreshing Markdown, and rerunning analysis"
+      : locale === "zh-CN" ? "正在保存测试点复核并刷新 Markdown" : "Saving test-point review and refreshing Markdown"
+    : progress?.phase === "IMPORT"
     ? progress.progress >= 100 ? t("designIndexed") : t("validatingDesign")
     : progress?.message ?? t("processingLocalData");
   const statusLabel = busy ? progressLabel : design ? `${design.format} · ${t("layers", { count: design.layers.length })}` : t("waitingForImport");
@@ -614,18 +641,20 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                   ))}
                 </div>
                 <div ref={testPointReviewRef} className="mt-4 scroll-mt-4 border-t border-white/[0.065] pt-3">
-                  <div className="mb-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.12em] text-[#6e6f6c]"><span>{locale === "zh-CN" ? "测试点复核" : "Test-point review"}</span><span>{testPoints.length}</span></div>
+                  <div className="mb-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.12em] text-[#6e6f6c]"><span>{locale === "zh-CN" ? "测试点身份复核" : "Test-point identity review"}</span><span>{locale === "zh-CN" ? `待复核 ${inferredTestPoints.length} · 已确认 ${confirmedTestPointCount}` : `${inferredTestPoints.length} PENDING · ${confirmedTestPointCount} CONFIRMED`}</span></div>
                   <input className="workbench-input mb-2 h-8 w-full text-[10px]" value={testPointReviewer} onChange={(event) => setTestPointReviewer(event.target.value)} placeholder={locale === "zh-CN" ? "复核人" : "Reviewer"} />
+                  {confirmedTestPointReport && <button className="secondary-button mb-2 h-8 w-full px-2 text-[9px]" onClick={() => void window.circuitInspector.openEvidence(confirmedTestPointReport.report_path)}><FileTextIcon size={13} />{locale === "zh-CN" ? `打开已确认测试点 MD · ${confirmedTestPointReport.confirmed_count}` : `Open confirmed test-point MD · ${confirmedTestPointReport.confirmed_count}`}</button>}
+                  {busyAction === "TEST_POINT_REVIEW" && <div role="status" className="mb-2 flex items-center gap-2 rounded-md border border-[#c5a063]/20 bg-[#c5a063]/[0.045] px-2 py-2 text-[9px] leading-4 text-[#b99a65]"><CircleNotchIcon size={12} className="shrink-0 animate-spin" />{analysis ? (locale === "zh-CN" ? "正在保存身份结论、更新 MD，并用原规则包重新分析" : "Saving identity decisions, updating the MD, and rerunning the prior rule pack") : (locale === "zh-CN" ? "正在保存身份结论并更新 MD" : "Saving identity decisions and updating the MD")}</div>}
                   <div className="max-h-64 space-y-1 overflow-y-auto">
-                    {testPoints.filter((point) => point.confidence === "INFERRED").map((point) => (
+                    {inferredTestPoints.map((point) => (
                       <div key={point.id} className={`rounded-lg border px-2 py-2 text-[10px] text-[#9b9c98] ${activeTestPoint?.id === point.id ? "border-[#d2b173]/55 bg-[#d2b173]/[0.07]" : "border-white/[0.06]"}`}>
                         <button className="block w-full truncate text-left font-mono text-[#d2b173]" onClick={() => focusTestPoint(point)}>{point.component_ref ?? point.id}</button>
                         <div className="mt-1 truncate">{point.net_name ?? "NET -"}</div>
                         <TestPointReviewEvidence point={point} locale={locale} />
-                        <div className="mt-2 grid grid-cols-2 gap-1"><button className="secondary-button h-7 px-1 text-[9px]" onClick={() => void reviewTestPoints([point.id])}>{locale === "zh-CN" ? "确认" : "Confirm"}</button><button className="secondary-button h-7 px-1 text-[9px]" onClick={() => void reviewTestPoints([], [point.id])}>{locale === "zh-CN" ? "排除" : "Reject"}</button></div>
+                        <div className="mt-2 grid grid-cols-2 gap-1"><button className="secondary-button h-7 px-1 text-[8px]" disabled={busy} title={locale === "zh-CN" ? "确认该候选确实是测试点；是否符合规则由重新分析决定" : "Confirm that this candidate is a test point; rule compliance is decided by reanalysis"} onClick={() => void reviewTestPoints([point.id])}>{locale === "zh-CN" ? "确认为测试点" : "Confirm identity"}</button><button className="secondary-button h-7 px-1 text-[8px]" disabled={busy} title={locale === "zh-CN" ? "确认该候选不是测试点，并从当前设计缓存移除" : "Confirm this candidate is not a test point and remove it from the current design cache"} onClick={() => { if (window.confirm(locale === "zh-CN" ? "确认该候选不是测试点？它将从当前设计缓存中移除；这不代表规则 PASS。" : "Confirm this candidate is not a test point? It will be removed from the current design cache; this does not mean the rule passes.")) void reviewTestPoints([], [point.id]); }}>{locale === "zh-CN" ? "不是测试点" : "Not a test point"}</button></div>
                       </div>
                     ))}
-                    {testPoints.length === 0 && <p className="text-[10px] leading-4 text-[#70716e]">{locale === "zh-CN" ? "未识别到候选；可在板图中点选焊盘或器件后人工标记。" : "No candidates found. Pick a pad or component in the board view to mark one."}</p>}
+                    {inferredTestPoints.length === 0 && <p className="text-[10px] leading-4 text-[#70716e]">{locale === "zh-CN" ? "没有待复核候选。已确认测试点已写入上方 Markdown；测试点身份明确不等于规则 PASS。" : "No pending candidates. Confirmed test points are written to the Markdown report above; confirmed identity does not mean rule PASS."}</p>}
                   </div>
                 </div>
               </div>
@@ -740,7 +769,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                 {rulePacks.filter((pack) => pack.status === "APPROVED").map((pack) => <option key={pack.id} value={pack.id}>{pack.title}</option>)}
               </select>
               <button className="secondary-button" disabled={!design || !selectedRulePack || busy} onClick={() => void runAnalysis()}>
-                {busy ? <CircleNotchIcon size={15} className="animate-spin" /> : <ShieldCheckIcon size={15} />}
+                {busyAction === "ANALYSIS" ? <CircleNotchIcon size={15} className="animate-spin" /> : <ShieldCheckIcon size={15} />}
                 {t("analyze")}
               </button>
             </div>
@@ -774,10 +803,10 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
           {analysis ? (
             <>
               <div className="grid grid-cols-4 divide-x divide-white/[0.065] border-b border-white/[0.065]">
-                <Count label="PASS" value={analysis.pass_count} tone="pass" />
-                <Count label="FAIL" value={findingCounts.fail} tone="fail" />
-                <Count label="REVIEW" value={findingCounts.review} tone="review" />
-                <Count label="N/A" value={analysis.not_applicable_count} tone="muted" />
+                <Count label={locale === "zh-CN" ? "PASS 规则" : "PASS RULES"} value={analysis.pass_count} tone="pass" />
+                <Count label={locale === "zh-CN" ? "FAIL 问题" : "FAIL FINDINGS"} value={findingCounts.fail} tone="fail" />
+                <Count label={locale === "zh-CN" ? "REVIEW 项" : "REVIEW FINDINGS"} value={findingCounts.review} tone="review" />
+                <Count label={locale === "zh-CN" ? "N/A 规则" : "N/A RULES"} value={analysis.not_applicable_count} tone="muted" />
               </div>
               <div className="border-b border-white/[0.065] p-3">
                 <div className="grid grid-cols-2 gap-2">
@@ -829,7 +858,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                           <span>{locale === "zh-CN" ? "位置" : "LOCATION"} {violationHasLocation(violation) ? `X ${(violation.x_nm / 1_000_000).toFixed(3)} · Y ${(violation.y_nm / 1_000_000).toFixed(3)} mm` : (locale === "zh-CN" ? "不可定位" : "unavailable")}</span>
                         </div>
                       </button>
-                      {selected && route && <ReviewGuidance route={route} rule={rule} locale={locale} onReviewTestPoints={openTestPointReview} onOpenRuleLibrary={onOpenRuleLibrary} />}
+                      {selected && route && <ReviewGuidance route={route} rule={rule} locale={locale} onReviewTestPoints={() => openTestPointReview(violation)} onOpenRuleLibrary={onOpenRuleLibrary} />}
                     </div>
                   );
                 })}

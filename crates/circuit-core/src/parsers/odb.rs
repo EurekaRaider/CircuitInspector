@@ -834,6 +834,7 @@ fn test_point_from_feature(feature: &Feature, confidence: CoverageLevel) -> Test
         layer_id: Some(feature.layer_id.clone()),
         source: feature.source.clone(),
         geometry_source: radius_nm.map(|_| feature.source.clone()),
+        confirmation: None,
     }
 }
 
@@ -915,6 +916,7 @@ fn parse_components(
                         layer_id: Some(layer_id.to_owned()),
                         source: source.display().to_string(),
                         geometry_source: None,
+                        confirmation: None,
                     });
                     active_test_point = Some(test_points.len() - 1);
                 } else {

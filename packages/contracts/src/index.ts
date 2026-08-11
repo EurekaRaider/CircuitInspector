@@ -74,6 +74,7 @@ export interface Violation {
   net_names: string[];
   component_refs: string[];
   layer_ids: string[];
+  entity_ids?: string[];
   x_nm: number;
   y_nm: number;
   measured_value_nm: number | null;

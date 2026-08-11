@@ -93,6 +93,7 @@ fn inferred_odb_test_points_can_be_confirmed_without_reexport() {
         json!({ "design_id": design_id, "cache_dir": temporary.path() }),
     )
     .unwrap();
+    assert_eq!(listed["confirmed_test_points_report"]["confirmed_count"], 0);
     let candidate_ids = listed["test_points"]
         .as_array()
         .unwrap()
@@ -130,6 +131,25 @@ fn inferred_odb_test_points_can_be_confirmed_without_reexport() {
     .unwrap();
     assert_eq!(reviewed["test_points"][0]["confidence"], "EXPLICIT");
     assert_eq!(
+        reviewed["test_points"][0]["confirmation"]["method"],
+        "HUMAN_REVIEW"
+    );
+    assert_eq!(
+        reviewed["confirmed_test_points_report"]["confirmed_count"],
+        2
+    );
+    let report_path = reviewed["confirmed_test_points_report"]["report_path"]
+        .as_str()
+        .unwrap();
+    let report = std::fs::read_to_string(report_path).unwrap();
+    assert!(report.contains("kind: CONFIRMED_TEST_POINT_CATALOG"));
+    assert!(report.contains("HUMAN_REVIEW"));
+    assert!(report.contains("dft-owner"));
+    assert!(report.contains("不表示尺寸、间距"));
+    for candidate_id in candidate_ids {
+        assert!(report.contains(candidate_id));
+    }
+    assert_eq!(
         reviewed["test_points"][0]["review_context"]["metric"],
         "EDGE_TO_EDGE"
     );
@@ -137,6 +157,36 @@ fn inferred_odb_test_points_can_be_confirmed_without_reexport() {
         reviewed["summary"]["semantic_coverage"]["test_points"],
         "EXPLICIT"
     );
+}
+
+#[test]
+fn source_confirmed_test_points_are_written_to_the_markdown_catalog() {
+    let temporary = tempfile::tempdir().unwrap();
+    let summary = dispatch(
+        "import_design",
+        json!({ "path": fixture("fixtures/gerber/simple"), "cache_dir": temporary.path() }),
+    )
+    .unwrap();
+    let listed = dispatch(
+        "list_test_points",
+        json!({ "design_id": summary["id"], "cache_dir": temporary.path() }),
+    )
+    .unwrap();
+
+    assert!(
+        listed["confirmed_test_points_report"]["confirmed_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 2)
+    );
+    let report = std::fs::read_to_string(
+        listed["confirmed_test_points_report"]["report_path"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(report.contains("PROGRAM_OR_SOURCE_CONFIRMED"));
+    assert!(report.contains("TP1"));
+    assert!(report.contains("NET_TEST_A"));
 }
 
 #[test]

@@ -976,6 +976,7 @@ fn merge_feature_semantics(design: &mut Design, x2: bool, x3: bool) {
                     layer_id: Some(feature.layer_id.clone()),
                     source: feature.source.clone(),
                     geometry_source: Some(feature.source.clone()),
+                    confirmation: None,
                 });
             }
         }

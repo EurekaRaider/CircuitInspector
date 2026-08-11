@@ -7,7 +7,7 @@ use crate::geometry::{
 };
 use crate::model::{
     BoundsNm, CoverageLevel, Design, DesignSummary, FeatureGeometry, PointNm, Severity, Side,
-    TestPoint, Verdict,
+    TestPoint, TestPointConfirmation, TestPointConfirmationMethod, Verdict,
 };
 use crate::parsers::import_design;
 use crate::rules::{
@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -142,6 +143,7 @@ fn import_request(params: Value) -> CoreResult<Value> {
         cache.save_design(&design)?;
         (design, false)
     };
+    write_confirmed_test_points_report(&cache, &design)?;
     Ok(serde_json::to_value(DesignSummary::from_design(
         &design,
         cache_hit,
@@ -364,7 +366,11 @@ fn pick_request(params: Value) -> CoreResult<Value> {
 fn list_test_points_request(params: Value) -> CoreResult<Value> {
     let (cache, design_id) = design_cache_params(params)?;
     let design = cache.load_design(&design_id)?;
-    Ok(json!({ "test_points": test_points_with_review_context(&design) }))
+    let report = write_confirmed_test_points_report(&cache, &design)?;
+    Ok(json!({
+        "test_points": test_points_with_review_context(&design),
+        "confirmed_test_points_report": report,
+    }))
 }
 
 #[derive(Serialize)]
@@ -648,12 +654,28 @@ fn review_test_points_request(params: Value) -> CoreResult<Value> {
             "test-point review contains an unknown candidate id".into(),
         ));
     }
+    if params
+        .confirm_ids
+        .iter()
+        .any(|id| params.reject_ids.iter().any(|rejected| rejected == id))
+    {
+        return Err(CoreError::Parse(
+            "a test-point candidate cannot be confirmed and rejected together".into(),
+        ));
+    }
+    let reviewed_by = params.reviewed_by.trim().to_owned();
+    let confirmed_at = unix_timestamp();
     design
         .test_points
         .retain(|point| !params.reject_ids.iter().any(|id| id == &point.id));
     for point in &mut design.test_points {
         if params.confirm_ids.iter().any(|id| id == &point.id) {
             point.confidence = CoverageLevel::Explicit;
+            point.confirmation = Some(TestPointConfirmation {
+                method: TestPointConfirmationMethod::HumanReview,
+                confirmed_by: reviewed_by.clone(),
+                confirmed_at: confirmed_at.clone(),
+            });
         }
     }
     for addition in &params.additions {
@@ -672,6 +694,11 @@ fn review_test_points_request(params: Value) -> CoreResult<Value> {
                     layer_id: None,
                     source: format!("manual:{}", addition.source_id),
                     geometry_source: None,
+                    confirmation: Some(TestPointConfirmation {
+                        method: TestPointConfirmationMethod::ManualAddition,
+                        confirmed_by: reviewed_by.clone(),
+                        confirmed_at: confirmed_at.clone(),
+                    }),
                 })
         } else if addition.source_kind.eq_ignore_ascii_case("FEATURE") {
             design
@@ -699,6 +726,11 @@ fn review_test_points_request(params: Value) -> CoreResult<Value> {
                         layer_id: Some(feature.layer_id.clone()),
                         source: format!("manual:{}", addition.source_id),
                         geometry_source: radius_nm.map(|_| feature.source.clone()),
+                        confirmation: Some(TestPointConfirmation {
+                            method: TestPointConfirmationMethod::ManualAddition,
+                            confirmed_by: reviewed_by.clone(),
+                            confirmed_at: confirmed_at.clone(),
+                        }),
                     }
                 })
         } else {
@@ -737,7 +769,7 @@ fn review_test_points_request(params: Value) -> CoreResult<Value> {
         Severity::Info,
         format!(
             "{} confirmed {}, rejected {}, and added {} test-point candidates",
-            params.reviewed_by.trim(),
+            reviewed_by,
             params.confirm_ids.len(),
             params.reject_ids.len(),
             params.additions.len()
@@ -745,10 +777,192 @@ fn review_test_points_request(params: Value) -> CoreResult<Value> {
         None,
     ));
     cache.save_design(&design)?;
+    let report = write_confirmed_test_points_report(&cache, &design)?;
     Ok(json!({
         "summary": DesignSummary::from_design(&design, true, 0),
         "test_points": test_points_with_review_context(&design),
+        "confirmed_test_points_report": report,
     }))
+}
+
+#[derive(Serialize)]
+struct ConfirmedTestPointsReport {
+    report_path: String,
+    confirmed_count: usize,
+}
+
+fn write_confirmed_test_points_report(
+    cache: &CacheStore,
+    design: &Design,
+) -> CoreResult<ConfirmedTestPointsReport> {
+    let mut points = design
+        .test_points
+        .iter()
+        .filter(|point| point.confidence == CoverageLevel::Explicit)
+        .collect::<Vec<_>>();
+    points.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let report_id = format!("confirmed-test-points-{}", design.id);
+    let directory = cache.evidence_dir(&report_id);
+    fs::create_dir_all(&directory)?;
+    let report_path = directory.join("confirmed-test-points.md");
+    let temporary = directory.join(".confirmed-test-points.md.tmp");
+    let generated_at = unix_timestamp();
+    let mut markdown = String::new();
+    writeln!(markdown, "---").expect("writing to a string cannot fail");
+    writeln!(markdown, "schema_version: 1").expect("writing to a string cannot fail");
+    writeln!(markdown, "kind: CONFIRMED_TEST_POINT_CATALOG")
+        .expect("writing to a string cannot fail");
+    writeln!(markdown, "design_id: {}", yaml_string(&design.id)?)
+        .expect("writing to a string cannot fail");
+    writeln!(
+        markdown,
+        "design_content_hash: {}",
+        yaml_string(&design.content_hash)?
+    )
+    .expect("writing to a string cannot fail");
+    writeln!(
+        markdown,
+        "source_path: {}",
+        yaml_string(&design.source_path)?
+    )
+    .expect("writing to a string cannot fail");
+    writeln!(markdown, "generated_at: {}", yaml_string(&generated_at)?)
+        .expect("writing to a string cannot fail");
+    writeln!(markdown, "confirmed_test_point_count: {}", points.len())
+        .expect("writing to a string cannot fail");
+    writeln!(markdown, "---\n").expect("writing to a string cannot fail");
+    writeln!(
+        markdown,
+        "# 已确认测试点清单 / Confirmed Test-Point Catalog\n"
+    )
+    .expect("writing to a string cannot fail");
+    writeln!(
+        markdown,
+        "> 本文件只确认测试点身份，供后续建议测试方案和 Layout DFT 追溯使用；它不表示尺寸、间距、夹具可达性或生产测试已经 PASS。\n"
+    )
+    .expect("writing to a string cannot fail");
+    writeln!(markdown, "- Design ID: `{}`", escape_markdown(&design.id))
+        .expect("writing to a string cannot fail");
+    writeln!(
+        markdown,
+        "- Design SHA-256: `{}`",
+        escape_markdown(&design.content_hash)
+    )
+    .expect("writing to a string cannot fail");
+    writeln!(
+        markdown,
+        "- 已确认测试点 / Confirmed test points: **{}**",
+        points.len()
+    )
+    .expect("writing to a string cannot fail");
+    writeln!(
+        markdown,
+        "- 待人工复核候选 / Pending inferred candidates: **{}**\n",
+        design
+            .test_points
+            .iter()
+            .filter(|point| point.confidence == CoverageLevel::Inferred)
+            .count()
+    )
+    .expect("writing to a string cannot fail");
+
+    if points.is_empty() {
+        writeln!(markdown, "当前设计没有已确认测试点。").expect("writing to a string cannot fail");
+    } else {
+        writeln!(markdown, "| ID | 器件位号 | NET | 层 | 面 | X (mm) | Y (mm) | 直径 (mm) | 确认方式 | 确认人 | 确认时间 | 来源 |")
+            .expect("writing to a string cannot fail");
+        writeln!(
+            markdown,
+            "|---|---|---|---|---|---:|---:|---:|---|---|---|---|"
+        )
+        .expect("writing to a string cannot fail");
+        for point in points {
+            let (method, confirmed_by, confirmed_at) = match point.confirmation.as_ref() {
+                Some(confirmation) => (
+                    match confirmation.method {
+                        TestPointConfirmationMethod::HumanReview => "HUMAN_REVIEW",
+                        TestPointConfirmationMethod::ManualAddition => "MANUAL_ADDITION",
+                    },
+                    confirmation.confirmed_by.as_str(),
+                    confirmation.confirmed_at.as_str(),
+                ),
+                None => ("PROGRAM_OR_SOURCE_CONFIRMED", "-", "-"),
+            };
+            let side = point
+                .layer_id
+                .as_deref()
+                .and_then(|layer_id| design.layers.iter().find(|layer| layer.id == layer_id))
+                .map(|layer| side_label(layer.side))
+                .unwrap_or("NA");
+            let diameter = point
+                .radius_nm
+                .map(|radius| format!("{:.6}", radius.saturating_mul(2) as f64 / 1_000_000.0))
+                .unwrap_or_else(|| "N/A".into());
+            let source = point.geometry_source.as_deref().unwrap_or(&point.source);
+            writeln!(
+                markdown,
+                "| {} | {} | {} | {} | {} | {:.6} | {:.6} | {} | {} | {} | {} | {} |",
+                escape_markdown(&point.id),
+                escape_markdown(point.component_ref.as_deref().unwrap_or("-")),
+                escape_markdown(point.net_name.as_deref().unwrap_or("-")),
+                escape_markdown(point.layer_id.as_deref().unwrap_or("-")),
+                side,
+                point.center.x as f64 / 1_000_000.0,
+                point.center.y as f64 / 1_000_000.0,
+                diameter,
+                method,
+                escape_markdown(confirmed_by),
+                escape_markdown(confirmed_at),
+                escape_markdown(source),
+            )
+            .expect("writing to a string cannot fail");
+        }
+    }
+    writeln!(
+        markdown,
+        "\n## 后续使用边界\n\n- 建议测试方案可以引用本清单中的 NET、坐标、层面和来源。\n- 测试点身份明确不等于规则合格；尺寸、间距等结论必须由批准规则包重新分析。\n- 探针可达性、夹具结构、接触可靠性、测试机资源和量产放行仍需 `MANUAL_FACTORY_CONFIRMATION`。"
+    )
+    .expect("writing to a string cannot fail");
+    fs::write(&temporary, markdown)?;
+    fs::rename(&temporary, &report_path)?;
+    Ok(ConfirmedTestPointsReport {
+        report_path: report_path.to_string_lossy().into_owned(),
+        confirmed_count: design
+            .test_points
+            .iter()
+            .filter(|point| point.confidence == CoverageLevel::Explicit)
+            .count(),
+    })
+}
+
+fn yaml_string(value: &str) -> CoreResult<String> {
+    Ok(serde_json::to_string(value)?)
+}
+
+fn escape_markdown(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('\r', " ")
+        .replace('\n', " ")
+}
+
+fn side_label(side: Side) -> &'static str {
+    match side {
+        Side::Top => "TOP",
+        Side::Bottom => "BOTTOM",
+        Side::Inner => "INNER",
+        Side::Na => "NA",
+    }
+}
+
+fn unix_timestamp() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("unix:{timestamp}")
 }
 
 fn manual_test_point_id(kind: &str, id: &str) -> String {
@@ -1288,6 +1502,7 @@ mod tests {
                     layer_id: None,
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
+                    confirmation: None,
                 },
                 TestPoint {
                     id: "tp-b".into(),
@@ -1302,6 +1517,7 @@ mod tests {
                     layer_id: None,
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
+                    confirmation: None,
                 },
             ],
             coverage: crate::model::SemanticCoverage::default(),
