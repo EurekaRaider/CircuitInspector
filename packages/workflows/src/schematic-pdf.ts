@@ -18,7 +18,7 @@ import { classifySchematicComponent } from "./schematic-graph.js";
 
 const PAGE_RENDER_MAX_EDGE = 4096;
 const TEXT_TOKEN_MINIMUM = 4;
-export const SCHEMATIC_PARSER_VERSION = "schematic-v2.0.2";
+export const SCHEMATIC_PARSER_VERSION = "schematic-v2.0.3";
 const REF_DESIGNATOR = /^(?:U|IC|MCU|FPGA|J|P|CN|X|CONN|R|C|L|FB|F|FL|NTC|PTC|D|TVS|ESD|Q)\d+[A-Z0-9_-]*$/i;
 const EXPLICIT_PIN_ROW = /\b((?:U|IC|MCU|FPGA|J|P|CN|X|CONN|R|C|L|FB|F|FL|NTC|PTC|D|TVS|ESD|Q)\d+[A-Z0-9_-]*)\s+(?:PIN\s*)?([A-Z0-9]+)\s+(?:NET(?:\s*NAME)?\s*[:=]?\s*)?([A-Z_+/.#-][A-Z0-9_+/.#-]*)\b/i;
 const COMPACT_EXPLICIT_PIN_ROW = /^((?:U|IC|MCU|FPGA|J|P|CN|X|CONN|R|C|L|FB|F|FL|NTC|PTC|D|TVS|ESD|Q)\d+[A-Z0-9_-]*?)_?PIN([A-Z0-9]+)NET(?:NAME)?[:=]?([A-Z_+/.#-][A-Z0-9_+/.#-]*)$/i;

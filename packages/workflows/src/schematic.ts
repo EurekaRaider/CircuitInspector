@@ -61,7 +61,32 @@ export async function importSchematicDocument(
 export async function readSchematicDocument(id: string, cacheDir: string): Promise<SchematicDocument> {
   assertArtifactId(id);
   const current = await tryReadDocumentFile(path.join(schematicDirectory(cacheDir, id), "document.json"));
-  if (current) return current;
+  if (current) {
+    const directory = schematicDirectory(cacheDir, current.id);
+    const canRebuildWithoutLosingReviewWork = current.status === "DRAFT"
+      && current.corrections.length === 0
+      && current.confirmed_scopes.length === 0;
+    const needsPdfRebuild = current.source_format === "PDF"
+      && canRebuildWithoutLosingReviewWork && (
+      current.parser_version !== SCHEMATIC_PARSER_VERSION
+      || !await hasCompletePdfPageCache(current, directory)
+    );
+    if (!needsPdfRebuild) return current;
+    try {
+      const source = await stat(current.source_path);
+      if (source.isFile()) {
+        return await importSchematicDocument(
+          current.source_path,
+          current.role,
+          cacheDir,
+          current.revision ?? undefined
+        );
+      }
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+    }
+    return current;
+  }
   const legacy = await readPinout(id, cacheDir);
   return structuredPinoutToDocument(legacy, `schematic-${legacy.source_hash.slice(0, 16)}-${legacy.role.toLowerCase()}`);
 }

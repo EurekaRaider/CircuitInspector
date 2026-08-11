@@ -22,6 +22,7 @@ describe("schematic PDF viewport", () => {
       y: 112,
       scale: 0.476
     });
+    expect(fitPageTransform({ width: 0, height: 0 }, { width: 2000, height: 1000 })).toBeNull();
   });
 
   it("chooses the first page-backed evidence for cross-page navigation", () => {

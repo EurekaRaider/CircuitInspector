@@ -36,6 +36,7 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
   const [pageNumber, setPageNumber] = useState(document.pages[0]?.number ?? 0);
   const [pagePayload, setPagePayload] = useState<SchematicPagePayload | null>(null);
   const [pageUrl, setPageUrl] = useState("");
+  const [pageImageReady, setPageImageReady] = useState(false);
   const [pageLoadFailed, setPageLoadFailed] = useState(false);
   const [pageReloadKey, setPageReloadKey] = useState(0);
   const [thumbnailUrls, setThumbnailUrls] = useState<Record<number, string>>({});
@@ -101,11 +102,15 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
     if (!pageNumber) {
       setPagePayload(null);
       setPageUrl("");
+      setPageImageReady(false);
       setPageLoadFailed(false);
       return;
     }
     let disposed = false;
     let url = "";
+    setPagePayload(null);
+    setPageUrl("");
+    setPageImageReady(false);
     setPageLoadFailed(false);
     window.circuitInspector.getSchematicPage({ schematic_id: document.id, page: pageNumber }).then((payload) => {
       if (disposed) return;
@@ -116,6 +121,7 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
       if (!disposed) {
         setPagePayload(null);
         setPageUrl("");
+        setPageImageReady(false);
         setPageLoadFailed(true);
       }
     });
@@ -126,8 +132,21 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
   }, [document.id, pageNumber, pageReloadKey]);
 
   useLayoutEffect(() => {
-    if (pagePayload && pageUrl) fitPageTo(pagePayload);
-  }, [pagePayload, pageUrl]);
+    const viewport = viewportRef.current;
+    if (!viewport || !pagePayload || !pageUrl || !pageImageReady) return;
+    let frame = 0;
+    const fitWhenSized = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => fitPageTo(pagePayload));
+    };
+    fitWhenSized();
+    const observer = new ResizeObserver(fitWhenSized);
+    observer.observe(viewport);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [pageImageReady, pagePayload, pageUrl]);
 
   useEffect(() => {
     let disposed = false;
@@ -163,10 +182,11 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
   function fitPageTo(payload: SchematicPagePayload) {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    applyTransform(fitPageTransform(
+    const transform = fitPageTransform(
       { width: viewport.clientWidth, height: viewport.clientHeight },
       { width: payload.page.width, height: payload.page.height }
-    ));
+    );
+    if (transform) applyTransform(transform);
   }
 
   function fitPage() {
@@ -293,8 +313,8 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
           </div>
         </div>
         <div ref={viewportRef} className={`relative min-h-0 touch-none overflow-hidden bg-[#0d1011] ${mode === "PAN" ? "cursor-grab active:cursor-grabbing" : "cursor-crosshair"}`} onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-          {pagePayload && pageUrl ? <div ref={sheetRef} className="absolute left-0 top-0 origin-top-left will-change-transform" style={{ width: pagePayload.page.width, height: pagePayload.page.height }}>
-            <img className="absolute inset-0 size-full select-none bg-white" draggable={false} src={pageUrl} alt={`${document.role} schematic page ${pageNumber}`} />
+          {pagePayload && pageUrl ? <div ref={sheetRef} className={`absolute left-0 top-0 origin-top-left will-change-transform ${pageImageReady ? "opacity-100" : "opacity-0"}`} style={{ width: pagePayload.page.width, height: pagePayload.page.height }}>
+            <img className="absolute inset-0 size-full select-none bg-white" draggable={false} src={pageUrl} alt={`${document.role} schematic page ${pageNumber}`} onLoad={() => setPageImageReady(true)} onError={() => { setPageImageReady(false); setPageLoadFailed(true); }} />
             <svg className="absolute inset-0 size-full" viewBox={`0 0 ${pagePayload.page.width} ${pagePayload.page.height}`} aria-label={chinese ? "原理图证据覆盖层" : "Schematic evidence overlays"}>
               {overlays.nets && pagePayload.wires.map((wire) => <line key={wire.id} x1={wire.x1} y1={wire.y1} x2={wire.x2} y2={wire.y2} stroke={selectedWireId === wire.id ? "#ef835f" : "#3aa6a0"} strokeWidth={selectedWireId === wire.id ? 5 : 2} opacity={0.75} onPointerDown={(event) => { event.stopPropagation(); setSelectedWireId(wire.id); }} />)}
               {overlays.components && pagePayload.components.flatMap((component) => component.bbox ? [<rect key={component.id} x={component.bbox.x} y={component.bbox.y} width={component.bbox.width} height={component.bbox.height} fill={selectedComponentId === component.id ? "rgba(197,160,99,.15)" : "transparent"} stroke="#c5a063" strokeWidth={selectedComponentId === component.id ? 4 : 2} onPointerDown={(event) => { event.stopPropagation(); setSelectedComponentId(component.id); }} />] : [])}
@@ -304,7 +324,8 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
               {overlays.ocr && [...pagePayload.components.flatMap((item) => item.evidence), ...pagePayload.pins.flatMap((item) => item.evidence)].filter((item) => item.method === "OCR" && item.page === pageNumber && item.bbox).map((item, index) => <rect key={`ocr-${index}`} x={item.bbox!.x} y={item.bbox!.y} width={item.bbox!.width} height={item.bbox!.height} fill="rgba(88,182,214,.12)" stroke="#58b6d6" strokeWidth={2} />)}
               {wireStart && <circle cx={wireStart.x} cy={wireStart.y} r={8} fill="#ef835f" />}
             </svg>
-          </div> : pageLoadFailed ? <div className="absolute inset-0 grid place-items-center text-center text-[10px] text-[#9d795f]"><div><div>{chinese ? "页面图像加载失败" : "Page image failed to load"}</div><button className="secondary-button mt-3" onClick={() => setPageReloadKey((value) => value + 1)}>{chinese ? "重试" : "Retry"}</button></div></div> : <div className="absolute inset-0 grid place-items-center text-[10px] text-[#696c68]">{document.pages.length ? <CircleNotchIcon size={20} className="animate-spin" /> : (chinese ? "结构化映射通过右侧路径面板确认" : "Confirm structured mappings in the path panel")}</div>}
+          </div> : null}
+          {!pageImageReady && (pageLoadFailed ? <div className="absolute inset-0 grid place-items-center text-center text-[10px] text-[#9d795f]"><div><div>{chinese ? "页面图像加载失败" : "Page image failed to load"}</div><button className="secondary-button mt-3" onClick={() => setPageReloadKey((value) => value + 1)}>{chinese ? "重试" : "Retry"}</button></div></div> : <div className="absolute inset-0 grid place-items-center text-[10px] text-[#696c68]">{document.pages.length ? <CircleNotchIcon size={20} className="animate-spin" /> : (chinese ? "结构化映射通过右侧路径面板确认" : "Confirm structured mappings in the path panel")}</div>)}
         </div>
       </main>
 
@@ -381,6 +402,7 @@ export function zoomTransformAt(current: { x: number; y: number; scale: number }
 }
 
 export function fitPageTransform(viewport: { width: number; height: number }, page: { width: number; height: number }) {
+  if (viewport.width <= 48 || viewport.height <= 48 || page.width <= 0 || page.height <= 0) return null;
   const scale = clamp(Math.min((viewport.width - 48) / page.width, (viewport.height - 48) / page.height), 0.1, 6);
   return {
     x: (viewport.width - page.width * scale) / 2,

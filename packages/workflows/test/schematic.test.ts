@@ -8,6 +8,7 @@ import {
   applySchematicCorrections,
   confirmSchematicPaths,
   importSchematicDocument,
+  readSchematicDocument,
   traceSchematicInterface
 } from "../src/schematic.js";
 import { traceInterfacePaths } from "../src/schematic-graph.js";
@@ -151,7 +152,7 @@ describe("schematic document v2", () => {
 
     expect(imported.pages).toHaveLength(2);
     expect(imported.pages.every((page) => page.extraction === "OCR")).toBe(true);
-    expect(imported.parser_version).toBe("schematic-v2.0.2");
+    expect(imported.parser_version).toBe("schematic-v2.0.3");
     for (const page of imported.pages) {
       expect((await readFile(page.render_path)).byteLength).toBeGreaterThan(1_000);
       expect((await readFile(page.thumbnail_path)).byteLength).toBeGreaterThan(500);
@@ -159,12 +160,14 @@ describe("schematic document v2", () => {
     expect(imported.components.map((component) => component.refdes)).toEqual(expect.arrayContaining(["J1", "R104", "U7"]));
     expect(imported.diagnostics.map((diagnostic) => diagnostic.code)).toContain("SCANNED_PDF_OCR");
 
-    await unlink(imported.pages[1]!.render_path);
-    const rebuilt = await importSchematicDocument(
-      path.join(fixtureRoot, "product-schematic-scanned.pdf"),
-      "PRODUCT",
-      cacheDir
+    await writeFile(
+      path.join(cacheDir, "schematics", imported.id, "document.json"),
+      JSON.stringify({ ...imported, parser_version: "schematic-v2.0.1" }),
+      "utf8"
     );
+    await unlink(imported.pages[1]!.render_path);
+    const rebuilt = await readSchematicDocument(imported.id, cacheDir);
+    expect(rebuilt.parser_version).toBe("schematic-v2.0.3");
     expect((await readFile(rebuilt.pages[1]!.render_path)).byteLength).toBeGreaterThan(1_000);
   }, 120_000);
 

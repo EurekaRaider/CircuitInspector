@@ -107,33 +107,76 @@ fn evaluate_rule(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> R
         RuleKind::MinimumDiameter => evaluate_diameter(design, rule, analysis_id),
     };
     if coverage == CoverageLevel::Inferred {
-        if violations.is_empty() {
-            violations.push(inferred_review_violation(design, rule, analysis_id));
-        }
-        for violation in &mut violations {
-            violation.verdict = Verdict::Review;
-            violation.semantic_confidence = violation
-                .semantic_confidence
-                .weakest(CoverageLevel::Inferred);
-            if !violation.message.to_ascii_lowercase().contains("inferred") {
-                violation.message.push_str(
-                    "; entity identity is inferred and must be confirmed before PASS/FAIL",
-                );
+        if let Some(has_unidentified) = inferred_test_point_identity_state(design, rule) {
+            if has_unidentified
+                && !violations
+                    .iter()
+                    .any(|violation| violation.verdict == Verdict::Review)
+            {
+                violations.push(inferred_review_violation(design, rule, analysis_id));
             }
+        } else {
+            if violations.is_empty() {
+                violations.push(inferred_review_violation(design, rule, analysis_id));
+            }
+            for violation in &mut violations {
+                violation.verdict = Verdict::Review;
+                violation.semantic_confidence = violation
+                    .semantic_confidence
+                    .weakest(CoverageLevel::Inferred);
+                if !violation.message.to_ascii_lowercase().contains("inferred") {
+                    violation.message.push_str(
+                        "; entity identity is inferred and must be confirmed before PASS/FAIL",
+                    );
+                }
+            }
+            return RuleOutcome {
+                verdict: Verdict::Review,
+                violations,
+            };
         }
-        return RuleOutcome {
-            verdict: Verdict::Review,
-            violations,
-        };
     }
     RuleOutcome {
-        verdict: if violations.is_empty() {
-            Verdict::Pass
-        } else {
+        verdict: if violations
+            .iter()
+            .any(|violation| violation.verdict == Verdict::Fail)
+        {
             Verdict::Fail
+        } else if violations
+            .iter()
+            .any(|violation| violation.verdict == Verdict::Review)
+        {
+            Verdict::Review
+        } else {
+            Verdict::Pass
         },
         violations,
     }
+}
+
+fn inferred_test_point_identity_state(design: &Design, rule: &RuleDefinition) -> Option<bool> {
+    let uses_test_points =
+        rule.source == EntityKind::TestPoint || rule.target == Some(EntityKind::TestPoint);
+    if !uses_test_points {
+        return None;
+    }
+    let other_kinds_are_not_inferred = [Some(rule.source), rule.target]
+        .into_iter()
+        .flatten()
+        .filter(|kind| *kind != EntityKind::TestPoint)
+        .all(|kind| coverage_for(design, kind) != CoverageLevel::Inferred);
+    if !other_kinds_are_not_inferred || design.test_points.is_empty() {
+        return None;
+    }
+    Some(design.test_points.iter().any(|point| {
+        point.confidence == CoverageLevel::Inferred
+            && !(has_identity(point.net_name.as_deref())
+                && has_identity(point.component_ref.as_deref()))
+    }))
+}
+
+fn has_identity(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
 }
 
 fn evaluate_distance(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> Vec<Violation> {
@@ -288,7 +331,9 @@ fn diameter_violation(
         rule_id: rule.id.clone(),
         title: rule.title.clone(),
         severity: confirmed_severity(rule),
-        verdict: if point.confidence == CoverageLevel::Inferred {
+        verdict: if point.confidence == CoverageLevel::Inferred
+            && !(has_identity(point.net_name) && has_identity(point.component_ref))
+        {
             Verdict::Review
         } else {
             Verdict::Fail
@@ -519,10 +564,10 @@ fn distance_violation(
         rule_id: rule.id.clone(),
         title: rule.title.clone(),
         severity: confirmed_severity(rule),
-        verdict: if matches!(
-            source.confidence.weakest(target.confidence),
-            CoverageLevel::Inferred
-        ) {
+        verdict: if [source, target].into_iter().any(|entity| {
+            entity.confidence == CoverageLevel::Inferred
+                && !(has_identity(entity.net_name) && has_identity(entity.component_ref))
+        }) {
             Verdict::Review
         } else {
             Verdict::Fail
@@ -828,8 +873,8 @@ mod tests {
     }
 
     #[test]
-    fn inferred_testpoint_review_keeps_net_distance_and_location_evidence() {
-        let design = Design {
+    fn identified_inferred_testpoints_receive_direct_rule_verdicts() {
+        let mut design = Design {
             schema_version: 1,
             id: "board".into(),
             format: DesignFormat::GerberPackage,
@@ -921,24 +966,51 @@ mod tests {
 
         let analysis = analyze_design(&design, &pack).unwrap();
 
-        assert_eq!(analysis.verdict, Verdict::Review);
-        assert_eq!(analysis.fail_count, 0);
-        assert_eq!(analysis.review_count, 3);
-        assert_eq!(analysis.violations.len(), 3);
+        assert_eq!(analysis.verdict, Verdict::Fail);
+        assert_eq!(analysis.pass_count, 1);
+        assert_eq!(analysis.fail_count, 2);
+        assert_eq!(analysis.review_count, 0);
+        assert_eq!(analysis.violations.len(), 2);
         let finding = analysis
             .violations
             .iter()
-            .find(|finding| finding.rule_id == "tp-spacing")
+            .find(|finding| finding.rule_id == "zz-tp-diameter")
             .unwrap();
-        assert_eq!(finding.verdict, Verdict::Review);
+        assert_eq!(finding.verdict, Verdict::Fail);
         assert_eq!(finding.semantic_confidence, CoverageLevel::Inferred);
-        assert_eq!(finding.net_names, ["A", "B"]);
-        assert_eq!(finding.component_refs, ["TP1", "TP2"]);
+        assert_eq!(finding.net_names, ["A"]);
+        assert_eq!(finding.component_refs, ["TP1"]);
         assert_eq!(finding.measured_value_nm, Some(200_000));
-        assert_eq!(finding.threshold_nm, Some(100_000));
-        assert_eq!(finding.evidence_points.len(), 2);
-        assert_eq!(finding.x_nm, 1_200_000);
+        assert_eq!(finding.threshold_nm, Some(400_000));
+        assert_eq!(finding.evidence_points.len(), 1);
+        assert_eq!(finding.x_nm, 1_000_000);
         assert_eq!(finding.y_nm, 1_000_000);
+
+        design.test_points[0].component_ref = None;
+        let incomplete = analyze_design(&design, &pack).unwrap();
+        assert_eq!(incomplete.verdict, Verdict::Fail);
+        assert_eq!(incomplete.fail_count, 1);
+        assert_eq!(incomplete.review_count, 2);
+        assert_eq!(
+            incomplete
+                .violations
+                .iter()
+                .find(|finding| finding.rule_id == "zz-tp-diameter"
+                    && finding.component_refs == ["TP2"])
+                .unwrap()
+                .verdict,
+            Verdict::Fail
+        );
+        assert_eq!(
+            incomplete
+                .violations
+                .iter()
+                .find(|finding| finding.rule_id == "zz-tp-diameter"
+                    && finding.component_refs.is_empty())
+                .unwrap()
+                .verdict,
+            Verdict::Review
+        );
     }
 
     #[test]
