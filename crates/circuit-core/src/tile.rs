@@ -13,7 +13,7 @@ pub fn write_tile(
     max_features: usize,
 ) -> CoreResult<TileDescriptor> {
     let mut key_hash = Sha256::new();
-    key_hash.update(b"tile-selection-v2-fair-layers");
+    key_hash.update(b"tile-selection-v3-components");
     key_hash.update(serde_json::to_vec(&(
         viewport,
         layer_ids,
@@ -39,6 +39,29 @@ pub fn write_tile(
     let mut records = Vec::<TileRecord>::new();
     let layer_filter =
         |id: &str| layer_ids.is_empty() || layer_ids.iter().any(|candidate| candidate == id);
+    for (layer_index, layer) in design.layers.iter().enumerate().filter(|(_, layer)| {
+        layer_filter(&layer.id) && layer.function.to_ascii_uppercase().contains("COMPONENT")
+    }) {
+        for component in design.components.iter().filter(|component| {
+            component.side == layer.side && component.bounds.intersects(viewport)
+        }) {
+            append_geometry(
+                &mut records,
+                &FeatureGeometry::ComponentBody {
+                    bounds: component.bounds,
+                },
+                Polarity::Dark,
+                layer_index.min(u16::MAX as usize) as u16,
+                lod,
+            );
+            if records.len() >= max_features {
+                break;
+            }
+        }
+        if records.len() >= max_features {
+            break;
+        }
+    }
     let mut cursors = design
         .layers
         .iter()
@@ -276,7 +299,9 @@ fn append_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CoverageLevel, DesignFormat, Feature, Layer, SemanticCoverage, Side};
+    use crate::model::{
+        Component, CoverageLevel, DesignFormat, Feature, Layer, SemanticCoverage, Side,
+    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -357,5 +382,58 @@ mod tests {
         let bytes = fs::read(tile.path).unwrap();
         assert_eq!(u16::from_le_bytes(bytes[44..46].try_into().unwrap()), 0);
         assert_eq!(u16::from_le_bytes(bytes[68..70].try_into().unwrap()), 1);
+    }
+
+    #[test]
+    fn selected_component_layers_emit_package_bodies() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cache = CacheStore::new(temporary.path()).unwrap();
+        let bounds = BoundsNm {
+            min_x: 0,
+            min_y: 0,
+            max_x: 10_000_000,
+            max_y: 10_000_000,
+        };
+        let design = Design {
+            schema_version: Design::SCHEMA_VERSION,
+            id: "component-bodies".into(),
+            format: DesignFormat::Odbpp,
+            source_path: "fixture".into(),
+            content_hash: "hash".into(),
+            bounds,
+            layers: vec![Layer {
+                id: "top-components".into(),
+                name: "top-components".into(),
+                function: "COMPONENT".into(),
+                side: Side::Top,
+                features: Vec::new(),
+            }],
+            components: vec![Component {
+                refdes: "U1".into(),
+                center: PointNm {
+                    x: 5_000_000,
+                    y: 5_000_000,
+                },
+                bounds: BoundsNm {
+                    min_x: 4_000_000,
+                    min_y: 4_000_000,
+                    max_x: 6_000_000,
+                    max_y: 6_000_000,
+                },
+                side: Side::Top,
+                pins: Vec::new(),
+                confidence: CoverageLevel::Explicit,
+            }],
+            nets: Vec::new(),
+            test_points: Vec::new(),
+            coverage: SemanticCoverage::default(),
+            diagnostics: Vec::new(),
+        };
+
+        let tile = write_tile(&cache, &design, bounds, &["top-components".into()], 0, 10).unwrap();
+        let bytes = fs::read(tile.path).unwrap();
+        assert_eq!(tile.feature_count, 1);
+        assert_eq!(bytes[42], 4);
+        assert_eq!(u16::from_le_bytes(bytes[44..46].try_into().unwrap()), 0);
     }
 }

@@ -2,8 +2,10 @@ use crate::analyze::analyze_design;
 use crate::archive::hash_input;
 use crate::cache::CacheStore;
 use crate::evidence::{render_evidence, write_html_report};
+use crate::geometry::circle_to_board_edge;
 use crate::model::{
-    BoundsNm, CoverageLevel, Design, DesignSummary, PointNm, Severity, TestPoint, Verdict,
+    BoundsNm, CoverageLevel, Design, DesignSummary, FeatureGeometry, PointNm, Severity, TestPoint,
+    Verdict,
 };
 use crate::parsers::import_design;
 use crate::rules::{RuleApproval, RuleDefinition, RulePack, RulePackStatus, RuleReviewItem};
@@ -310,7 +312,7 @@ fn pick_request(params: Value) -> CoreResult<Value> {
         let distance = ((point.center.distance_sq(params.point) as f64)
             .sqrt()
             .round() as i64)
-            .saturating_sub(point.radius_nm)
+            .saturating_sub(point.radius_nm.unwrap_or_default())
             .max(0);
         if distance <= tolerance {
             results.push(json!({
@@ -376,14 +378,15 @@ struct TestPointReviewContext<'a> {
 
 #[derive(Serialize)]
 struct DistanceEvidence {
-    distance_nm: i64,
-    point: PointNm,
+    distance_nm: Option<i64>,
+    point: Option<PointNm>,
+    confidence: CoverageLevel,
 }
 
 #[derive(Serialize)]
 struct NearestTestPoint<'a> {
     id: &'a str,
-    distance_nm: i64,
+    distance_nm: Option<i64>,
     center: PointNm,
 }
 
@@ -392,89 +395,59 @@ fn test_points_with_review_context(design: &Design) -> Vec<TestPointReviewCandid
         .test_points
         .iter()
         .map(|point| {
-            let nearest_test_point = design
-                .test_points
-                .iter()
-                .filter(|other| other.id != point.id)
-                .map(|other| {
-                    let distance_nm = ((point.center.distance_sq(other.center) as f64)
-                        .sqrt()
-                        .round() as i64)
-                        .saturating_sub(point.radius_nm)
-                        .saturating_sub(other.radius_nm)
-                        .max(0);
-                    (other, distance_nm)
-                })
-                .min_by(|(left, left_distance), (right, right_distance)| {
-                    left_distance
-                        .cmp(right_distance)
-                        .then_with(|| left.id.cmp(&right.id))
-                })
-                .map(|(other, distance_nm)| NearestTestPoint {
-                    id: &other.id,
-                    distance_nm,
-                    center: other.center,
-                });
+            let nearest_test_point =
+                design
+                    .test_points
+                    .iter()
+                    .filter(|other| other.id != point.id)
+                    .map(|other| {
+                        let center_distance_nm = (point.center.distance_sq(other.center) as f64)
+                            .sqrt()
+                            .round() as i64;
+                        let distance_nm = point.radius_nm.zip(other.radius_nm).map(
+                            |(point_radius, other_radius)| {
+                                center_distance_nm
+                                    .saturating_sub(point_radius)
+                                    .saturating_sub(other_radius)
+                                    .max(0)
+                            },
+                        );
+                        (other, center_distance_nm, distance_nm)
+                    })
+                    .min_by(|(left, left_distance, _), (right, right_distance, _)| {
+                        left_distance
+                            .cmp(right_distance)
+                            .then_with(|| left.id.cmp(&right.id))
+                    })
+                    .map(|(other, _, distance_nm)| NearestTestPoint {
+                        id: &other.id,
+                        distance_nm,
+                        center: other.center,
+                    });
             TestPointReviewCandidate {
                 point,
                 review_context: TestPointReviewContext {
                     metric: "EDGE_TO_EDGE",
-                    board_edge: DistanceEvidence {
-                        distance_nm: test_point_to_board_edge_distance(point, design),
-                        point: nearest_board_edge_point(point.center, design),
-                    },
+                    board_edge: point.radius_nm.map_or(
+                        DistanceEvidence {
+                            distance_nm: None,
+                            point: None,
+                            confidence: CoverageLevel::Inferred,
+                        },
+                        |radius| {
+                            let measurement = circle_to_board_edge(design, point.center, radius);
+                            DistanceEvidence {
+                                distance_nm: Some(measurement.distance_nm),
+                                point: Some(measurement.edge_point),
+                                confidence: measurement.confidence,
+                            }
+                        },
+                    ),
                     nearest_test_point,
                 },
             }
         })
         .collect()
-}
-
-fn test_point_to_board_edge_distance(point: &TestPoint, design: &Design) -> i64 {
-    let horizontal =
-        (point.center.x - design.bounds.min_x).min(design.bounds.max_x - point.center.x);
-    let vertical = (point.center.y - design.bounds.min_y).min(design.bounds.max_y - point.center.y);
-    horizontal
-        .min(vertical)
-        .saturating_sub(point.radius_nm)
-        .max(0)
-}
-
-fn nearest_board_edge_point(point: PointNm, design: &Design) -> PointNm {
-    [
-        (
-            point.x.saturating_sub(design.bounds.min_x).abs(),
-            PointNm {
-                x: design.bounds.min_x,
-                y: point.y,
-            },
-        ),
-        (
-            design.bounds.max_x.saturating_sub(point.x).abs(),
-            PointNm {
-                x: design.bounds.max_x,
-                y: point.y,
-            },
-        ),
-        (
-            point.y.saturating_sub(design.bounds.min_y).abs(),
-            PointNm {
-                x: point.x,
-                y: design.bounds.min_y,
-            },
-        ),
-        (
-            design.bounds.max_y.saturating_sub(point.y).abs(),
-            PointNm {
-                x: point.x,
-                y: design.bounds.max_y,
-            },
-        ),
-    ]
-    .into_iter()
-    .min_by_key(|(distance, _)| *distance)
-    .map(|(_, edge_point)| edge_point)
-    .unwrap_or(point)
 }
 
 fn review_test_points_request(params: Value) -> CoreResult<Value> {
@@ -535,14 +508,13 @@ fn review_test_points_request(params: Value) -> CoreResult<Value> {
                 .map(|component| TestPoint {
                     id: manual_test_point_id(&addition.source_kind, &addition.source_id),
                     center: component.center,
-                    radius_nm: ((component.bounds.max_x - component.bounds.min_x)
-                        .max(component.bounds.max_y - component.bounds.min_y)
-                        / 2)
-                    .max(50_000),
+                    radius_nm: None,
                     net_name: None,
                     component_ref: Some(component.refdes.clone()),
                     confidence: CoverageLevel::Explicit,
+                    layer_id: None,
                     source: format!("manual:{}", addition.source_id),
+                    geometry_source: None,
                 })
         } else if addition.source_kind.eq_ignore_ascii_case("FEATURE") {
             design
@@ -552,16 +524,24 @@ fn review_test_points_request(params: Value) -> CoreResult<Value> {
                 .find(|feature| feature.id == addition.source_id)
                 .map(|feature| {
                     let bounds = feature.geometry.bounds();
+                    let radius_nm = match feature.geometry {
+                        FeatureGeometry::Pad {
+                            size_x_nm,
+                            size_y_nm,
+                            ..
+                        } => Some(size_x_nm.min(size_y_nm).max(2) / 2),
+                        _ => None,
+                    };
                     TestPoint {
                         id: manual_test_point_id(&addition.source_kind, &addition.source_id),
                         center: bounds.center(),
-                        radius_nm: ((bounds.max_x - bounds.min_x).max(bounds.max_y - bounds.min_y)
-                            / 2)
-                        .max(50_000),
+                        radius_nm,
                         net_name: feature.net_name.clone(),
                         component_ref: feature.component_ref.clone(),
                         confidence: CoverageLevel::Explicit,
+                        layer_id: Some(feature.layer_id.clone()),
                         source: format!("manual:{}", addition.source_id),
+                        geometry_source: radius_nm.map(|_| feature.source.clone()),
                     }
                 })
         } else {
@@ -1088,11 +1068,13 @@ mod tests {
                         x: 2_000_000,
                         y: 4_000_000,
                     },
-                    radius_nm: 100_000,
+                    radius_nm: Some(100_000),
                     net_name: None,
                     component_ref: Some("TP1".into()),
                     confidence: CoverageLevel::Inferred,
+                    layer_id: None,
                     source: "fixture".into(),
+                    geometry_source: Some("fixture".into()),
                 },
                 TestPoint {
                     id: "tp-b".into(),
@@ -1100,11 +1082,13 @@ mod tests {
                         x: 5_000_000,
                         y: 4_000_000,
                     },
-                    radius_nm: 200_000,
+                    radius_nm: Some(200_000),
                     net_name: None,
                     component_ref: Some("TP2".into()),
                     confidence: CoverageLevel::Inferred,
+                    layer_id: None,
                     source: "fixture".into(),
+                    geometry_source: Some("fixture".into()),
                 },
             ],
             coverage: crate::model::SemanticCoverage::default(),
@@ -1115,11 +1099,11 @@ mod tests {
         assert_eq!(candidates[0].review_context.metric, "EDGE_TO_EDGE");
         assert_eq!(
             candidates[0].review_context.board_edge.distance_nm,
-            1_900_000
+            Some(1_900_000)
         );
         assert_eq!(
             candidates[0].review_context.board_edge.point,
-            PointNm { x: 0, y: 4_000_000 }
+            Some(PointNm { x: 0, y: 4_000_000 })
         );
         let nearest = candidates[0]
             .review_context
@@ -1127,7 +1111,7 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(nearest.id, "tp-b");
-        assert_eq!(nearest.distance_nm, 2_700_000);
+        assert_eq!(nearest.distance_nm, Some(2_700_000));
     }
 
     #[test]

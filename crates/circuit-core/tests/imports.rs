@@ -30,6 +30,23 @@ fn imports_odb_directory() {
     assert_eq!(design.components.len(), 2);
     assert_eq!(design.test_points.len(), 2);
     assert_eq!(design.coverage.test_points, CoverageLevel::Inferred);
+    assert!(design.layers.iter().any(|layer| {
+        layer.id == "odb-comp---top"
+            && layer.function == "COMPONENT"
+            && layer.side == circuit_inspector_core::model::Side::Top
+    }));
+    assert!(design.test_points.iter().all(|point| {
+        point.radius_nm == Some(400_000)
+            && point.layer_id.as_deref() == Some("odb-top")
+            && point
+                .geometry_source
+                .as_deref()
+                .is_some_and(|source| source.replace('\\', "/").ends_with("/layers/top/features"))
+    }));
+    assert!(design.components.iter().all(|component| {
+        component.bounds.max_x - component.bounds.min_x == 800_000
+            && component.bounds.max_y - component.bounds.min_y == 800_000
+    }));
 }
 
 #[test]
@@ -83,8 +100,17 @@ fn inferred_odb_test_points_can_be_confirmed_without_reexport() {
         .map(|point| point["id"].as_str().unwrap())
         .collect::<Vec<_>>();
     for point in listed["test_points"].as_array().unwrap() {
+        assert_eq!(point["radius_nm"], 400_000);
+        assert_eq!(point["layer_id"], "odb-top");
         assert_eq!(point["review_context"]["metric"], "EDGE_TO_EDGE");
-        assert!(point["review_context"]["board_edge"]["distance_nm"].is_i64());
+        assert_eq!(
+            point["review_context"]["board_edge"]["distance_nm"],
+            9_600_000
+        );
+        assert_eq!(
+            point["review_context"]["board_edge"]["confidence"],
+            "EXPLICIT"
+        );
         assert!(point["review_context"]["board_edge"]["point"]["x"].is_i64());
         let nearest = &point["review_context"]["nearest_test_point"];
         assert!(nearest["distance_nm"].is_i64());

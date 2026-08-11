@@ -45,7 +45,7 @@ describe("PCB REVIEW routing", () => {
   });
 
   it("routes inferred test-point findings to candidate review", () => {
-    const point: TestPointCandidate = { id: "tp", center: { x: 1, y: 2 }, radius_nm: 3, net_name: null, component_ref: "TP1", confidence: "INFERRED", source: "fixture" };
+    const point: TestPointCandidate = { id: "tp", center: { x: 1, y: 2 }, radius_nm: 3, net_name: null, component_ref: "TP1", confidence: "INFERRED", layer_id: null, source: "fixture", geometry_source: "fixture" };
     expect(reviewRoute({ ...baseViolation, message: "required entities are inferred" }, baseRule, [point])).toBe("TEST_POINT_REVIEW");
   });
 
@@ -65,10 +65,12 @@ describe("PCB REVIEW routing", () => {
       net_name: "SENSE",
       component_ref: "TP1",
       confidence: "INFERRED",
+      layer_id: "top",
       source: "fixture",
+      geometry_source: "fixture",
       review_context: {
         metric: "EDGE_TO_EDGE",
-        board_edge: { distance_nm: 900_000, point: { x: 0, y: 2_000_000 } },
+        board_edge: { distance_nm: 900_000, point: { x: 0, y: 2_000_000 }, confidence: "EXPLICIT" },
         nearest_test_point: { id: "tp-b", distance_nm: 1_250_000, center: { x: 2_450_000, y: 2_000_000 } }
       }
     };

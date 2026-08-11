@@ -3,7 +3,14 @@ STEP {
   NAME=pcb
 }
 LAYER {
+  ROW=1
   NAME=comp_+_top
   CONTEXT=BOARD
   TYPE=COMPONENT
+}
+LAYER {
+  ROW=2
+  NAME=top
+  CONTEXT=BOARD
+  TYPE=SIGNAL
 }

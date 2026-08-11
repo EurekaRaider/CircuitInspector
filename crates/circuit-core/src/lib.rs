@@ -2,6 +2,7 @@ pub mod analyze;
 pub mod archive;
 pub mod cache;
 pub mod evidence;
+pub mod geometry;
 pub mod model;
 pub mod parsers;
 pub mod rules;

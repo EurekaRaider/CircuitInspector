@@ -317,11 +317,13 @@ pub struct Component {
 pub struct TestPoint {
     pub id: String,
     pub center: PointNm,
-    pub radius_nm: i64,
+    pub radius_nm: Option<i64>,
     pub net_name: Option<String>,
     pub component_ref: Option<String>,
     pub confidence: CoverageLevel,
+    pub layer_id: Option<String>,
     pub source: String,
+    pub geometry_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -367,7 +369,7 @@ pub struct Design {
 }
 
 impl Design {
-    pub const SCHEMA_VERSION: u32 = 2;
+    pub const SCHEMA_VERSION: u32 = 3;
 
     pub fn finalize(&mut self) {
         let mut bounds = BoundsNm::empty();

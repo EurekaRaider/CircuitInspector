@@ -54,15 +54,17 @@ export interface DesignSummary {
 export interface TestPointCandidate {
   id: string;
   center: { x: number; y: number };
-  radius_nm: number;
+  radius_nm: number | null;
   net_name: string | null;
   component_ref: string | null;
   confidence: CoverageLevel;
+  layer_id: string | null;
   source: string;
+  geometry_source: string | null;
   review_context?: {
     metric: "EDGE_TO_EDGE";
-    board_edge: { distance_nm: number; point: { x: number; y: number } };
-    nearest_test_point: { id: string; distance_nm: number; center: { x: number; y: number } } | null;
+    board_edge: { distance_nm: number | null; point: { x: number; y: number } | null; confidence: CoverageLevel };
+    nearest_test_point: { id: string; distance_nm: number | null; center: { x: number; y: number } } | null;
   };
 }
 

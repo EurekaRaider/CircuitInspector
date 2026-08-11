@@ -144,10 +144,12 @@ export class BoardRenderer {
     if (testPoint) {
       const x = testPoint.center.x / 1_000_000;
       const y = testPoint.center.y / 1_000_000;
-      const featureRadius = Math.max(0.03, testPoint.radius_nm / 1_000_000);
-      const locatorRadius = Math.max(featureRadius * 1.8, 24 / this.#view.zoom);
+      const featureRadius = testPoint.radius_nm == null
+        ? null
+        : Math.max(0.03, testPoint.radius_nm / 1_000_000);
+      const locatorRadius = Math.max((featureRadius ?? 0.05) * 1.8, 24 / this.#view.zoom);
       addDisc(write, x, y, locatorRadius, [0.93, 0.66, 0.24, 0.13], 32);
-      addRing(write, x, y, featureRadius, [0.98, 0.83, 0.45, 1]);
+      if (featureRadius != null) addRing(write, x, y, featureRadius, [0.98, 0.83, 0.45, 1]);
       addRing(write, x, y, locatorRadius, [0.98, 0.69, 0.27, 1]);
       addLine(write, x - locatorRadius * 1.45, y, x + locatorRadius * 1.45, y, 2.5 / this.#view.zoom, [0.98, 0.83, 0.45, 1]);
       addLine(write, x, y - locatorRadius * 1.45, x, y + locatorRadius * 1.45, 2.5 / this.#view.zoom, [0.98, 0.83, 0.45, 1]);

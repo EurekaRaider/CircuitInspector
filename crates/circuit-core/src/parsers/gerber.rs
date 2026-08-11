@@ -962,8 +962,9 @@ fn merge_feature_semantics(design: &mut Design, x2: bool, x3: bool) {
                 test_points.push(TestPoint {
                     id: format!("gerber-tp-{}", test_points.len()),
                     center: bounds.center(),
-                    radius_nm: ((bounds.max_x - bounds.min_x).min(bounds.max_y - bounds.min_y) / 2)
-                        .max(1),
+                    radius_nm: Some(
+                        ((bounds.max_x - bounds.min_x).min(bounds.max_y - bounds.min_y) / 2).max(1),
+                    ),
                     net_name: feature.net_name.clone(),
                     component_ref: feature.component_ref.clone(),
                     confidence: if explicit {
@@ -971,7 +972,9 @@ fn merge_feature_semantics(design: &mut Design, x2: bool, x3: bool) {
                     } else {
                         CoverageLevel::Inferred
                     },
+                    layer_id: Some(feature.layer_id.clone()),
                     source: feature.source.clone(),
+                    geometry_source: Some(feature.source.clone()),
                 });
             }
         }

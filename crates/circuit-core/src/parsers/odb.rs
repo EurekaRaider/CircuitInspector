@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const UNRESOLVED_SYMBOL_GEOMETRY: &str = "__circuit_inspector_unresolved_symbol_geometry";
+
 pub fn parse_odb(
     root: &Path,
     files: &[PathBuf],
@@ -37,6 +39,20 @@ pub fn parse_odb(
         .map(|text| parse_matrix(&text))
         .unwrap_or_default();
     let selected_step = select_primary_step(&relative_files, &matrix);
+    let mut eda = EdaData::default();
+    for (path, relative) in &relative_files {
+        let lower = relative.to_ascii_lowercase();
+        if !lower.ends_with("eda/data")
+            || selected_step.as_deref().is_some_and(|selected| {
+                odb_step_name(relative).is_some_and(|step| !step.eq_ignore_ascii_case(selected))
+            })
+        {
+            continue;
+        }
+        let text = read_text(path, &mut design)?;
+        eda.merge(parse_eda_data(&text));
+    }
+    nets.extend(eda.net_names.iter().cloned());
     if let Some(step) = selected_step.as_deref() {
         let step_count = relative_files
             .iter()
@@ -83,7 +99,7 @@ pub fn parse_odb(
             } else {
                 infer_odb_function(&layer_name)
             };
-            let side = side_from_name(&layer_name);
+            let side = odb_layer_side(&layer_name, matrix_layer, &matrix);
             let parsed =
                 parse_feature_file(&text, path, &layer_id, &function, &mut design.diagnostics);
             nets.extend(parsed.nets);
@@ -104,17 +120,39 @@ pub fn parse_odb(
             }
         } else if lower.ends_with("/components") {
             let text = read_text(path, &mut design)?;
+            let layer_name = odb_layer_name(&relative).unwrap_or_default();
+            let layer_id = format!("odb-{}", sanitize_id(&layer_name));
+            let matrix_layer = matrix
+                .iter()
+                .find(|layer| layer.name.eq_ignore_ascii_case(&layer_name));
+            if matrix_layer.is_some_and(|layer| !layer.context.eq_ignore_ascii_case("BOARD")) {
+                continue;
+            }
+            let side = odb_layer_side(&layer_name, matrix_layer, &matrix);
             parse_components(
                 &text,
                 path,
+                &layer_id,
+                side,
+                &eda.package_bounds,
+                &eda.net_names,
                 &mut components,
                 &mut nets,
                 &mut test_points,
                 &mut design.diagnostics,
             );
-        } else if lower.ends_with("eda/data") || lower.ends_with("/netlists/cadnet/netlist") {
+            if !design.layers.iter().any(|layer| layer.id == layer_id) {
+                design.layers.push(Layer {
+                    id: layer_id,
+                    name: layer_name,
+                    function: "COMPONENT".into(),
+                    side,
+                    features: Vec::new(),
+                });
+            }
+        } else if lower.ends_with("/netlists/cadnet/netlist") {
             let text = read_text(path, &mut design)?;
-            parse_nets(&text, path, &mut nets, &mut test_points);
+            parse_nets(&text, &mut nets);
         } else if lower.ends_with("stephdr") || lower.contains("step_repeat") {
             design.diagnostics.push(diagnostic(
                 "ODB_STEP_REPEAT_DETECTED",
@@ -132,6 +170,7 @@ pub fn parse_odb(
     }
     design.nets = nets.into_iter().collect();
     design.components = components.into_values().collect();
+    reconcile_test_point_geometry(&design.layers, &mut test_points, &mut design.diagnostics);
     design.test_points = test_points;
     design.coverage.layers = CoverageLevel::Explicit;
     design.coverage.nets = if design.nets.is_empty() {
@@ -139,11 +178,7 @@ pub fn parse_odb(
     } else {
         CoverageLevel::Explicit
     };
-    design.coverage.components = if design.components.is_empty() {
-        CoverageLevel::Missing
-    } else {
-        CoverageLevel::Explicit
-    };
+    design.coverage.components = component_coverage(&design.components);
     design.coverage.pins = if design
         .components
         .iter()
@@ -173,6 +208,7 @@ pub fn parse_odb(
 
 #[derive(Debug, Clone, Default)]
 struct MatrixLayer {
+    row: i32,
     name: String,
     context: String,
     layer_type: String,
@@ -198,6 +234,7 @@ fn parse_matrix(text: &str) -> Vec<MatrixLayer> {
             let name = value("NAME");
             if !name.is_empty() {
                 layers.push(MatrixLayer {
+                    row: value("ROW").parse().unwrap_or_default(),
                     name,
                     context: value("CONTEXT"),
                     layer_type: value("TYPE"),
@@ -310,6 +347,23 @@ struct ParsedFeatures {
     test_points: Vec<TestPoint>,
 }
 
+#[derive(Default)]
+struct EdaData {
+    net_names: Vec<String>,
+    package_bounds: Vec<BoundsNm>,
+}
+
+impl EdaData {
+    fn merge(&mut self, other: Self) {
+        if self.net_names.is_empty() {
+            self.net_names = other.net_names;
+        }
+        if self.package_bounds.is_empty() {
+            self.package_bounds = other.package_bounds;
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OdbUnits {
     Inch,
@@ -365,7 +419,9 @@ fn parse_feature_file(
                 parts.next().and_then(|value| value.parse::<usize>().ok()),
                 parts.next(),
             ) {
-                symbols.insert(index, symbol_dimensions(name, units));
+                if let Some(dimensions) = symbol_dimensions(name, units) {
+                    symbols.insert(index, dimensions);
+                }
             }
             continue;
         }
@@ -394,7 +450,7 @@ fn parse_feature_file(
         let Some(record) = parts.first().copied() else {
             continue;
         };
-        let attributes =
+        let mut attributes =
             parse_feature_attributes(attribute_text, &attribute_names, &attribute_values);
         let make_feature =
             |geometry: FeatureGeometry,
@@ -424,11 +480,15 @@ fn parse_feature_file(
                     y: number_nm(parts[2], units.coordinate_scale()),
                 };
                 let symbol = parts[3].parse::<usize>().unwrap_or_default();
+                let resolved_dimensions = symbols.get(&symbol).copied();
                 let (mut size_x_nm, mut size_y_nm) =
-                    symbols.get(&symbol).copied().unwrap_or((100_000, 100_000));
+                    resolved_dimensions.unwrap_or((100_000, 100_000));
                 let polarity = odb_polarity(parts.get(4).copied());
                 if orientation_swaps_axes(parts.get(6).copied()) {
                     std::mem::swap(&mut size_x_nm, &mut size_y_nm);
+                }
+                if resolved_dimensions.is_none() {
+                    attributes.insert(UNRESOLVED_SYMBOL_GEOMETRY.into(), "true".into());
                 }
                 let geometry = if layer_function.contains("DRILL") {
                     FeatureGeometry::Drill {
@@ -457,9 +517,12 @@ fn parse_feature_file(
                     parsed.nets.insert(net.clone());
                 }
                 if feature_is_test_point(&feature) {
-                    parsed
-                        .test_points
-                        .push(test_point_from_feature(&feature, CoverageLevel::Explicit));
+                    let mut point = test_point_from_feature(&feature, CoverageLevel::Explicit);
+                    if resolved_dimensions.is_none() {
+                        point.radius_nm = None;
+                        point.geometry_source = None;
+                    }
+                    parsed.test_points.push(point);
                 }
                 parsed.features.push(feature);
             }
@@ -621,14 +684,24 @@ fn feature_is_test_point(feature: &Feature) -> bool {
 
 fn test_point_from_feature(feature: &Feature, confidence: CoverageLevel) -> TestPoint {
     let bounds = feature.geometry.bounds();
+    let radius_nm = match feature.geometry {
+        FeatureGeometry::Pad {
+            size_x_nm,
+            size_y_nm,
+            ..
+        } => Some(size_x_nm.min(size_y_nm).max(2) / 2),
+        _ => None,
+    };
     TestPoint {
         id: format!("odb-tp-{}", sanitize_id(&feature.id)),
         center: bounds.center(),
-        radius_nm: ((bounds.max_x - bounds.min_x).max(bounds.max_y - bounds.min_y) / 2).max(50_000),
+        radius_nm,
         net_name: feature.net_name.clone(),
         component_ref: feature.component_ref.clone(),
         confidence,
+        layer_id: Some(feature.layer_id.clone()),
         source: feature.source.clone(),
+        geometry_source: radius_nm.map(|_| feature.source.clone()),
     }
 }
 
@@ -641,6 +714,10 @@ fn orientation_swaps_axes(value: Option<&str>) -> bool {
 fn parse_components(
     text: &str,
     source: &Path,
+    layer_id: &str,
+    side: Side,
+    package_bounds: &[BoundsNm],
+    net_names: &[String],
     components: &mut BTreeMap<String, Component>,
     nets: &mut BTreeSet<String>,
     test_points: &mut Vec<TestPoint>,
@@ -649,6 +726,7 @@ fn parse_components(
     let mut scale = 25_400_000.0;
     let mut active_ref: Option<String> = None;
     let mut active_test_point: Option<usize> = None;
+    let mut active_test_point_toeprints = 0_usize;
     for raw in text.lines() {
         let line = raw.trim();
         if line.eq_ignore_ascii_case("UNITS=MM") {
@@ -658,52 +736,58 @@ fn parse_components(
         let parts = line.split_whitespace().collect::<Vec<_>>();
         match parts.first().copied() {
             Some("CMP") if parts.len() >= 7 => {
+                let package_ref = parts[1].parse::<usize>().ok();
                 let x = number_nm(parts[2], scale);
                 let y = number_nm(parts[3], scale);
+                let rotation_deg = parts[4].parse::<f64>().unwrap_or_default();
+                let mirrored = parts[5].eq_ignore_ascii_case("M");
                 let reference = parts[6].trim_matches('\'').to_owned();
                 let package = parts
                     .get(7)
                     .map(|value| value.trim_matches('\''))
                     .unwrap_or("");
-                let side = if source
-                    .to_string_lossy()
-                    .to_ascii_lowercase()
-                    .contains("bottom")
-                {
-                    Side::Bottom
-                } else {
-                    Side::Top
-                };
+                let transformed_package = package_ref
+                    .and_then(|index| package_bounds.get(index).copied())
+                    .map(|bounds| {
+                        transform_package_bounds(bounds, PointNm { x, y }, rotation_deg, mirrored)
+                    });
                 components.insert(
                     reference.clone(),
                     Component {
                         refdes: reference.clone(),
                         center: PointNm { x, y },
-                        bounds: BoundsNm {
+                        bounds: transformed_package.unwrap_or(BoundsNm {
                             min_x: x,
                             min_y: y,
                             max_x: x,
                             max_y: y,
-                        },
+                        }),
                         side,
                         pins: Vec::new(),
-                        confidence: CoverageLevel::Explicit,
+                        confidence: if transformed_package.is_some() {
+                            CoverageLevel::Explicit
+                        } else {
+                            CoverageLevel::Inferred
+                        },
                     },
                 );
                 if is_test_point_token(&reference) || is_test_point_token(package) {
                     test_points.push(TestPoint {
                         id: format!("odb-tp-{}", test_points.len()),
                         center: PointNm { x, y },
-                        radius_nm: 150_000,
+                        radius_nm: None,
                         net_name: None,
                         component_ref: Some(reference.clone()),
                         confidence: CoverageLevel::Inferred,
+                        layer_id: Some(layer_id.to_owned()),
                         source: source.display().to_string(),
+                        geometry_source: None,
                     });
                     active_test_point = Some(test_points.len() - 1);
                 } else {
                     active_test_point = None;
                 }
+                active_test_point_toeprints = 0;
                 active_ref = Some(reference);
             }
             Some("TOP") if parts.len() >= 8 => {
@@ -718,16 +802,32 @@ fn parse_components(
                         component.bounds.include_point(point);
                         component.center = component.bounds.center();
                     }
-                    if let Some(net) = parts.get(6).filter(|value| **value != "0") {
-                        nets.insert((*net).to_owned());
+                    if let Some(net) = parts.get(6) {
+                        let net_name = net
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|index| net_names.get(index).cloned())
+                            .or_else(|| {
+                                (*net != "0").then(|| (*net).trim_matches('\'').to_owned())
+                            });
+                        if let Some(net_name) = net_name.as_ref() {
+                            nets.insert(net_name.clone());
+                        }
                         if let Some(point) =
                             active_test_point.and_then(|index| test_points.get_mut(index))
                         {
+                            if active_test_point_toeprints == 0 {
+                                point.center = PointNm {
+                                    x: number_nm(parts[2], scale),
+                                    y: number_nm(parts[3], scale),
+                                };
+                            }
                             if point.net_name.is_none() {
-                                point.net_name = Some((*net).trim_matches('\'').to_owned());
+                                point.net_name = net_name;
                             }
                         }
                     }
+                    active_test_point_toeprints += 1;
                 }
             }
             _ => {}
@@ -743,40 +843,222 @@ fn parse_components(
     }
 }
 
-fn parse_nets(
-    text: &str,
-    source: &Path,
-    nets: &mut BTreeSet<String>,
-    test_points: &mut Vec<TestPoint>,
-) {
-    let mut current_net = None::<String>;
-    for (index, raw) in text.lines().enumerate() {
+fn parse_nets(text: &str, nets: &mut BTreeSet<String>) {
+    for raw in text.lines() {
         let line = raw.trim();
         let parts = line.split_whitespace().collect::<Vec<_>>();
         if parts.first().is_some_and(|value| *value == "NET") && parts.len() >= 2 {
             let net = parts[1].trim_matches('\'').to_owned();
             nets.insert(net.clone());
-            current_net = Some(net);
-        }
-        if line.to_ascii_uppercase().contains("TEST") {
-            let x = named_number(line, 'X');
-            let y = named_number(line, 'Y');
-            if let (Some(x), Some(y)) = (x, y) {
-                test_points.push(TestPoint {
-                    id: format!("odb-net-tp-{index}"),
-                    center: PointNm {
-                        x: (x * 1_000_000.0) as i64,
-                        y: (y * 1_000_000.0) as i64,
-                    },
-                    radius_nm: 150_000,
-                    net_name: current_net.clone(),
-                    component_ref: None,
-                    confidence: CoverageLevel::Explicit,
-                    source: source.display().to_string(),
-                });
-            }
         }
     }
+}
+
+fn parse_eda_data(text: &str) -> EdaData {
+    let mut data = EdaData::default();
+    let mut units = OdbUnits::Inch;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.eq_ignore_ascii_case("UNITS=MM") || line.eq_ignore_ascii_case("U MM") {
+            units = OdbUnits::Millimeter;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("UNITS=INCH") || line.eq_ignore_ascii_case("U INCH") {
+            units = OdbUnits::Inch;
+            continue;
+        }
+        let record = line.split_once(';').map_or(line, |(record, _)| record);
+        let parts = record.split_whitespace().collect::<Vec<_>>();
+        match parts.first().copied() {
+            Some("NET") if parts.len() >= 2 => {
+                data.net_names.push(parts[1].trim_matches('\'').to_owned());
+            }
+            Some("PKG") if parts.len() >= 7 => {
+                data.package_bounds.push(BoundsNm {
+                    min_x: number_nm(parts[3], units.coordinate_scale()),
+                    min_y: number_nm(parts[4], units.coordinate_scale()),
+                    max_x: number_nm(parts[5], units.coordinate_scale()),
+                    max_y: number_nm(parts[6], units.coordinate_scale()),
+                });
+            }
+            _ => {}
+        }
+    }
+    data
+}
+
+fn transform_package_bounds(
+    bounds: BoundsNm,
+    origin: PointNm,
+    rotation_deg: f64,
+    mirrored: bool,
+) -> BoundsNm {
+    let angle = rotation_deg.to_radians();
+    let cosine = angle.cos();
+    let sine = angle.sin();
+    let mut transformed = BoundsNm::empty();
+    for point in [
+        PointNm {
+            x: bounds.min_x,
+            y: bounds.min_y,
+        },
+        PointNm {
+            x: bounds.max_x,
+            y: bounds.min_y,
+        },
+        PointNm {
+            x: bounds.max_x,
+            y: bounds.max_y,
+        },
+        PointNm {
+            x: bounds.min_x,
+            y: bounds.max_y,
+        },
+    ] {
+        let local_x = if mirrored { -point.x } else { point.x } as f64;
+        let local_y = point.y as f64;
+        transformed.include_point(PointNm {
+            x: origin.x + (local_x * cosine - local_y * sine).round() as i64,
+            y: origin.y + (local_x * sine + local_y * cosine).round() as i64,
+        });
+    }
+    transformed.normalized()
+}
+
+fn reconcile_test_point_geometry(
+    layers: &[Layer],
+    test_points: &mut Vec<TestPoint>,
+    diagnostics: &mut Vec<crate::model::Diagnostic>,
+) {
+    const MATCH_TOLERANCE_NM: i64 = 25_000;
+    let mut unresolved = 0_usize;
+    let mut ambiguous = 0_usize;
+    for point in test_points
+        .iter_mut()
+        .filter(|point| point.radius_nm.is_none())
+    {
+        let expected_side = point.layer_id.as_deref().and_then(|id| {
+            layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| layer.side)
+        });
+        let mut candidates = Vec::new();
+        for layer in layers {
+            let correct_side = match expected_side {
+                Some(Side::Top | Side::Bottom) => expected_side == Some(layer.side),
+                _ => matches!(layer.side, Side::Top | Side::Bottom),
+            };
+            if !is_conductive_function(&layer.function) || !correct_side {
+                continue;
+            }
+            for feature in &layer.features {
+                let FeatureGeometry::Pad {
+                    center,
+                    size_x_nm,
+                    size_y_nm,
+                    ..
+                } = feature.geometry
+                else {
+                    continue;
+                };
+                if feature.polarity == Polarity::Clear
+                    || feature.attributes.contains_key(UNRESOLVED_SYMBOL_GEOMETRY)
+                    || center.distance_sq(point.center) > i128::from(MATCH_TOLERANCE_NM).pow(2)
+                {
+                    continue;
+                }
+                let identity_score = i32::from(
+                    point.component_ref.is_some() && point.component_ref == feature.component_ref,
+                ) * 4
+                    + i32::from(point.net_name.is_some() && point.net_name == feature.net_name) * 2;
+                candidates.push((
+                    identity_score,
+                    center.distance_sq(point.center),
+                    size_x_nm.min(size_y_nm).max(2) / 2,
+                    layer.id.as_str(),
+                    feature.source.as_str(),
+                ));
+            }
+        }
+        candidates.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.3.cmp(right.3))
+        });
+        let Some(best) = candidates.first().copied() else {
+            unresolved += 1;
+            continue;
+        };
+        let conflicting = candidates.iter().skip(1).any(|candidate| {
+            candidate.0 == best.0 && candidate.1 == best.1 && candidate.2 != best.2
+        });
+        if conflicting {
+            ambiguous += 1;
+            continue;
+        }
+        point.radius_nm = Some(best.2);
+        point.layer_id = Some(best.3.to_owned());
+        point.geometry_source = Some(best.4.to_owned());
+    }
+    deduplicate_test_points(test_points);
+    if unresolved > 0 {
+        diagnostics.push(diagnostic(
+            "ODB_TEST_POINT_GEOMETRY_UNRESOLVED",
+            Severity::Warning,
+            format!(
+                "{unresolved} inferred test-point identities could not be bound to a unique external-copper pad; diameter and edge-clearance checks require review"
+            ),
+            None,
+        ));
+    }
+    if ambiguous > 0 {
+        diagnostics.push(diagnostic(
+            "ODB_TEST_POINT_GEOMETRY_AMBIGUOUS",
+            Severity::Warning,
+            format!(
+                "{ambiguous} inferred test-point identities matched conflicting external-copper pad sizes; no diameter was selected"
+            ),
+            None,
+        ));
+    }
+}
+
+fn deduplicate_test_points(points: &mut Vec<TestPoint>) {
+    points.sort_by_key(|point| match point.confidence {
+        CoverageLevel::Explicit => 0,
+        CoverageLevel::Supplemented => 1,
+        CoverageLevel::Inferred => 2,
+        CoverageLevel::Missing => 3,
+    });
+    let mut deduplicated = Vec::<TestPoint>::new();
+    for point in points.drain(..) {
+        let duplicate = deduplicated.iter_mut().find(|known| {
+            known.center.distance_sq(point.center) <= 25_000_i128.pow(2)
+                && (known.component_ref == point.component_ref
+                    || known.net_name == point.net_name
+                    || known.component_ref.is_none()
+                    || point.component_ref.is_none())
+        });
+        if let Some(known) = duplicate {
+            if known.net_name.is_none() {
+                known.net_name = point.net_name;
+            }
+            if known.component_ref.is_none() {
+                known.component_ref = point.component_ref;
+            }
+            if known.radius_nm.is_none() {
+                known.radius_nm = point.radius_nm;
+                known.layer_id = point.layer_id;
+                known.geometry_source = point.geometry_source;
+            }
+        } else {
+            deduplicated.push(point);
+        }
+    }
+    *points = deduplicated;
 }
 
 fn odb_layer_name(relative: &str) -> Option<String> {
@@ -804,6 +1086,50 @@ fn infer_odb_function(name: &str) -> String {
     .into()
 }
 
+fn odb_layer_side(name: &str, layer: Option<&MatrixLayer>, matrix: &[MatrixLayer]) -> Side {
+    let named = side_from_name(name);
+    if named != Side::Na {
+        return named;
+    }
+    let Some(layer) = layer else {
+        return Side::Na;
+    };
+    let function = normalize_odb_function(&layer.layer_type, &layer.add_type);
+    if function.contains("PROFILE") || function.contains("DRILL") || function.contains("ROUT") {
+        return Side::Na;
+    }
+    let mut conductive_rows = matrix
+        .iter()
+        .filter(|candidate| {
+            candidate.context.eq_ignore_ascii_case("BOARD")
+                && is_conductive_function(&normalize_odb_function(
+                    &candidate.layer_type,
+                    &candidate.add_type,
+                ))
+        })
+        .map(|candidate| candidate.row)
+        .filter(|row| *row > 0)
+        .collect::<Vec<_>>();
+    conductive_rows.sort_unstable();
+    let (Some(first), Some(last)) = (conductive_rows.first(), conductive_rows.last()) else {
+        return Side::Na;
+    };
+    if layer.row <= *first {
+        Side::Top
+    } else if layer.row >= *last {
+        Side::Bottom
+    } else {
+        Side::Inner
+    }
+}
+
+fn is_conductive_function(function: &str) -> bool {
+    let upper = function.to_ascii_uppercase();
+    ["SIGNAL", "POWER_GROUND", "MIXED", "COPPER"]
+        .iter()
+        .any(|kind| upper.contains(kind))
+}
+
 fn side_from_name(name: &str) -> Side {
     let lower = name.to_ascii_lowercase();
     if lower.contains("top") || lower.contains("+_top") {
@@ -811,11 +1137,11 @@ fn side_from_name(name: &str) -> Side {
     } else if lower.contains("bottom") || lower.contains("+_bot") {
         Side::Bottom
     } else {
-        Side::Inner
+        Side::Na
     }
 }
 
-fn symbol_dimensions(name: &str, units: OdbUnits) -> (i64, i64) {
+fn symbol_dimensions(name: &str, units: OdbUnits) -> Option<(i64, i64)> {
     let lower = name.to_ascii_lowercase();
     let recognized = [
         "r",
@@ -838,7 +1164,7 @@ fn symbol_dimensions(name: &str, units: OdbUnits) -> (i64, i64) {
     .iter()
     .any(|prefix| lower.starts_with(prefix));
     if !recognized {
-        return (100_000, 100_000);
+        return None;
     }
     let numbers = lower
         .split(|value: char| !value.is_ascii_digit() && value != '.')
@@ -851,12 +1177,12 @@ fn symbol_dimensions(name: &str, units: OdbUnits) -> (i64, i64) {
     } else {
         units
     };
-    let x = numbers.first().copied().unwrap_or(100.0);
+    let x = numbers.first().copied()?;
     let y = numbers.get(1).copied().unwrap_or(x);
-    (
+    Some((
         (x * symbol_units.symbol_scale()).round() as i64,
         (y * symbol_units.symbol_scale()).round() as i64,
-    )
+    ))
 }
 
 fn number_nm(value: &str, scale: f64) -> i64 {
@@ -901,6 +1227,14 @@ fn test_point_coverage(points: &[TestPoint]) -> CoverageLevel {
     }
 }
 
+fn component_coverage(components: &[Component]) -> CoverageLevel {
+    components
+        .iter()
+        .map(|component| component.confidence)
+        .reduce(CoverageLevel::weakest)
+        .unwrap_or(CoverageLevel::Missing)
+}
+
 fn sanitize_id(value: &str) -> String {
     value
         .chars()
@@ -912,17 +1246,6 @@ fn sanitize_id(value: &str) -> String {
             }
         })
         .collect()
-}
-
-fn named_number(value: &str, marker: char) -> Option<f64> {
-    let start = value.find(marker)? + 1;
-    let rest = &value[start..];
-    let end = rest
-        .find(|character: char| {
-            !character.is_ascii_digit() && character != '.' && character != '-' && character != '+'
-        })
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
 }
 
 #[cfg(test)]
@@ -962,6 +1285,22 @@ mod tests {
         assert_eq!(bounds.max_x - bounds.min_x, 120_000);
         assert_eq!(parsed.test_points.len(), 1);
         assert_eq!(parsed.test_points[0].net_name.as_deref(), Some("VDD"));
+    }
+
+    #[test]
+    fn unresolved_custom_test_point_symbols_do_not_create_fake_diameters() {
+        let text = "UNITS=MM\n$0 custom_tp_land\n@0 .test_point\nP 1 2 0 P 0;0";
+        let mut diagnostics = Vec::new();
+        let parsed = parse_feature_file(
+            text,
+            Path::new("features"),
+            "top",
+            "SIGNAL",
+            &mut diagnostics,
+        );
+        assert_eq!(parsed.test_points.len(), 1);
+        assert_eq!(parsed.test_points[0].radius_nm, None);
+        assert_eq!(parsed.test_points[0].geometry_source, None);
     }
 
     #[test]

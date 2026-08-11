@@ -78,7 +78,7 @@ pub fn parse_ipc356(text: &str, source: &Path) -> Ipc356Data {
             data.test_points.push(TestPoint {
                 id: format!("ipc356:{}", index + 1),
                 center: PointNm { x, y },
-                radius_nm: 150_000,
+                radius_nm: None,
                 net_name: (!net_name.is_empty()).then_some(net_name),
                 component_ref: (!component_ref.is_empty()).then_some(component_ref.into()),
                 confidence: if line.starts_with("367") {
@@ -86,7 +86,9 @@ pub fn parse_ipc356(text: &str, source: &Path) -> Ipc356Data {
                 } else {
                     CoverageLevel::Inferred
                 },
+                layer_id: None,
                 source: source.display().to_string(),
+                geometry_source: None,
             });
         }
     }

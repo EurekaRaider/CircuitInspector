@@ -31,7 +31,11 @@ export function isolatedLayerIds(layers: LayerSummary[], layerId: string) {
   return [...new Set([...profiles, layerId])];
 }
 
-export function layerIdsForTestPoint(layers: LayerSummary[], point: Pick<TestPointCandidate, "source">) {
+export function layerIdsForTestPoint(layers: LayerSummary[], point: Pick<TestPointCandidate, "source" | "layer_id">) {
+  const declared = point.layer_id && layers.some((layer) => layer.id === point.layer_id)
+    ? [point.layer_id]
+    : [];
+  if (declared.length) return layerIdsWithSurfaceContext(layers, declared);
   const source = point.source.replaceAll("\\", "/").toLocaleLowerCase("en-US");
   const segments = source.split("/");
   const matches = layers.filter((layer) => {
@@ -45,8 +49,8 @@ export function layerIdsForTestPoint(layers: LayerSummary[], point: Pick<TestPoi
   return layerIdsWithSurfaceContext(layers, matches.map((layer) => layer.id));
 }
 
-export function testPointFocusZoom(radiusNm: number) {
-  const radiusMm = Math.max(0.01, radiusNm / 1_000_000);
+export function testPointFocusZoom(radiusNm: number | null) {
+  const radiusMm = Math.max(0.01, (radiusNm ?? 250_000) / 1_000_000);
   return Math.round(Math.min(1200, Math.max(160, 36 / radiusMm)));
 }
 

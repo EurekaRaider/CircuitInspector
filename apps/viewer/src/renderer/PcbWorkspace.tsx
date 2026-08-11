@@ -578,6 +578,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                 <div className="truncate text-[11px] font-medium text-[#e7e0d4]">{locale === "zh-CN" ? "测试点定位" : "Test-point focus"} · {activeTestPoint.component_ref ?? activeTestPoint.id}</div>
                 <div className="mt-1 truncate font-mono text-[9px] text-[#878681]">{activeTestPoint.net_name ?? "NET -"} · X {(activeTestPoint.center.x / 1_000_000).toFixed(3)} mm · Y {(activeTestPoint.center.y / 1_000_000).toFixed(3)} mm</div>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[9px] text-[#d1ad6f]">
+                  <span>{locale === "zh-CN" ? "测试点直径" : "Test-point diameter"} {formatNm(activeTestPoint.radius_nm == null ? null : activeTestPoint.radius_nm * 2)}</span>
                   <span>{locale === "zh-CN" ? "最近板边净距" : "Nearest board-edge clearance"} {formatNm(activeTestPoint.review_context?.board_edge.distance_nm)}</span>
                   <span>{locale === "zh-CN" ? "最近测试点净距" : "Nearest test-point clearance"} {formatNm(activeTestPoint.review_context?.nearest_test_point?.distance_nm)}{activeTestPoint.review_context?.nearest_test_point ? ` · ${activeTestPoint.review_context.nearest_test_point.id}` : ""}</span>
                 </div>
@@ -832,6 +833,7 @@ export function TestPointReviewEvidence({ point, locale }: { point: TestPointCan
   const chinese = locale === "zh-CN";
   const context = point.review_context;
   return <div className="mt-2 rounded-md border border-white/[0.055] bg-black/10 px-2 py-1.5 font-mono text-[8px] leading-4 text-[#8b8c88]">
+    <div className="flex items-center justify-between gap-2"><span>{chinese ? "测试点直径" : "DIAMETER"}</span><span className="text-[#d1ad6f]">{formatNm(point.radius_nm == null ? null : point.radius_nm * 2)}</span></div>
     <div className="flex items-center justify-between gap-2"><span>{chinese ? "最近板边净距" : "BOARD EDGE"}</span><span className="text-[#d1ad6f]">{formatNm(context?.board_edge.distance_nm)}</span></div>
     <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近测试点净距" : "NEAREST TEST POINT"}{context?.nearest_test_point ? ` · ${context.nearest_test_point.id}` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_test_point?.distance_nm)}</span></div>
     <div className="mt-0.5 text-[#626360]">{chinese ? "边缘到边缘；由导入几何计算" : "Edge-to-edge from imported geometry"}</div>
@@ -877,7 +879,7 @@ function compact(value: number): string {
   return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${(value / 1_000).toFixed(1)}K` : String(value);
 }
 
-function formatNm(value: number | undefined): string {
+function formatNm(value: number | null | undefined): string {
   return value == null ? "N/A" : `${(value / 1_000_000).toFixed(3)} mm`;
 }
 
