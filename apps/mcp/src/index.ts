@@ -256,7 +256,8 @@ server.registerTool(
       product: z.record(z.string(), z.unknown()),
       wib: z.record(z.string(), z.unknown()),
       connector_mappings: z.array(z.record(z.string(), z.unknown())),
-      net_aliases: z.array(z.record(z.string(), z.unknown()))
+      net_aliases: z.array(z.record(z.string(), z.unknown())),
+      case_sensitive: z.boolean()
     },
     annotations: { readOnlyHint: true, openWorldHint: false }
   },

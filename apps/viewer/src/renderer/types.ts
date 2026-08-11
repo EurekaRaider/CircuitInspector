@@ -59,6 +59,11 @@ export interface TestPointCandidate {
   component_ref: string | null;
   confidence: CoverageLevel;
   source: string;
+  review_context?: {
+    metric: "EDGE_TO_EDGE";
+    board_edge: { distance_nm: number; point: { x: number; y: number } };
+    nearest_test_point: { id: string; distance_nm: number; center: { x: number; y: number } } | null;
+  };
 }
 
 export interface RulePack {
@@ -163,6 +168,11 @@ export interface SchematicPagePayload {
 export interface WiringAnalysis {
   kind: "WIRING_COMPARISON";
   id: string;
+  product_pinout_id: string;
+  wib_pinout_id: string;
+  connector_mappings: ConnectorMapping[];
+  net_aliases: Array<{ product_net: string; wib_net: string }>;
+  case_sensitive?: boolean;
   verdict: Violation["verdict"];
   verification_mode: "DOCUMENT_BACKED";
   pass_count: number;
@@ -191,6 +201,7 @@ export interface WiringAnalysis {
   }>;
   report_uri: string;
   report_path: string;
+  diagnostics: Array<{ code: string; severity: "INFO" | "WARNING" | "ERROR"; message: string }>;
 }
 
 export interface SchematicPinout {

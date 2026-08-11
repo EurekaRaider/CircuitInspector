@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { reviewRoute } from "../src/renderer/pcb-review";
+import { TestPointReviewEvidence } from "../src/renderer/PcbWorkspace";
 import type { RuleDefinition, TestPointCandidate, Violation } from "../src/renderer/types";
 
 const baseViolation: Violation = {
@@ -44,5 +47,28 @@ describe("PCB REVIEW routing", () => {
 
   it("routes coordinate-free findings to missing-input guidance", () => {
     expect(reviewRoute(baseViolation, { ...baseRule, source: "COMPONENT", target: "BOARD_EDGE" }, [])).toBe("MISSING_SEMANTICS");
+  });
+
+  it("shows board-edge and nearest-test-point evidence for manual review", () => {
+    const point: TestPointCandidate = {
+      id: "tp-a",
+      center: { x: 1_000_000, y: 2_000_000 },
+      radius_nm: 100_000,
+      net_name: "SENSE",
+      component_ref: "TP1",
+      confidence: "INFERRED",
+      source: "fixture",
+      review_context: {
+        metric: "EDGE_TO_EDGE",
+        board_edge: { distance_nm: 900_000, point: { x: 0, y: 2_000_000 } },
+        nearest_test_point: { id: "tp-b", distance_nm: 1_250_000, center: { x: 2_450_000, y: 2_000_000 } }
+      }
+    };
+    const markup = renderToStaticMarkup(createElement(TestPointReviewEvidence, { point, locale: "zh-CN" }));
+    expect(markup).toContain("最近板边净距");
+    expect(markup).toContain("0.900 mm");
+    expect(markup).toContain("最近测试点净距 · tp-b");
+    expect(markup).toContain("1.250 mm");
+    expect(markup).toContain("边缘到边缘；由导入几何计算");
   });
 });

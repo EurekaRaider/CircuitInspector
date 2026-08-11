@@ -82,6 +82,14 @@ fn inferred_odb_test_points_can_be_confirmed_without_reexport() {
         .iter()
         .map(|point| point["id"].as_str().unwrap())
         .collect::<Vec<_>>();
+    for point in listed["test_points"].as_array().unwrap() {
+        assert_eq!(point["review_context"]["metric"], "EDGE_TO_EDGE");
+        assert!(point["review_context"]["board_edge"]["distance_nm"].is_i64());
+        assert!(point["review_context"]["board_edge"]["point"]["x"].is_i64());
+        let nearest = &point["review_context"]["nearest_test_point"];
+        assert!(nearest["distance_nm"].is_i64());
+        assert_ne!(nearest["id"], point["id"]);
+    }
     let reviewed = dispatch(
         "review_test_points",
         json!({
@@ -95,6 +103,10 @@ fn inferred_odb_test_points_can_be_confirmed_without_reexport() {
     )
     .unwrap();
     assert_eq!(reviewed["test_points"][0]["confidence"], "EXPLICIT");
+    assert_eq!(
+        reviewed["test_points"][0]["review_context"]["metric"],
+        "EDGE_TO_EDGE"
+    );
     assert_eq!(
         reviewed["summary"]["semantic_coverage"]["test_points"],
         "EXPLICIT"

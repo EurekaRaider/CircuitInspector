@@ -12,7 +12,7 @@ import { LOCALE_STORAGE_KEY, resolveLocale, type Locale } from "./i18n";
 import { PcbWorkspace } from "./PcbWorkspace";
 import { ResultsLibrary } from "./ResultsLibrary";
 import { RuleLibrary } from "./RuleLibrary";
-import type { AnyAnalysis, ArtifactCatalog, ArtifactKind, DocumentAnalysis } from "./types";
+import type { AnyAnalysis, ArtifactCatalog, ArtifactKind, DocumentAnalysis, WiringAnalysis } from "./types";
 import { WorkbenchHome } from "./WorkbenchHome";
 import { WibWorkspace } from "./WibWorkspace";
 
@@ -28,6 +28,7 @@ export function App() {
   const [initialDesignId, setInitialDesignId] = useState<string | null>(null);
   const [initialDraftId, setInitialDraftId] = useState<string | null>(null);
   const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis | null>(null);
+  const [wiringReview, setWiringReview] = useState<WiringAnalysis | null>(null);
   const [pcbSession, setPcbSession] = useState(0);
 
   const changeLocale = useCallback(() => setLocale((current) => current === "zh-CN" ? "en-US" : "zh-CN"), []);
@@ -94,10 +95,18 @@ export function App() {
   }), [openAnalysis]);
 
   function navigate(next: WorkspaceView) {
+    setWiringReview(null);
     if (next !== "RESULTS") setDocumentAnalysis(null);
     if (next !== "PCB") setDeepLinkUrl(null);
     if (next !== "WIB") setInitialDraftId(null);
     setView(next);
+  }
+
+  function reviewWiring(analysis: WiringAnalysis) {
+    setInitialDraftId(null);
+    setDocumentAnalysis(null);
+    setWiringReview(analysis);
+    setView("WIB");
   }
 
   const navItems = useMemo(() => [
@@ -160,6 +169,7 @@ export function App() {
             initialDesignId={initialDesignId}
             onCatalogChanged={() => void refreshCatalog()}
             onOpenRuleLibrary={() => navigate("RULES")}
+            onReviewWiring={reviewWiring}
           />
         </div>
         {view === "RULES" && <RuleLibrary locale={locale} onCatalogChanged={() => void refreshCatalog()} />}
@@ -168,6 +178,7 @@ export function App() {
             locale={locale}
             catalog={catalog}
             initialDraftId={initialDraftId}
+            initialWiringReview={wiringReview}
             onCatalogChanged={() => void refreshCatalog()}
             onOpenAnalysis={(id) => void openAnalysis(id)}
           />
@@ -179,6 +190,7 @@ export function App() {
             onLocaleChange={changeLocale}
             onOpenDesign={() => navigate("PCB")}
             onBack={() => setDocumentAnalysis(null)}
+            onReviewWiring={reviewWiring}
           />
         ) : (
           <ResultsLibrary locale={locale} catalog={catalog} busy={catalogBusy} onOpenAnalysis={(id) => void openAnalysis(id)} onRefresh={() => void refreshCatalog()} onDelete={(kind, id) => void deleteArtifact(kind, id)} />

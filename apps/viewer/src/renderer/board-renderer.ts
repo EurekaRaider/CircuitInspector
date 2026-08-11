@@ -151,6 +151,20 @@ export class BoardRenderer {
       addRing(write, x, y, locatorRadius, [0.98, 0.69, 0.27, 1]);
       addLine(write, x - locatorRadius * 1.45, y, x + locatorRadius * 1.45, y, 2.5 / this.#view.zoom, [0.98, 0.83, 0.45, 1]);
       addLine(write, x, y - locatorRadius * 1.45, x, y + locatorRadius * 1.45, 2.5 / this.#view.zoom, [0.98, 0.83, 0.45, 1]);
+      const boardEdge = testPoint.review_context?.board_edge.point;
+      if (boardEdge) {
+        const edgeX = boardEdge.x / 1_000_000;
+        const edgeY = boardEdge.y / 1_000_000;
+        addLine(write, x, y, edgeX, edgeY, 2 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
+        addRing(write, edgeX, edgeY, 5 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
+      }
+      const nearestPoint = testPoint.review_context?.nearest_test_point;
+      if (nearestPoint) {
+        const nearestX = nearestPoint.center.x / 1_000_000;
+        const nearestY = nearestPoint.center.y / 1_000_000;
+        addLine(write, x, y, nearestX, nearestY, 2 / this.#view.zoom, [0.56, 0.72, 0.42, 1]);
+        addRing(write, nearestX, nearestY, 7 / this.#view.zoom, [0.56, 0.72, 0.42, 1]);
+      }
     }
     if (measure) {
       addLine(write, measure[0], measure[1], measure[2], measure[3], 2 / this.#view.zoom, [0.42, 0.73, 0.75, 1]);

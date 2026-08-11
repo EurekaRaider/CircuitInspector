@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CheckCircleIcon, FileHtmlIcon, FolderOpenIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, ArrowRightIcon, CheckCircleIcon, FileHtmlIcon, FolderOpenIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { DocumentAnalysis, TestRecommendationAnalysis, WibQualificationAnalysis, WiringAnalysis } from "./types";
 import type { Locale } from "./i18n";
@@ -9,9 +9,10 @@ interface Props {
   onLocaleChange(): void;
   onOpenDesign(): void;
   onBack?(): void;
+  onReviewWiring?(analysis: WiringAnalysis): void;
 }
 
-export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpenDesign, onBack }: Props) {
+export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpenDesign, onBack, onReviewWiring }: Props) {
   const chinese = locale === "zh-CN";
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     analysis.kind === "WIRING_COMPARISON" ? analysis.violations[0]?.id ?? analysis.connections[0]?.id ?? null
@@ -40,7 +41,7 @@ export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpe
       </header>
 
       {analysis.kind === "WIRING_COMPARISON" ? (
-        <WiringContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} chinese={chinese} />
+        <WiringContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} {...(onReviewWiring ? { onReview: () => onReviewWiring(analysis) } : {})} chinese={chinese} />
       ) : analysis.kind === "MANUFACTURING_TEST_RECOMMENDATIONS" ? (
         <RecommendationContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} chinese={chinese} />
       ) : (
@@ -56,7 +57,7 @@ export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpe
   );
 }
 
-function WiringContent({ analysis, selectedId, onSelect, chinese }: { analysis: WiringAnalysis; selectedId: string | null; onSelect(id: string): void; chinese: boolean }) {
+function WiringContent({ analysis, selectedId, onSelect, onReview, chinese }: { analysis: WiringAnalysis; selectedId: string | null; onSelect(id: string): void; onReview?: () => void; chinese: boolean }) {
   const selectedFinding = analysis.violations.find((finding) => finding.id === selectedId);
   const selectedConnectionId = selectedFinding?.id.replace(/^finding-/, "") ?? selectedId;
   return (
@@ -87,12 +88,33 @@ function WiringContent({ analysis, selectedId, onSelect, chinese }: { analysis: 
         </div>
       </div>
 
-      <aside className="sidebar-surface min-h-0 overflow-y-auto border-l border-white/[0.07]">
+      <aside className="sidebar-surface flex min-h-0 flex-col overflow-hidden border-l border-white/[0.07]">
         <PanelHead title={chinese ? "接线问题" : "WIRING FINDINGS"} verdict={analysis.verdict} />
-        {analysis.violations.length ? analysis.violations.map((finding) => <FindingButton key={finding.id} id={finding.id} selected={selectedId === finding.id} verdict={finding.verdict} title={finding.title} message={finding.message} onSelect={onSelect} />) : <PassState chinese={chinese} />}
+        {analysis.verdict === "REVIEW" && <WiringReviewEntry ruleId={selectedFinding?.rule_id ?? analysis.violations[0]?.rule_id} chinese={chinese} {...(onReview ? { onReview } : {})} />}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {analysis.violations.length ? analysis.violations.map((finding) => <FindingButton key={finding.id} id={finding.id} selected={selectedId === finding.id} verdict={finding.verdict} title={finding.title} message={finding.message} onSelect={onSelect} />) : <PassState chinese={chinese} />}
+        </div>
       </aside>
     </section>
   );
+}
+
+function WiringReviewEntry({ ruleId, chinese, onReview }: { ruleId: string | undefined; chinese: boolean; onReview?: () => void }) {
+  const guidance = wiringReviewGuidance(ruleId, chinese);
+  return <div className="m-3 shrink-0 rounded-xl border border-[#c5a063]/25 bg-[#c5a063]/[0.055] p-3">
+    <div className="text-[11px] font-semibold text-[#d9b575]">{guidance.title}</div>
+    <p className="mt-1.5 text-[10px] leading-4 text-[#8f8d87]">{guidance.body}</p>
+    <button data-testid="wiring-review-entry" className="secondary-button mt-3 h-8 w-full px-2 text-[10px]" disabled={!onReview} onClick={onReview}>{guidance.action}<ArrowRightIcon size={13} /></button>
+  </div>;
+}
+
+export function wiringReviewGuidance(ruleId: string | undefined, chinese: boolean) {
+  if (ruleId === "NET_NAME_REVIEW_ONLY") return chinese
+    ? { title: "补齐精确映射后重新比较", body: "当前只比较了两侧 NET NAME 清单，不能证明连接器/引脚一一对应，也不能检测交换。进入 WIB 工作流第 3 步补充映射；若路径仍为草稿，再回第 1/2 步确认 PDF 路径。", action: "进入映射与路径复核" }
+    : { title: "Add exact mappings and compare again", body: "Only NET NAME inventories were compared. Connector/pin identity and swaps remain unproven. Add mappings in WIB workflow step 3, and confirm PDF paths in steps 1/2 when they remain draft.", action: "Review mappings and paths" };
+  return chinese
+    ? { title: "回到证据源关闭 REVIEW", body: "进入 WIB 工作流核对产品与 WIB 的原理图路径、连接器/引脚映射和 NET 别名；只有精确且已确认的对应关系才能重新裁决。", action: "进入接线复核" }
+    : { title: "Return to the source evidence", body: "Review product/WIB schematic paths, connector and pin mappings, and NET aliases in the WIB workflow. Only exact confirmed correspondence can be adjudicated again.", action: "Open wiring review" };
 }
 
 function RecommendationContent({ analysis, selectedId, onSelect, chinese }: { analysis: TestRecommendationAnalysis; selectedId: string | null; onSelect(id: string): void; chinese: boolean }) {

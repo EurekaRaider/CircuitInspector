@@ -126,6 +126,7 @@ export interface WiringAnalysis {
   wib: PinoutDocument;
   connector_mappings: ConnectorMapping[];
   net_aliases: NetAlias[];
+  case_sensitive?: boolean;
   verdict: WiringVerdict;
   verification_mode: "DOCUMENT_BACKED";
   pass_count: number;
@@ -418,6 +419,7 @@ export async function compareFixtureWiring(
     wib,
     connector_mappings: mappings,
     net_aliases: aliases,
+    case_sensitive: options.caseSensitive ?? false,
     verdict,
     verification_mode: "DOCUMENT_BACKED",
     pass_count: passCount,

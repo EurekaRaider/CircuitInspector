@@ -247,8 +247,8 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
 
   const pageEvidenceBoxes = selectedPath?.evidence.filter((item) => item.page === pageNumber && item.bbox) ?? [];
 
-  return <div className="mt-5 overflow-hidden rounded-xl border border-white/[0.08] bg-[#111416]">
-    <div className="flex min-h-[36rem] max-h-[72vh]">
+  return <div className="mt-5 min-w-0 overflow-hidden rounded-xl border border-white/[0.08] bg-[#111416]">
+    <div data-testid="schematic-review-layout" className="isolate grid min-h-[36rem] max-h-[72vh] min-w-0 grid-cols-[132px_minmax(0,1fr)_minmax(280px,330px)]">
       <aside className="w-[132px] shrink-0 overflow-y-auto border-r border-white/[0.07] bg-[#15181a] p-2" aria-label={chinese ? "原理图页面" : "Schematic pages"}>
         <div className="px-1 pb-2 font-mono text-[8px] uppercase tracking-[0.12em] text-[#6f726e]">{chinese ? "页面" : "Pages"}</div>
         {document.pages.map((page) => <button key={page.number} className={`mb-2 block w-full rounded-lg border p-1 text-left ${pageNumber === page.number ? "border-[#c5a063]/55 bg-[#c5a063]/[0.08]" : "border-white/[0.07] bg-[#101214]"}`} onClick={() => setPageNumber(page.number)}>
@@ -258,8 +258,9 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
         {!document.pages.length && <div className="rounded-lg border border-dashed border-white/[0.09] px-2 py-8 text-center text-[9px] leading-4 text-[#6d706c]">{chinese ? "结构化映射没有 PDF 页面" : "Structured mapping has no PDF pages"}</div>}
       </aside>
 
-      <main className="grid min-w-0 flex-1 grid-rows-[44px_minmax(0,1fr)]">
-        <div className="flex items-center gap-1 border-b border-white/[0.07] bg-[#171a1c] px-2">
+      <main className="relative z-0 grid min-w-0 overflow-hidden grid-rows-[44px_minmax(0,1fr)]">
+        <div data-testid="schematic-review-toolbar" className="overflow-x-auto border-b border-white/[0.07] bg-[#171a1c]">
+          <div className="flex min-w-max items-center gap-1 px-2">
           <button className="icon-button !size-8" aria-label={chinese ? "缩小" : "Zoom out"} onClick={() => zoomAt(0.82)}><MinusIcon size={13} /></button>
           <button className="icon-button !size-8" aria-label={chinese ? "放大" : "Zoom in"} onClick={() => zoomAt(1.22)}><PlusIcon size={13} /></button>
           <span className="w-12 text-center font-mono text-[9px] text-[#a3a49f]">{scaleLabel}%</span>
@@ -269,7 +270,8 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
           <button className="secondary-button !h-8 !px-2 text-[9px]" data-active={mode === "PAN"} onClick={() => { setMode("PAN"); setWireStart(null); }}><CursorClickIcon size={13} />{chinese ? "拖拽" : "Pan"}</button>
           <button className="secondary-button !h-8 !px-2 text-[9px]" data-active={mode === "ADD_WIRE"} disabled={!operator.trim()} onClick={() => { setMode("ADD_WIRE"); setWireStart(null); }}><PathIcon size={13} />{wireStart ? (chinese ? "选择终点" : "Choose end") : (chinese ? "增添导线" : "Add wire")}</button>
           <button className="secondary-button !h-8 !px-2 text-[9px]" data-active={mode === "ADD_JUNCTION"} disabled={!operator.trim()} onClick={() => setMode("ADD_JUNCTION")}><PlusIcon size={13} />{chinese ? "连接点" : "Junction"}</button>
-          <div className="ml-auto flex gap-1">{(Object.keys(overlays) as OverlayKey[]).map((key) => <button key={key} className={`rounded px-1.5 py-1 font-mono text-[8px] uppercase ${overlays[key] ? "bg-[#c5a063]/15 text-[#d0ad73]" : "text-[#626562]"}`} onClick={() => setOverlays((current) => ({ ...current, [key]: !current[key] }))}>{key}</button>)}</div>
+            <div className="ml-auto flex gap-1">{(Object.keys(overlays) as OverlayKey[]).map((key) => <button key={key} className={`rounded px-1.5 py-1 font-mono text-[8px] uppercase ${overlays[key] ? "bg-[#c5a063]/15 text-[#d0ad73]" : "text-[#626562]"}`} onClick={() => setOverlays((current) => ({ ...current, [key]: !current[key] }))}>{key}</button>)}</div>
+          </div>
         </div>
         <div ref={viewportRef} className={`relative min-h-0 touch-none overflow-hidden bg-[#0d1011] ${mode === "PAN" ? "cursor-grab active:cursor-grabbing" : "cursor-crosshair"}`} onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
           {pagePayload && pageUrl ? <div ref={sheetRef} className="absolute left-0 top-0 origin-top-left will-change-transform" style={{ width: pagePayload.page.width, height: pagePayload.page.height }}>
@@ -287,7 +289,7 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
         </div>
       </main>
 
-      <aside className="w-[330px] shrink-0 overflow-y-auto border-l border-white/[0.07] bg-[#15181a] p-3">
+      <aside data-testid="schematic-review-panel" className="relative z-10 min-w-0 overflow-y-auto border-l border-white/[0.07] bg-[#15181a] p-3">
         <label className="block"><span className="form-label">{chinese ? "操作人（用于校正审计）" : "Operator for correction audit"}</span><input className="workbench-input" value={operator} onChange={(event) => onOperator(event.target.value)} placeholder={chinese ? "姓名或工号" : "Name or employee ID"} /></label>
         {document.diagnostics.length > 0 && <div className="mt-3 space-y-1">{document.diagnostics.slice(0, 5).map((item, index) => <div key={`${item.code}-${index}`} className="rounded-lg border border-[#9b7a45]/25 bg-[#2b2519]/70 px-2 py-1.5 text-[8px] leading-4 text-[#c9a96f]"><b>{item.code}</b> · {item.message}</div>)}</div>}
         <section className="mt-4 border-t border-white/[0.07] pt-3"><div className="flex items-center gap-2 text-[10px] font-semibold text-[#d1cfc9]"><TreeStructureIcon size={14} />{chinese ? "接口候选" : "Interface candidates"}</div>

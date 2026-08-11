@@ -43,11 +43,12 @@ interface Props {
   locale: Locale;
   catalog: ArtifactCatalog;
   initialDraftId: string | null;
+  initialWiringReview: WiringAnalysis | null;
   onCatalogChanged(): void;
   onOpenAnalysis(id: string): void;
 }
 
-export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged, onOpenAnalysis }: Props) {
+export function WibWorkspace({ locale, catalog, initialDraftId, initialWiringReview, onCatalogChanged, onOpenAnalysis }: Props) {
   const chinese = locale === "zh-CN";
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
   const [draftId, setDraftId] = useState(() => `wib-draft-${Date.now().toString(36)}`);
@@ -130,6 +131,27 @@ export function WibWorkspace({ locale, catalog, initialDraftId, onCatalogChanged
       .catch((cause) => setError(message(cause)))
       .finally(() => setBusy(false));
   }, [initialDraftId]);
+
+  useEffect(() => {
+    if (!initialWiringReview) return;
+    setBusy(true);
+    setError("");
+    Promise.all([
+      window.circuitInspector.readSchematic(initialWiringReview.product_pinout_id),
+      window.circuitInspector.readSchematic(initialWiringReview.wib_pinout_id)
+    ])
+      .then(([loadedProduct, loadedWib]) => {
+        applySchematic("PRODUCT", loadedProduct);
+        applySchematic("WIB", loadedWib);
+        setMappingRows(flattenMappings(initialWiringReview.connector_mappings));
+        setAliases(initialWiringReview.net_aliases);
+        setCaseSensitive(initialWiringReview.case_sensitive ?? false);
+        setWiring(initialWiringReview);
+        setStep(3);
+      })
+      .catch((cause) => setError(message(cause)))
+      .finally(() => setBusy(false));
+  }, [initialWiringReview?.id]);
 
   function applySchematic(role: "PRODUCT" | "WIB", pinout: SchematicDocument) {
     const pins = pinout.pins.map(({ connector, pin, net_name }) => ({ connector, pin, net_name }));

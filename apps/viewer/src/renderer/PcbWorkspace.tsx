@@ -43,9 +43,10 @@ interface Props {
   initialDesignId?: string | null;
   onCatalogChanged?(): void;
   onOpenRuleLibrary?(): void;
+  onReviewWiring?(analysis: Extract<DocumentAnalysis, { kind: "WIRING_COMPARISON" }>): void;
 }
 
-export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesignId, onCatalogChanged, onOpenRuleLibrary }: Props) {
+export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesignId, onCatalogChanged, onOpenRuleLibrary, onReviewWiring }: Props) {
   const canvasRef = useRef<BoardCanvasHandle>(null);
   const tileRequest = useRef(0);
   const lastTileRequestKey = useRef("");
@@ -413,6 +414,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       locale={locale}
       onLocaleChange={onLocaleChange}
       onOpenDesign={() => void chooseDesign()}
+      {...(onReviewWiring ? { onReviewWiring } : {})}
     />;
   }
 
@@ -528,11 +530,12 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                 <div ref={testPointReviewRef} className="mt-4 scroll-mt-4 border-t border-white/[0.065] pt-3">
                   <div className="mb-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.12em] text-[#6e6f6c]"><span>{locale === "zh-CN" ? "测试点复核" : "Test-point review"}</span><span>{testPoints.length}</span></div>
                   <input className="workbench-input mb-2 h-8 w-full text-[10px]" value={testPointReviewer} onChange={(event) => setTestPointReviewer(event.target.value)} placeholder={locale === "zh-CN" ? "复核人" : "Reviewer"} />
-                  <div className="max-h-48 space-y-1 overflow-y-auto">
+                  <div className="max-h-64 space-y-1 overflow-y-auto">
                     {testPoints.filter((point) => point.confidence === "INFERRED").map((point) => (
                       <div key={point.id} className={`rounded-lg border px-2 py-2 text-[10px] text-[#9b9c98] ${activeTestPoint?.id === point.id ? "border-[#d2b173]/55 bg-[#d2b173]/[0.07]" : "border-white/[0.06]"}`}>
                         <button className="block w-full truncate text-left font-mono text-[#d2b173]" onClick={() => focusTestPoint(point)}>{point.component_ref ?? point.id}</button>
                         <div className="mt-1 truncate">{point.net_name ?? "NET -"}</div>
+                        <TestPointReviewEvidence point={point} locale={locale} />
                         <div className="mt-2 grid grid-cols-2 gap-1"><button className="secondary-button h-7 px-1 text-[9px]" onClick={() => void reviewTestPoints([point.id])}>{locale === "zh-CN" ? "确认" : "Confirm"}</button><button className="secondary-button h-7 px-1 text-[9px]" onClick={() => void reviewTestPoints([], [point.id])}>{locale === "zh-CN" ? "排除" : "Reject"}</button></div>
                       </div>
                     ))}
@@ -569,6 +572,10 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
               <div className="min-w-0">
                 <div className="truncate text-[11px] font-medium text-[#e7e0d4]">{locale === "zh-CN" ? "测试点定位" : "Test-point focus"} · {activeTestPoint.component_ref ?? activeTestPoint.id}</div>
                 <div className="mt-1 truncate font-mono text-[9px] text-[#878681]">{activeTestPoint.net_name ?? "NET -"} · X {(activeTestPoint.center.x / 1_000_000).toFixed(3)} mm · Y {(activeTestPoint.center.y / 1_000_000).toFixed(3)} mm</div>
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[9px] text-[#d1ad6f]">
+                  <span>{locale === "zh-CN" ? "最近板边净距" : "Nearest board-edge clearance"} {formatNm(activeTestPoint.review_context?.board_edge.distance_nm)}</span>
+                  <span>{locale === "zh-CN" ? "最近测试点净距" : "Nearest test-point clearance"} {formatNm(activeTestPoint.review_context?.nearest_test_point?.distance_nm)}{activeTestPoint.review_context?.nearest_test_point ? ` · ${activeTestPoint.review_context.nearest_test_point.id}` : ""}</span>
+                </div>
               </div>
               <button className="ml-2 rounded-md p-1 text-[#8c8b86] transition-colors hover:bg-white/5 hover:text-[#e7e0d4]" aria-label={locale === "zh-CN" ? "退出测试点定位" : "Exit test-point focus"} onClick={() => setActiveTestPoint(null)}><XIcon size={15} /></button>
             </div>
@@ -814,6 +821,16 @@ function ReviewGuidance({ route, rule, locale, onReviewTestPoints, onOpenRuleLib
       </div>
     </div>
   );
+}
+
+export function TestPointReviewEvidence({ point, locale }: { point: TestPointCandidate; locale: Locale }) {
+  const chinese = locale === "zh-CN";
+  const context = point.review_context;
+  return <div className="mt-2 rounded-md border border-white/[0.055] bg-black/10 px-2 py-1.5 font-mono text-[8px] leading-4 text-[#8b8c88]">
+    <div className="flex items-center justify-between gap-2"><span>{chinese ? "最近板边净距" : "BOARD EDGE"}</span><span className="text-[#d1ad6f]">{formatNm(context?.board_edge.distance_nm)}</span></div>
+    <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近测试点净距" : "NEAREST TEST POINT"}{context?.nearest_test_point ? ` · ${context.nearest_test_point.id}` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_test_point?.distance_nm)}</span></div>
+    <div className="mt-0.5 text-[#626360]">{chinese ? "边缘到边缘；由导入几何计算" : "Edge-to-edge from imported geometry"}</div>
+  </div>;
 }
 
 function PanelTitle({ title, caption }: { title: string; caption: string }) {

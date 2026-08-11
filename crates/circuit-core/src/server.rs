@@ -2,7 +2,9 @@ use crate::analyze::analyze_design;
 use crate::archive::hash_input;
 use crate::cache::CacheStore;
 use crate::evidence::{render_evidence, write_html_report};
-use crate::model::{BoundsNm, CoverageLevel, DesignSummary, Severity, TestPoint, Verdict};
+use crate::model::{
+    BoundsNm, CoverageLevel, Design, DesignSummary, PointNm, Severity, TestPoint, Verdict,
+};
 use crate::parsers::import_design;
 use crate::rules::{RuleApproval, RuleDefinition, RulePack, RulePackStatus, RuleReviewItem};
 use crate::tile::write_tile;
@@ -355,7 +357,124 @@ fn pick_request(params: Value) -> CoreResult<Value> {
 fn list_test_points_request(params: Value) -> CoreResult<Value> {
     let (cache, design_id) = design_cache_params(params)?;
     let design = cache.load_design(&design_id)?;
-    Ok(json!({ "test_points": design.test_points }))
+    Ok(json!({ "test_points": test_points_with_review_context(&design) }))
+}
+
+#[derive(Serialize)]
+struct TestPointReviewCandidate<'a> {
+    #[serde(flatten)]
+    point: &'a TestPoint,
+    review_context: TestPointReviewContext<'a>,
+}
+
+#[derive(Serialize)]
+struct TestPointReviewContext<'a> {
+    metric: &'static str,
+    board_edge: DistanceEvidence,
+    nearest_test_point: Option<NearestTestPoint<'a>>,
+}
+
+#[derive(Serialize)]
+struct DistanceEvidence {
+    distance_nm: i64,
+    point: PointNm,
+}
+
+#[derive(Serialize)]
+struct NearestTestPoint<'a> {
+    id: &'a str,
+    distance_nm: i64,
+    center: PointNm,
+}
+
+fn test_points_with_review_context(design: &Design) -> Vec<TestPointReviewCandidate<'_>> {
+    design
+        .test_points
+        .iter()
+        .map(|point| {
+            let nearest_test_point = design
+                .test_points
+                .iter()
+                .filter(|other| other.id != point.id)
+                .map(|other| {
+                    let distance_nm = ((point.center.distance_sq(other.center) as f64)
+                        .sqrt()
+                        .round() as i64)
+                        .saturating_sub(point.radius_nm)
+                        .saturating_sub(other.radius_nm)
+                        .max(0);
+                    (other, distance_nm)
+                })
+                .min_by(|(left, left_distance), (right, right_distance)| {
+                    left_distance
+                        .cmp(right_distance)
+                        .then_with(|| left.id.cmp(&right.id))
+                })
+                .map(|(other, distance_nm)| NearestTestPoint {
+                    id: &other.id,
+                    distance_nm,
+                    center: other.center,
+                });
+            TestPointReviewCandidate {
+                point,
+                review_context: TestPointReviewContext {
+                    metric: "EDGE_TO_EDGE",
+                    board_edge: DistanceEvidence {
+                        distance_nm: test_point_to_board_edge_distance(point, design),
+                        point: nearest_board_edge_point(point.center, design),
+                    },
+                    nearest_test_point,
+                },
+            }
+        })
+        .collect()
+}
+
+fn test_point_to_board_edge_distance(point: &TestPoint, design: &Design) -> i64 {
+    let horizontal =
+        (point.center.x - design.bounds.min_x).min(design.bounds.max_x - point.center.x);
+    let vertical = (point.center.y - design.bounds.min_y).min(design.bounds.max_y - point.center.y);
+    horizontal
+        .min(vertical)
+        .saturating_sub(point.radius_nm)
+        .max(0)
+}
+
+fn nearest_board_edge_point(point: PointNm, design: &Design) -> PointNm {
+    [
+        (
+            point.x.saturating_sub(design.bounds.min_x).abs(),
+            PointNm {
+                x: design.bounds.min_x,
+                y: point.y,
+            },
+        ),
+        (
+            design.bounds.max_x.saturating_sub(point.x).abs(),
+            PointNm {
+                x: design.bounds.max_x,
+                y: point.y,
+            },
+        ),
+        (
+            point.y.saturating_sub(design.bounds.min_y).abs(),
+            PointNm {
+                x: point.x,
+                y: design.bounds.min_y,
+            },
+        ),
+        (
+            design.bounds.max_y.saturating_sub(point.y).abs(),
+            PointNm {
+                x: point.x,
+                y: design.bounds.max_y,
+            },
+        ),
+    ]
+    .into_iter()
+    .min_by_key(|(distance, _)| *distance)
+    .map(|(_, edge_point)| edge_point)
+    .unwrap_or(point)
 }
 
 fn review_test_points_request(params: Value) -> CoreResult<Value> {
@@ -491,7 +610,7 @@ fn review_test_points_request(params: Value) -> CoreResult<Value> {
     cache.save_design(&design)?;
     Ok(json!({
         "summary": DesignSummary::from_design(&design, true, 0),
-        "test_points": design.test_points,
+        "test_points": test_points_with_review_context(&design),
     }))
 }
 
@@ -944,6 +1063,72 @@ fn failure(id: u64, error: &CoreError) -> CoreResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_point_review_context_uses_edge_to_edge_clearances() {
+        let design = Design {
+            schema_version: Design::SCHEMA_VERSION,
+            id: "distance-context".into(),
+            format: crate::model::DesignFormat::Odbpp,
+            source_path: "fixture".into(),
+            content_hash: "hash".into(),
+            bounds: BoundsNm {
+                min_x: 0,
+                min_y: 0,
+                max_x: 10_000_000,
+                max_y: 10_000_000,
+            },
+            layers: Vec::new(),
+            components: Vec::new(),
+            nets: Vec::new(),
+            test_points: vec![
+                TestPoint {
+                    id: "tp-a".into(),
+                    center: PointNm {
+                        x: 2_000_000,
+                        y: 4_000_000,
+                    },
+                    radius_nm: 100_000,
+                    net_name: None,
+                    component_ref: Some("TP1".into()),
+                    confidence: CoverageLevel::Inferred,
+                    source: "fixture".into(),
+                },
+                TestPoint {
+                    id: "tp-b".into(),
+                    center: PointNm {
+                        x: 5_000_000,
+                        y: 4_000_000,
+                    },
+                    radius_nm: 200_000,
+                    net_name: None,
+                    component_ref: Some("TP2".into()),
+                    confidence: CoverageLevel::Inferred,
+                    source: "fixture".into(),
+                },
+            ],
+            coverage: crate::model::SemanticCoverage::default(),
+            diagnostics: Vec::new(),
+        };
+
+        let candidates = test_points_with_review_context(&design);
+        assert_eq!(candidates[0].review_context.metric, "EDGE_TO_EDGE");
+        assert_eq!(
+            candidates[0].review_context.board_edge.distance_nm,
+            1_900_000
+        );
+        assert_eq!(
+            candidates[0].review_context.board_edge.point,
+            PointNm { x: 0, y: 4_000_000 }
+        );
+        let nearest = candidates[0]
+            .review_context
+            .nearest_test_point
+            .as_ref()
+            .unwrap();
+        assert_eq!(nearest.id, "tp-b");
+        assert_eq!(nearest.distance_nm, 2_700_000);
+    }
 
     #[test]
     fn legacy_draft_severity_must_be_confirmed_before_approval() {

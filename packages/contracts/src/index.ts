@@ -375,6 +375,7 @@ export interface WiringAnalysis {
   wib: SchematicPinout;
   connector_mappings: ConnectorMapping[];
   net_aliases: Array<{ product_net: string; wib_net: string }>;
+  case_sensitive?: boolean;
   verdict: Verdict;
   verification_mode: "DOCUMENT_BACKED";
   pass_count: number;
