@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { verifyOcrResources } from "./verify-ocr-resources.mjs";
 
 const [platform, arch] = process.argv.slice(2);
 if (!(["mac", "win"].includes(platform) && ["arm64", "x64"].includes(arch))) {
@@ -30,3 +31,8 @@ await new Promise((resolve, reject) => {
   child.once("error", reject);
   child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`electron-builder exited with ${code}`)));
 });
+
+const resourcesDirectory = platform === "mac"
+  ? path.resolve("release", `mac-${arch}`, "CircuitInspector.app", "Contents", "Resources", "ocr")
+  : path.resolve("release", "win-unpacked", "resources", "ocr");
+await verifyOcrResources(resourcesDirectory);

@@ -98,24 +98,32 @@ fn evaluate_rule(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> R
             )],
         };
     }
-    if matches!(coverage, CoverageLevel::Inferred) {
-        return RuleOutcome {
-            verdict: Verdict::Review,
-            violations: vec![review_violation(
-                design,
-                rule,
-                analysis_id,
-                Verdict::Review,
-                "required entities are inferred and must be confirmed before PASS/FAIL",
-            )],
-        };
-    }
-    let violations = match rule.kind {
+    let mut violations = match rule.kind {
         RuleKind::MinimumDistance => evaluate_distance(design, rule, analysis_id),
         RuleKind::MinimumWidth => evaluate_width(design, rule, analysis_id),
         RuleKind::MinimumAnnularRing => evaluate_annular_ring(design, rule, analysis_id),
         RuleKind::MinimumDiameter => evaluate_diameter(design, rule, analysis_id),
     };
+    if coverage == CoverageLevel::Inferred {
+        if violations.is_empty() {
+            violations.push(inferred_review_violation(design, rule, analysis_id));
+        }
+        for violation in &mut violations {
+            violation.verdict = Verdict::Review;
+            violation.semantic_confidence = violation
+                .semantic_confidence
+                .weakest(CoverageLevel::Inferred);
+            if !violation.message.to_ascii_lowercase().contains("inferred") {
+                violation.message.push_str(
+                    "; entity identity is inferred and must be confirmed before PASS/FAIL",
+                );
+            }
+        }
+        return RuleOutcome {
+            verdict: Verdict::Review,
+            violations,
+        };
+    }
     RuleOutcome {
         verdict: if violations.is_empty() {
             Verdict::Pass
@@ -259,37 +267,52 @@ fn evaluate_diameter(design: &Design, rule: &RuleDefinition, analysis_id: &str) 
         .into_iter()
         .filter_map(|point| {
             let diameter = point.radius_nm.saturating_mul(2);
-            (diameter < rule.threshold_nm).then(|| Violation {
-                id: format!("{}:{}", rule.id, point.id),
-                analysis_id: analysis_id.into(),
-                rule_id: rule.id.clone(),
-                title: rule.title.clone(),
-                severity: confirmed_severity(rule),
-                verdict: Verdict::Fail,
-                source_format: design.format.clone(),
-                semantic_confidence: point.confidence,
-                net_names: point.net_name.into_iter().map(ToOwned::to_owned).collect(),
-                component_refs: point
-                    .component_ref
-                    .into_iter()
-                    .map(ToOwned::to_owned)
-                    .collect(),
-                layer_ids: point.layer_id.into_iter().map(ToOwned::to_owned).collect(),
-                x_nm: point.center.x,
-                y_nm: point.center.y,
-                measured_value_nm: Some(diameter),
-                threshold_nm: Some(rule.threshold_nm),
-                message: format!(
-                    "measured test-point diameter {:.3} mm is below {:.3} mm",
-                    nm_mm(diameter),
-                    nm_mm(rule.threshold_nm)
-                ),
-                evidence_points: vec![point.center],
-                evidence_uris: Vec::new(),
-                rule_citation: rule.citation.clone(),
-            })
+            (diameter < rule.threshold_nm)
+                .then(|| diameter_violation(design, rule, analysis_id, &point, diameter))
         })
         .collect()
+}
+
+fn diameter_violation(
+    design: &Design,
+    rule: &RuleDefinition,
+    analysis_id: &str,
+    point: &GeometryRef<'_>,
+    diameter: i64,
+) -> Violation {
+    Violation {
+        id: format!("{}:{}", rule.id, point.id),
+        analysis_id: analysis_id.into(),
+        rule_id: rule.id.clone(),
+        title: rule.title.clone(),
+        severity: confirmed_severity(rule),
+        verdict: if point.confidence == CoverageLevel::Inferred {
+            Verdict::Review
+        } else {
+            Verdict::Fail
+        },
+        source_format: design.format.clone(),
+        semantic_confidence: point.confidence,
+        net_names: point.net_name.into_iter().map(ToOwned::to_owned).collect(),
+        component_refs: point
+            .component_ref
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect(),
+        layer_ids: point.layer_id.into_iter().map(ToOwned::to_owned).collect(),
+        x_nm: point.center.x,
+        y_nm: point.center.y,
+        measured_value_nm: Some(diameter),
+        threshold_nm: Some(rule.threshold_nm),
+        message: format!(
+            "measured test-point diameter {:.3} mm is below {:.3} mm",
+            nm_mm(diameter),
+            nm_mm(rule.threshold_nm)
+        ),
+        evidence_points: vec![point.center],
+        evidence_uris: Vec::new(),
+        rule_citation: rule.citation.clone(),
+    }
 }
 
 fn entities(design: &Design, kind: EntityKind) -> Vec<GeometryRef<'_>> {
@@ -309,7 +332,7 @@ fn entities(design: &Design, kind: EntityKind) -> Vec<GeometryRef<'_>> {
                 radius_nm: point.radius_nm,
                 net_name: point.net_name.as_deref(),
                 component_ref: point.component_ref.as_deref(),
-                layer_id: None,
+                layer_id: test_point_layer_id(design, point),
                 confidence: point.confidence,
             })
             .collect(),
@@ -366,6 +389,23 @@ fn entities(design: &Design, kind: EntityKind) -> Vec<GeometryRef<'_>> {
         | EntityKind::ShieldFence
         | EntityKind::UvGlue => Vec::new(),
     }
+}
+
+fn test_point_layer_id<'a>(design: &'a Design, point: &crate::model::TestPoint) -> Option<&'a str> {
+    let source = point.source.replace('\\', "/").to_ascii_lowercase();
+    design
+        .layers
+        .iter()
+        .find(|layer| {
+            layer
+                .features
+                .iter()
+                .any(|feature| feature.source == point.source)
+                || source
+                    .split('/')
+                    .any(|segment| segment.eq_ignore_ascii_case(&layer.name))
+        })
+        .map(|layer| layer.id.as_str())
 }
 
 fn feature_ref<'a>(
@@ -435,15 +475,20 @@ fn distance_violation(
     target: &GeometryRef<'_>,
     measured: i64,
 ) -> Violation {
+    let target_evidence = if target.id == "board-edge" {
+        nearest_board_edge_point(source.center, target.bounds)
+    } else {
+        target.center
+    };
     let midpoint = PointNm {
         x: source
             .center
             .x
-            .saturating_add((target.center.x - source.center.x) / 2),
+            .saturating_add((target_evidence.x - source.center.x) / 2),
         y: source
             .center
             .y
-            .saturating_add((target.center.y - source.center.y) / 2),
+            .saturating_add((target_evidence.y - source.center.y) / 2),
     };
     let mut nets = [source.net_name, target.net_name]
         .into_iter()
@@ -494,10 +539,48 @@ fn distance_violation(
             nm_mm(measured),
             nm_mm(rule.threshold_nm)
         ),
-        evidence_points: vec![source.center, target.center],
+        evidence_points: vec![source.center, target_evidence],
         evidence_uris: Vec::new(),
         rule_citation: rule.citation.clone(),
     }
+}
+
+fn nearest_board_edge_point(point: PointNm, bounds: BoundsNm) -> PointNm {
+    let candidates = [
+        (
+            point.x.saturating_sub(bounds.min_x).abs(),
+            PointNm {
+                x: bounds.min_x,
+                y: point.y,
+            },
+        ),
+        (
+            bounds.max_x.saturating_sub(point.x).abs(),
+            PointNm {
+                x: bounds.max_x,
+                y: point.y,
+            },
+        ),
+        (
+            point.y.saturating_sub(bounds.min_y).abs(),
+            PointNm {
+                x: point.x,
+                y: bounds.min_y,
+            },
+        ),
+        (
+            bounds.max_y.saturating_sub(point.y).abs(),
+            PointNm {
+                x: point.x,
+                y: bounds.max_y,
+            },
+        ),
+    ];
+    candidates
+        .into_iter()
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, point)| point)
+        .unwrap_or(point)
 }
 
 fn review_violation(
@@ -529,6 +612,80 @@ fn review_violation(
         evidence_uris: Vec::new(),
         rule_citation: rule.citation.clone(),
     }
+}
+
+fn inferred_review_violation(
+    design: &Design,
+    rule: &RuleDefinition,
+    analysis_id: &str,
+) -> Violation {
+    match rule.kind {
+        RuleKind::MinimumDistance => {
+            let sources = entities(design, rule.source);
+            let targets = entities(design, rule.target.unwrap_or(EntityKind::BoardEdge));
+            let same_collection = rule.target == Some(rule.source);
+            let mut nearest: Option<(GeometryRef<'_>, GeometryRef<'_>, i64)> = None;
+            for (source_index, source) in sources.iter().enumerate() {
+                for (target_index, target) in targets.iter().enumerate() {
+                    if (same_collection && target_index <= source_index) || source.id == target.id {
+                        continue;
+                    }
+                    if rule.same_net_only && source.net_name != target.net_name {
+                        continue;
+                    }
+                    if rule.different_net_only
+                        && (source.net_name.is_none() || source.net_name == target.net_name)
+                    {
+                        continue;
+                    }
+                    let measured = distance(
+                        source,
+                        target,
+                        rule.metric.unwrap_or(DistanceMetric::EdgeToEdge),
+                    );
+                    if nearest
+                        .as_ref()
+                        .is_none_or(|(_, _, current)| measured < *current)
+                    {
+                        nearest = Some((*source, *target, measured));
+                    }
+                }
+            }
+            if let Some((source, target, measured)) = nearest {
+                let mut violation =
+                    distance_violation(design, rule, analysis_id, &source, &target, measured);
+                violation.message = format!(
+                    "closest measured distance {:.3} mm against {:.3} mm; entities are inferred and require confirmation",
+                    nm_mm(measured),
+                    nm_mm(rule.threshold_nm)
+                );
+                return violation;
+            }
+        }
+        RuleKind::MinimumDiameter => {
+            if let Some(point) = entities(design, EntityKind::TestPoint)
+                .into_iter()
+                .min_by_key(|point| point.radius_nm)
+            {
+                let diameter = point.radius_nm.saturating_mul(2);
+                let mut violation = diameter_violation(design, rule, analysis_id, &point, diameter);
+                violation.message = format!(
+                    "closest measured test-point diameter {:.3} mm against {:.3} mm; entity is inferred and requires confirmation",
+                    nm_mm(diameter),
+                    nm_mm(rule.threshold_nm)
+                );
+                return violation;
+            }
+        }
+        RuleKind::MinimumWidth | RuleKind::MinimumAnnularRing => {}
+    }
+    review_violation(
+        design,
+        rule,
+        analysis_id,
+        Verdict::Review,
+        "required entities are inferred but no measurable candidate pair is available; confirm the entity mapping before PASS/FAIL",
+    )
 }
 
 fn confirmed_severity(rule: &RuleDefinition) -> Severity {
@@ -665,6 +822,123 @@ mod tests {
                 .filter(|violation| violation.rule_id == "tp-diameter")
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn inferred_testpoint_review_keeps_net_distance_and_location_evidence() {
+        let design = Design {
+            schema_version: 1,
+            id: "board".into(),
+            format: DesignFormat::GerberPackage,
+            source_path: "board.zip".into(),
+            content_hash: "hash".into(),
+            bounds: BoundsNm {
+                min_x: 0,
+                min_y: 0,
+                max_x: 10_000_000,
+                max_y: 10_000_000,
+            },
+            layers: Vec::new(),
+            components: Vec::new(),
+            nets: vec!["A".into(), "B".into()],
+            test_points: vec![
+                TestPoint {
+                    id: "a".into(),
+                    center: PointNm {
+                        x: 1_000_000,
+                        y: 1_000_000,
+                    },
+                    radius_nm: 100_000,
+                    net_name: Some("A".into()),
+                    component_ref: Some("TP1".into()),
+                    confidence: CoverageLevel::Inferred,
+                    source: "fixture".into(),
+                },
+                TestPoint {
+                    id: "b".into(),
+                    center: PointNm {
+                        x: 1_400_000,
+                        y: 1_000_000,
+                    },
+                    radius_nm: 100_000,
+                    net_name: Some("B".into()),
+                    component_ref: Some("TP2".into()),
+                    confidence: CoverageLevel::Inferred,
+                    source: "fixture".into(),
+                },
+            ],
+            coverage: SemanticCoverage {
+                test_points: CoverageLevel::Inferred,
+                ..Default::default()
+            },
+            diagnostics: Vec::new(),
+        };
+        let pack = RulePack {
+            id: "dft".into(),
+            version: "1".into(),
+            title: "DFT".into(),
+            status: RulePackStatus::Approved,
+            rules: vec![RuleDefinition {
+                id: "tp-spacing".into(),
+                title: "Test point spacing".into(),
+                kind: RuleKind::MinimumDistance,
+                source: EntityKind::TestPoint,
+                target: Some(EntityKind::TestPoint),
+                metric: Some(DistanceMetric::EdgeToEdge),
+                threshold_nm: 100_000,
+                severity: Some(Severity::Warning),
+                layer_functions: Vec::new(),
+                same_net_only: false,
+                different_net_only: false,
+                citation: None,
+            }],
+            review_items: Vec::new(),
+            approval: Some(RuleApproval {
+                approved_by: "fixture".into(),
+                approved_at: "2026-08-07T00:00:00Z".into(),
+                content_hash: "approved".into(),
+            }),
+        };
+
+        let analysis = analyze_design(&design, &pack).unwrap();
+
+        assert_eq!(analysis.verdict, Verdict::Review);
+        assert_eq!(analysis.fail_count, 0);
+        assert_eq!(analysis.review_count, 1);
+        assert_eq!(analysis.violations.len(), 1);
+        let finding = &analysis.violations[0];
+        assert_eq!(finding.verdict, Verdict::Review);
+        assert_eq!(finding.semantic_confidence, CoverageLevel::Inferred);
+        assert_eq!(finding.net_names, ["A", "B"]);
+        assert_eq!(finding.component_refs, ["TP1", "TP2"]);
+        assert_eq!(finding.measured_value_nm, Some(200_000));
+        assert_eq!(finding.threshold_nm, Some(100_000));
+        assert_eq!(finding.evidence_points.len(), 2);
+        assert_eq!(finding.x_nm, 1_200_000);
+        assert_eq!(finding.y_nm, 1_000_000);
+    }
+
+    #[test]
+    fn board_edge_evidence_uses_the_nearest_boundary_not_the_board_center() {
+        let bounds = BoundsNm {
+            min_x: 0,
+            min_y: 0,
+            max_x: 10_000_000,
+            max_y: 10_000_000,
+        };
+        assert_eq!(
+            nearest_board_edge_point(
+                PointNm {
+                    x: 7_000_000,
+                    y: 9_500_000,
+                },
+                bounds,
+            ),
+            PointNm {
+                x: 7_000_000,
+                y: 10_000_000,
+            }
         );
     }
 

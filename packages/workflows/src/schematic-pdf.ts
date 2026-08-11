@@ -214,7 +214,7 @@ function resolveOcrPaths() {
   if (configured) {
     return {
       workerPath: process.env.CIRCUIT_INSPECTOR_OCR_WORKER ?? path.join(configured, "ocr-worker.cjs"),
-      corePath: path.join(configured, "tesseract.js-core"),
+      corePath: configured,
       langPath: path.join(configured, "lang")
     };
   }

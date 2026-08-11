@@ -106,6 +106,7 @@ export interface Violation {
   title: string;
   verdict: "PASS" | "FAIL" | "REVIEW" | "NOT_APPLICABLE";
   severity: "INFO" | "WARNING" | "ERROR";
+  semantic_confidence?: CoverageLevel;
   net_names: string[];
   component_refs: string[];
   layer_ids: string[];

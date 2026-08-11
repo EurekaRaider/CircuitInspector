@@ -1,4 +1,4 @@
-import type { LayerSummary, Violation } from "./types";
+import type { LayerSummary, TestPointCandidate, Violation } from "./types";
 
 const DEFAULT_FUNCTIONS = [
   "SIGNAL",
@@ -22,6 +22,59 @@ export function defaultLayerIds(layers: LayerSummary[], side: "TOP" | "BOTTOM") 
     .map((layer) => layer.id);
   if (selected.length) return [...new Set(selected)];
   return layers.filter((layer) => layer.side === side).map((layer) => layer.id);
+}
+
+export function isolatedLayerIds(layers: LayerSummary[], layerId: string) {
+  const profiles = layers
+    .filter((layer) => layer.function.toUpperCase().includes("PROFILE"))
+    .map((layer) => layer.id);
+  return [...new Set([...profiles, layerId])];
+}
+
+export function layerIdsForTestPoint(layers: LayerSummary[], point: Pick<TestPointCandidate, "source">) {
+  const source = point.source.replaceAll("\\", "/").toLocaleLowerCase("en-US");
+  const segments = source.split("/");
+  const matches = layers.filter((layer) => {
+    const name = layer.name.toLocaleLowerCase("en-US");
+    const id = layer.id.toLocaleLowerCase("en-US");
+    return segments.includes(name)
+      || source.includes(`/layers/${name}/`)
+      || source.startsWith(`manual:${id}:`);
+  });
+  if (!matches.length) return [];
+  return [...new Set(matches.flatMap((layer) => isolatedLayerIds(layers, layer.id)))];
+}
+
+export function testPointFocusZoom(radiusNm: number) {
+  const radiusMm = Math.max(0.01, radiusNm / 1_000_000);
+  return Math.round(Math.min(1200, Math.max(160, 36 / radiusMm)));
+}
+
+export function layerIdsForViolation(layers: LayerSummary[], violation: Violation, testPoints: TestPointCandidate[]) {
+  const profiles = layers
+    .filter((layer) => layer.function.toUpperCase().includes("PROFILE"))
+    .map((layer) => layer.id);
+  const declared = layers
+    .filter((layer) => violation.layer_ids.includes(layer.id))
+    .map((layer) => layer.id);
+  const evidence = violation.evidence_points ?? [];
+  const matchingPoint = testPoints.find((point) => evidence.some((candidate) =>
+    candidate.x === point.center.x && candidate.y === point.center.y
+  ));
+  const inferred = matchingPoint ? layerIdsForTestPoint(layers, matchingPoint) : [];
+  return [...new Set([...profiles, ...declared, ...inferred])];
+}
+
+export function violationFocusZoom(violation: Violation) {
+  const points = violation.evidence_points ?? [];
+  if (points.length >= 2) {
+    const widthMm = (Math.max(...points.map((point) => point.x)) - Math.min(...points.map((point) => point.x))) / 1_000_000;
+    const heightMm = (Math.max(...points.map((point) => point.y)) - Math.min(...points.map((point) => point.y))) / 1_000_000;
+    const spanMm = Math.max(widthMm, heightMm, 0.05);
+    return Math.round(Math.min(320, Math.max(80, 260 / spanMm)));
+  }
+  const markerNm = violation.measured_value_nm ?? violation.threshold_nm ?? 250_000;
+  return Math.min(320, testPointFocusZoom(Math.max(1, markerNm / 2)));
 }
 
 export function violationHasLocation(violation: Violation | null | undefined) {

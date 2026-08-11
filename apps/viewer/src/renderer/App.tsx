@@ -159,6 +159,7 @@ export function App() {
             deepLinkUrl={deepLinkUrl}
             initialDesignId={initialDesignId}
             onCatalogChanged={() => void refreshCatalog()}
+            onOpenRuleLibrary={() => navigate("RULES")}
           />
         </div>
         {view === "RULES" && <RuleLibrary locale={locale} onCatalogChanged={() => void refreshCatalog()} />}

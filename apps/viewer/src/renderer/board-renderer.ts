@@ -1,4 +1,4 @@
-import type { BoundsNm, TilePayload, Violation } from "./types";
+import type { BoundsNm, TestPointCandidate, TilePayload, Violation } from "./types";
 
 const HEADER_BYTES = 42;
 const RECORD_BYTES = 24;
@@ -26,8 +26,9 @@ void main() {
 const fragmentSource = `#version 300 es
 precision highp float;
 in vec4 v_color;
+uniform float u_opacity;
 out vec4 outColor;
-void main() { outColor = v_color; }`;
+void main() { outColor = vec4(v_color.rgb, v_color.a * u_opacity); }`;
 
 const palette = [
   [0.55, 0.67, 0.43, 1],
@@ -55,10 +56,12 @@ export class BoardRenderer {
     viewport: WebGLUniformLocation | null;
     zoom: WebGLUniformLocation | null;
     mirror: WebGLUniformLocation | null;
+    opacity: WebGLUniformLocation | null;
   };
   #boardVertexCount = 0;
   #overlayVertexCount = 0;
   #overlayViolation: Violation | null = null;
+  #overlayTestPoint: TestPointCandidate | null = null;
   #measure: [number, number, number, number] | undefined;
   #view: ViewState = { centerX: 0, centerY: 0, zoom: 20 };
   #mirrored = false;
@@ -75,7 +78,8 @@ export class BoardRenderer {
       center: gl.getUniformLocation(this.#program, "u_center"),
       viewport: gl.getUniformLocation(this.#program, "u_viewport"),
       zoom: gl.getUniformLocation(this.#program, "u_zoom"),
-      mirror: gl.getUniformLocation(this.#program, "u_mirror")
+      mirror: gl.getUniformLocation(this.#program, "u_mirror"),
+      opacity: gl.getUniformLocation(this.#program, "u_opacity")
     };
     gl.enableVertexAttribArray(0);
     gl.enableVertexAttribArray(1);
@@ -101,8 +105,9 @@ export class BoardRenderer {
     this.draw();
   }
 
-  setOverlay(violation: Violation | null, measure?: [number, number, number, number]): void {
+  setOverlay(violation: Violation | null, testPoint: TestPointCandidate | null, measure?: [number, number, number, number]): void {
     this.#overlayViolation = violation;
+    this.#overlayTestPoint = testPoint;
     this.#measure = measure;
     this.#refreshOverlay();
     this.draw();
@@ -110,8 +115,9 @@ export class BoardRenderer {
 
   #refreshOverlay(): void {
     const violation = this.#overlayViolation;
+    const testPoint = this.#overlayTestPoint;
     const measure = this.#measure;
-    if (!violation && !measure) {
+    if (!violation && !testPoint && !measure) {
       this.#overlayVertexCount = 0;
       return;
     }
@@ -120,7 +126,7 @@ export class BoardRenderer {
     if (violation) {
       const x = violation.x_nm / 1_000_000;
       const y = violation.y_nm / 1_000_000;
-      const radius = Math.max(0.5, 18 / this.#view.zoom);
+      const radius = Math.max(0.05, 18 / this.#view.zoom);
       addRing(write, x, y, radius, [0.88, 0.36, 0.27, 1]);
       addLine(write, x - radius * 1.3, y, x + radius * 1.3, y, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
       addLine(write, x, y - radius * 1.3, x, y + radius * 1.3, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
@@ -134,6 +140,17 @@ export class BoardRenderer {
         addRing(write, x0, y0, 5 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
         addRing(write, x1, y1, 5 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
       }
+    }
+    if (testPoint) {
+      const x = testPoint.center.x / 1_000_000;
+      const y = testPoint.center.y / 1_000_000;
+      const featureRadius = Math.max(0.03, testPoint.radius_nm / 1_000_000);
+      const locatorRadius = Math.max(featureRadius * 1.8, 24 / this.#view.zoom);
+      addDisc(write, x, y, locatorRadius, [0.93, 0.66, 0.24, 0.13], 32);
+      addRing(write, x, y, featureRadius, [0.98, 0.83, 0.45, 1]);
+      addRing(write, x, y, locatorRadius, [0.98, 0.69, 0.27, 1]);
+      addLine(write, x - locatorRadius * 1.45, y, x + locatorRadius * 1.45, y, 2.5 / this.#view.zoom, [0.98, 0.83, 0.45, 1]);
+      addLine(write, x, y - locatorRadius * 1.45, x, y + locatorRadius * 1.45, 2.5 / this.#view.zoom, [0.98, 0.83, 0.45, 1]);
     }
     if (measure) {
       addLine(write, measure[0], measure[1], measure[2], measure[3], 2 / this.#view.zoom, [0.42, 0.73, 0.75, 1]);
@@ -164,7 +181,9 @@ export class BoardRenderer {
     gl.uniform2f(this.#uniforms.viewport, this.#canvas.width, this.#canvas.height);
     gl.uniform1f(this.#uniforms.zoom, this.#view.zoom * Math.min(window.devicePixelRatio || 1, 2));
     gl.uniform1f(this.#uniforms.mirror, this.#mirrored ? -1 : 1);
+    gl.uniform1f(this.#uniforms.opacity, this.#overlayTestPoint || this.#overlayViolation ? 0.16 : 1);
     this.#drawBuffer(this.#boardBuffer, this.#boardVertexCount);
+    gl.uniform1f(this.#uniforms.opacity, 1);
     this.#drawBuffer(this.#overlayBuffer, this.#overlayVertexCount);
   }
 

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { chmod, copyFile, cp, mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { prepareNodeRuntime } from "./prepare-node-runtime.mjs";
+import { verifyOcrResources } from "./verify-ocr-resources.mjs";
 
 const [platform, arch] = process.argv.slice(2);
 const host = platform === "mac" ? "darwin" : platform === "win" ? "win32" : "";
@@ -43,12 +44,13 @@ await Promise.all([
     path.join(folder, "mcp", "node_modules", "@napi-rs", name),
     { recursive: true }
   )),
-  cp(path.resolve("node_modules/tesseract.js-core"), path.join(folder, "ocr/tesseract.js-core"), { recursive: true }),
+  cp(path.resolve("node_modules/tesseract.js-core"), path.join(folder, "ocr"), { recursive: true }),
   cp(path.resolve("node_modules/@tesseract.js-data/eng/4.0.0_best_int"), path.join(folder, "ocr/lang"), { recursive: true }),
   cp(path.resolve("node_modules/pdfjs-dist/standard_fonts"), path.join(folder, "pdfjs/standard_fonts"), { recursive: true }),
   cp(path.resolve("node_modules/pdfjs-dist/cmaps"), path.join(folder, "pdfjs/cmaps"), { recursive: true }),
   cp(path.resolve("node_modules/pdfjs-dist/wasm"), path.join(folder, "pdfjs/wasm"), { recursive: true })
 ]);
+await verifyOcrResources(path.join(folder, "ocr"));
 const nodeLicense = path.resolve(path.dirname(nodeRuntime), "..", "LICENSE");
 if (existsSync(nodeLicense)) {
   await copyFile(nodeLicense, path.join(folder, "runtime", "NODE_LICENSE"));

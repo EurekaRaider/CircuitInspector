@@ -1,16 +1,17 @@
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { BoardRenderer, fitView, type ViewState } from "./board-renderer";
-import type { BoundsNm, TilePayload, Violation } from "./types";
+import type { BoundsNm, TestPointCandidate, TilePayload, Violation } from "./types";
 
 export interface BoardCanvasHandle {
   fit(): void;
-  focus(xNm: number, yNm: number): void;
+  focus(xNm: number, yNm: number, zoom?: number): void;
 }
 
 interface Props {
   bounds: BoundsNm;
   tile: TilePayload | null;
   activeViolation: Violation | null;
+  activeTestPoint: TestPointCandidate | null;
   mirrored: boolean;
   measureMode: boolean;
   onViewportChange(viewport: BoundsNm, zoom: number): void;
@@ -20,7 +21,7 @@ interface Props {
 }
 
 const BoardCanvasComponent = forwardRef<BoardCanvasHandle, Props>(function BoardCanvas(
-  { bounds, tile, activeViolation, mirrored, measureMode, onViewportChange, onPointerWorld, onMeasure, onPick },
+  { bounds, tile, activeViolation, activeTestPoint, mirrored, measureMode, onViewportChange, onPointerWorld, onMeasure, onPick },
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -36,8 +37,9 @@ const BoardCanvasComponent = forwardRef<BoardCanvasHandle, Props>(function Board
 
   useImperativeHandle(ref, () => ({
     fit: () => fit(),
-    focus: (xNm, yNm) => {
-      viewRef.current = { ...viewRef.current, centerX: xNm / 1_000_000, centerY: yNm / 1_000_000, zoom: Math.max(viewRef.current.zoom, 80) };
+    focus: (xNm, yNm, zoom) => {
+      const targetZoom = zoom == null ? Math.max(viewRef.current.zoom, 80) : zoom;
+      viewRef.current = { ...viewRef.current, centerX: xNm / 1_000_000, centerY: yNm / 1_000_000, zoom: targetZoom };
       applyView(true);
     }
   }));
@@ -47,13 +49,22 @@ const BoardCanvasComponent = forwardRef<BoardCanvasHandle, Props>(function Board
     if (!canvas) return;
     const renderer = new BoardRenderer(canvas);
     rendererRef.current = renderer;
+    let hasVisibleSize = false;
     const observer = new ResizeObserver(() => {
       renderer.resize();
-      applyView(false);
+      if (!hasVisibleSize && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+        hasVisibleSize = true;
+        fit();
+      } else {
+        applyView(false);
+      }
     });
     observer.observe(canvas);
     renderer.resize();
-    fit();
+    if (canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+      hasVisibleSize = true;
+      fit();
+    }
     return () => {
       observer.disconnect();
       if (viewFrameRef.current != null) cancelAnimationFrame(viewFrameRef.current);
@@ -73,8 +84,8 @@ const BoardCanvasComponent = forwardRef<BoardCanvasHandle, Props>(function Board
   }, [mirrored]);
 
   useEffect(() => {
-    rendererRef.current?.setOverlay(activeViolation, measure);
-  }, [activeViolation, measure]);
+    rendererRef.current?.setOverlay(activeViolation, activeTestPoint, measure);
+  }, [activeTestPoint, activeViolation, measure]);
 
   useEffect(() => {
     measureRef.current = [];
