@@ -245,6 +245,9 @@ function inferPassage(passage: Passage, sequence: number): { rules: ExtractedRul
     if (/器件|component/i.test(value)) {
       return executable(baseRule(`tp-component-${suffix}`, "测试点到器件距离", "MINIMUM_DISTANCE", "TEST_POINT", "COMPONENT", "BODY_TO_PAD", threshold, citation));
     }
+    if (/测试点中心间距|test point center-to-center spacing/i.test(value)) {
+      return executable(baseRule(`tp-spacing-${suffix}`, "测试点间距", "MINIMUM_DISTANCE", "TEST_POINT", "TEST_POINT", "CENTER_TO_CENTER", threshold, citation));
+    }
     if (/测试点(?:边缘)?间距|test\s*point\s+(?:edge[- ]to[- ]edge\s+)?spacing|between\s+test\s*points|test\s*point[^.]{0,80}test\s*point/i.test(value)) {
       return executable(baseRule(`tp-spacing-${suffix}`, "测试点间距", "MINIMUM_DISTANCE", "TEST_POINT", "TEST_POINT", metricFromText(normalized), threshold, citation));
     }
@@ -274,19 +277,20 @@ function hasDistanceRequirement(text: string): boolean {
 }
 
 function extractThresholds(text: string): number[] {
-  const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(mm|毫米|mil|mils|um|μm|微米)/giu)];
+  const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(mm|毫米|mil|mils|um|μm|微米|inches|inch|in\b)/giu)];
   return matches.flatMap((match) => {
     const amount = Number(match[1]);
     if (!Number.isFinite(amount) || amount <= 0) return [];
     const unit = match[2]?.toLowerCase();
     if (unit === "mil" || unit === "mils") return [Math.round(amount * 25_400)];
     if (unit === "um" || unit === "μm" || unit === "微米") return [Math.round(amount * 1_000)];
+    if (unit === "in" || unit === "inch" || unit === "inches") return [Math.round(amount * 25_400_000)];
     return [Math.round(amount * 1_000_000)];
   });
 }
 
 function extractDiameterThresholds(text: string): number[] {
-  const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(mm|毫米|mil|mils|um|μm|微米)\s*(?:diameter|直径)/giu)];
+  const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(mm|毫米|mil|mils|um|μm|微米|inches|inch|in\b)\s*(?:diameter|直径)/giu)];
   return matches.flatMap((match) => lengthToNm(match[1], match[2]));
 }
 
@@ -296,11 +300,14 @@ function lengthToNm(amountText: string | undefined, unitText: string | undefined
   const unit = unitText?.toLowerCase();
   if (unit === "mil" || unit === "mils") return [Math.round(amount * 25_400)];
   if (unit === "um" || unit === "μm" || unit === "微米") return [Math.round(amount * 1_000)];
+  if (unit === "in" || unit === "inch" || unit === "inches") return [Math.round(amount * 25_400_000)];
   return [Math.round(amount * 1_000_000)];
 }
 
 function metricFromText(text: string): "CENTER_TO_CENTER" | "EDGE_TO_EDGE" {
-  return /中心|center/i.test(text) ? "CENTER_TO_CENTER" : "EDGE_TO_EDGE";
+  return /中心(?:到中心|间距|距)|center\s*(?:-|to|2)\s*center|between\s+(?:the\s+)?(?:test\s+point\s+)?cent(?:er|re)s/i.test(text)
+    ? "CENTER_TO_CENTER"
+    : "EDGE_TO_EDGE";
 }
 
 function baseRule(

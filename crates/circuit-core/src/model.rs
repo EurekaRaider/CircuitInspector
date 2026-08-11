@@ -451,7 +451,7 @@ pub struct Design {
 }
 
 impl Design {
-    pub const SCHEMA_VERSION: u32 = 4;
+    pub const SCHEMA_VERSION: u32 = 5;
 
     pub fn finalize(&mut self) {
         let mut bounds = BoundsNm::empty();

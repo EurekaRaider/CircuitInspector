@@ -4,7 +4,8 @@ import type { BoundsNm, TestPointCandidate, TilePayload, Violation } from "./typ
 
 export interface BoardCanvasHandle {
   fit(): void;
-  focus(xNm: number, yNm: number, zoom?: number): void;
+  focus(xNm: number, yNm: number, zoom?: number, refreshTile?: boolean): void;
+  viewport(): { bounds: BoundsNm; zoom: number } | null;
 }
 
 interface Props {
@@ -37,11 +38,12 @@ const BoardCanvasComponent = forwardRef<BoardCanvasHandle, Props>(function Board
 
   useImperativeHandle(ref, () => ({
     fit: () => fit(),
-    focus: (xNm, yNm, zoom) => {
+    focus: (xNm, yNm, zoom, refreshTile = true) => {
       const targetZoom = zoom == null ? Math.max(viewRef.current.zoom, 80) : zoom;
       viewRef.current = { ...viewRef.current, centerX: xNm / 1_000_000, centerY: yNm / 1_000_000, zoom: targetZoom };
-      applyView(true);
-    }
+      applyView(refreshTile);
+    },
+    viewport: () => currentViewport()
   }));
 
   useEffect(() => {
@@ -118,19 +120,25 @@ const BoardCanvasComponent = forwardRef<BoardCanvasHandle, Props>(function Board
       clearTimeout(viewportTimerRef.current);
       viewportTimerRef.current = undefined;
     }
+    const current = currentViewport();
+    if (!current) return;
+    onViewportChange(current.bounds, current.zoom);
+  }
+
+  function currentViewport() {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return null;
     const halfWidthMm = canvas.clientWidth / viewRef.current.zoom / 2;
     const halfHeightMm = canvas.clientHeight / viewRef.current.zoom / 2;
-    onViewportChange(
-      {
+    return {
+      bounds: {
         min_x: Math.round((viewRef.current.centerX - halfWidthMm) * 1_000_000),
         min_y: Math.round((viewRef.current.centerY - halfHeightMm) * 1_000_000),
         max_x: Math.round((viewRef.current.centerX + halfWidthMm) * 1_000_000),
         max_y: Math.round((viewRef.current.centerY + halfHeightMm) * 1_000_000)
       },
-      viewRef.current.zoom
-    );
+      zoom: viewRef.current.zoom
+    };
   }
 
   function scheduleViewportChange() {

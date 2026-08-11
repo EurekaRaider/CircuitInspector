@@ -3,7 +3,10 @@ use circuit_inspector_core::model::{CoverageLevel, Design, DesignFormat, Verdict
 use circuit_inspector_core::parsers::import_design;
 use circuit_inspector_core::rules::RulePack;
 use circuit_inspector_core::server::dispatch;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use serde_json::json;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 fn fixture(path: &str) -> PathBuf {
@@ -295,6 +298,109 @@ fn odb_import_resolves_custom_test_point_symbols_and_tooling_hole_usage() {
     assert_eq!(
         listed["test_points"][0]["review_context"]["nearest_tooling_hole"]["distance_nm"],
         3_342_641
+    );
+}
+
+#[test]
+fn nested_odb_tgz_preserves_surface_sides_and_never_compares_test_points_across_sides() {
+    let temporary = tempfile::tempdir().unwrap();
+    let job = temporary.path().join("source/job");
+    for directory in [
+        "matrix",
+        "steps/pcb/layers/l1",
+        "steps/pcb/layers/l2",
+        "steps/pcb",
+    ] {
+        std::fs::create_dir_all(job.join(directory)).unwrap();
+    }
+    std::fs::write(
+        job.join("matrix/matrix"),
+        "UNITS=MM\nSTEP { NAME=pcb }\nLAYER { ROW=1 NAME=l1 CONTEXT=BOARD TYPE=SIGNAL }\nLAYER { ROW=2 NAME=l2 CONTEXT=BOARD TYPE=SIGNAL }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        job.join("steps/pcb/layers/l1/features"),
+        "UNITS=MM\n$0 r400\n@0 .test_point\n@1 .net_name\n&0 TOP_NET\nP 5 5 0 P 0;0,1=0\nP 8 5 0 P 0;0,1=0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        job.join("steps/pcb/layers/l2/features"),
+        "UNITS=MM\n$0 r400\n@0 .test_point\n@1 .net_name\n&0 BOTTOM_NET\nP 5 5 0 P 0;0,1=0\nP 8.1 5 0 P 0;0,1=0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        job.join("steps/pcb/profile"),
+        "UNITS=MM\nS P 0\nOB 0 0\nOS 12 0\nOS 12 10\nOS 0 10\nOE\n",
+    )
+    .unwrap();
+
+    let archive_path = temporary.path().join("nested-board.tgz");
+    let encoder = GzEncoder::new(File::create(&archive_path).unwrap(), Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    archive.append_dir_all("payload/job", &job).unwrap();
+    archive.finish().unwrap();
+    archive.into_inner().unwrap().finish().unwrap();
+
+    let design = import_design(&archive_path).unwrap();
+    assert_eq!(design.test_points.len(), 4);
+    assert_eq!(
+        design
+            .layers
+            .iter()
+            .find(|layer| layer.id == "odb-l1")
+            .unwrap()
+            .side,
+        circuit_inspector_core::model::Side::Top
+    );
+    assert_eq!(
+        design
+            .layers
+            .iter()
+            .find(|layer| layer.id == "odb-l2")
+            .unwrap()
+            .side,
+        circuit_inspector_core::model::Side::Bottom
+    );
+
+    let cache = CacheStore::new(temporary.path().join("cache")).unwrap();
+    cache.save_design(&design).unwrap();
+    let rule_pack: RulePack = serde_json::from_slice(
+        &std::fs::read(fixture("docs/rules/example-approved-rule-pack.json")).unwrap(),
+    )
+    .unwrap();
+    cache
+        .save_json(&cache.root().join("rules/fixture-dft-dfm.json"), &rule_pack)
+        .unwrap();
+    let listed = dispatch(
+        "list_test_points",
+        json!({ "design_id": design.id, "cache_dir": cache.root() }),
+    )
+    .unwrap();
+    let sides = listed["test_points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|point| point["side"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(sides.iter().filter(|side| **side == "TOP").count(), 2);
+    assert_eq!(sides.iter().filter(|side| **side == "BOTTOM").count(), 2);
+
+    let analysis = dispatch(
+        "analyze_design",
+        json!({
+            "design_id": design.id,
+            "rule_pack_id": "fixture-dft-dfm",
+            "cache_dir": cache.root()
+        }),
+    )
+    .unwrap();
+    assert_eq!(analysis["fail_count"], 0);
+    assert!(
+        analysis["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|violation| { violation["rule_id"] != "dft-testpoint-spacing" })
     );
 }
 

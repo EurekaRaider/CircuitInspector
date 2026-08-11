@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultLayerIds, isolatedLayerIds, layerIdsForTestPoint, layerIdsForViolation, testPointFocusZoom, violationFocusZoom, violationHasLocation } from "../src/renderer/pcb-layers";
+import { defaultLayerIds, isolatedLayerIds, layerIdsForTestPoint, layerIdsForViolation, layerIdsOnSurface, sameLayerIds, testPointFocusZoom, testPointSurfaceSide, violationFocusZoom, violationHasLocation } from "../src/renderer/pcb-layers";
 
 describe("PCB workspace display defaults", () => {
   const layers = [
@@ -52,6 +52,21 @@ describe("PCB workspace display defaults", () => {
     expect(layerIdsForTestPoint([...layers], { source: "/tmp/unrelated", layer_id: "top-signal" })).toEqual(["profile", "top-signal", "top-component", "top-mask", "paste", "drill"]);
   });
 
+  it("keeps test-point overlays and layer selections on their declared surface", () => {
+    const topPoint = { side: "TOP" as const, source: "/steps/pcb/layers/top-signal/features", layer_id: "top-signal" };
+    const bottomPoint = { side: "BOTTOM" as const, source: "/steps/pcb/layers/bottom-signal/features", layer_id: "bottom-signal" };
+    expect(testPointSurfaceSide([...layers], topPoint)).toBe("TOP");
+    expect(testPointSurfaceSide([...layers], bottomPoint)).toBe("BOTTOM");
+    expect(layerIdsOnSurface([...layers], ["profile", "top-signal", "bottom-signal", "drill"], "TOP")).toEqual(["profile", "top-signal", "drill"]);
+    expect(layerIdsOnSurface([...layers], ["profile", "top-signal", "bottom-signal", "drill"], "BOTTOM")).toEqual(["profile", "bottom-signal", "drill"]);
+  });
+
+  it("compares stable layer selections without scheduling duplicate tile work", () => {
+    expect(sameLayerIds(["profile", "top-signal"], ["profile", "top-signal"])).toBe(true);
+    expect(sameLayerIds(["profile", "top-signal"], ["top-signal", "profile"])).toBe(true);
+    expect(sameLayerIds(["profile", "top-signal"], ["profile", "bottom-signal"])).toBe(false);
+  });
+
   it("uses a readable bounded zoom for test-point targets", () => {
     expect(testPointFocusZoom(250_000)).toBe(160);
     expect(testPointFocusZoom(50_000)).toBe(720);
@@ -96,7 +111,7 @@ describe("PCB workspace display defaults", () => {
       message: "review",
       evidence_points: [{ x: 1_000_000, y: 2_000_000 }]
     };
-    const points = [{ id: "tp", center: { x: 1_000_000, y: 2_000_000 }, radius_nm: 100_000, net_name: "A", component_ref: "TP1", confidence: "INFERRED" as const, layer_id: "top-signal", source: "/steps/pcb/layers/top-signal/features", geometry_source: "/steps/pcb/layers/top-signal/features" }];
+    const points = [{ id: "tp", side: "TOP" as const, center: { x: 1_000_000, y: 2_000_000 }, radius_nm: 100_000, net_name: "A", component_ref: "TP1", confidence: "INFERRED" as const, layer_id: "top-signal", source: "/steps/pcb/layers/top-signal/features", geometry_source: "/steps/pcb/layers/top-signal/features" }];
     expect(layerIdsForViolation([...layers], violation, points)).toEqual(["profile", "top-signal", "top-component", "top-mask", "paste", "drill"]);
     expect(violationFocusZoom(violation)).toBe(320);
   });

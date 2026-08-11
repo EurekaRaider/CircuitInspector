@@ -1,6 +1,7 @@
 import type { LayerSummary, TestPointCandidate, Violation } from "./types";
 
 const SHARED_CONTEXT_FUNCTIONS = ["PROFILE", "BOARD", "ROUT", "DRILL", "TOOL", "PANEL"];
+export type SurfaceSide = "TOP" | "BOTTOM";
 
 export function defaultLayerIds(layers: LayerSummary[], side: "TOP" | "BOTTOM") {
   const sharedContext = layers.filter((layer) => layer.side === "NA" && SHARED_CONTEXT_FUNCTIONS.some((value) => layer.function.toUpperCase().includes(value)));
@@ -33,6 +34,34 @@ export function layerIdsForTestPoint(layers: LayerSummary[], point: Pick<TestPoi
   });
   if (!matches.length) return [];
   return layerIdsWithSurfaceContext(layers, matches.map((layer) => layer.id));
+}
+
+export function testPointSurfaceSide(
+  layers: LayerSummary[],
+  point: Pick<TestPointCandidate, "side" | "source" | "layer_id">
+): SurfaceSide | null {
+  if (point.side === "TOP" || point.side === "BOTTOM") return point.side;
+  return surfaceSideForLayerIds(layers, layerIdsForTestPoint(layers, point));
+}
+
+export function surfaceSideForLayerIds(layers: LayerSummary[], layerIds: string[]): SurfaceSide | null {
+  const sides = new Set(layers
+    .filter((layer) => layerIds.includes(layer.id) && (layer.side === "TOP" || layer.side === "BOTTOM"))
+    .map((layer) => layer.side as SurfaceSide));
+  return sides.size === 1 ? [...sides][0]! : null;
+}
+
+export function layerIdsOnSurface(layers: LayerSummary[], layerIds: string[], side: SurfaceSide) {
+  return layerIds.filter((id) => {
+    const layer = layers.find((candidate) => candidate.id === id);
+    return layer && (layer.side === side || layer.side === "NA");
+  });
+}
+
+export function sameLayerIds(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  const rightIds = new Set(right);
+  return left.every((value) => rightIds.has(value));
 }
 
 export function testPointFocusZoom(radiusNm: number | null) {

@@ -67,6 +67,7 @@ export interface DesignSummary {
 
 export interface TestPointCandidate {
   id: string;
+  side: "TOP" | "BOTTOM" | "INNER" | "NA";
   center: { x: number; y: number };
   radius_nm: number | null;
   net_name: string | null;

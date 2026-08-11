@@ -32,12 +32,21 @@ pub fn parse_odb(
             (path, relative)
         })
         .collect::<Vec<_>>();
-    let matrix = relative_files
+    let matrix_source = relative_files
         .iter()
-        .find(|(_, relative)| relative.eq_ignore_ascii_case("matrix/matrix"))
+        .find(|(_, relative)| is_odb_matrix_path(relative));
+    let matrix = matrix_source
         .and_then(|(path, _)| fs::read_to_string(path).ok())
         .map(|text| parse_matrix(&text))
         .unwrap_or_default();
+    if matrix_source.is_none() {
+        design.diagnostics.push(diagnostic(
+            "ODB_MATRIX_MISSING",
+            Severity::Warning,
+            "ODB++ matrix/matrix was not found; layer sides cannot be trusted and surface-bound distance checks will remain REVIEW",
+            None,
+        ));
+    }
     let selected_step = select_primary_step(&relative_files, &matrix);
     let custom_symbol_dimensions =
         load_custom_symbol_dimensions(&relative_files, &mut design.diagnostics);
@@ -862,8 +871,12 @@ fn parse_components(
     let mut active_test_point_toeprints = 0_usize;
     for raw in text.lines() {
         let line = raw.trim();
-        if line.eq_ignore_ascii_case("UNITS=MM") {
+        if line.eq_ignore_ascii_case("UNITS=MM") || line.eq_ignore_ascii_case("U MM") {
             scale = 1_000_000.0;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("UNITS=INCH") || line.eq_ignore_ascii_case("U INCH") {
+            scale = 25_400_000.0;
             continue;
         }
         let parts = line.split_whitespace().collect::<Vec<_>>();
@@ -1138,7 +1151,7 @@ fn reconcile_test_point_geometry(
         point.layer_id = Some(best.3.to_owned());
         point.geometry_source = Some(best.4.to_owned());
     }
-    deduplicate_test_points(test_points);
+    deduplicate_test_points(layers, test_points);
     if unresolved > 0 {
         diagnostics.push(diagnostic(
             "ODB_TEST_POINT_GEOMETRY_UNRESOLVED",
@@ -1161,7 +1174,7 @@ fn reconcile_test_point_geometry(
     }
 }
 
-fn deduplicate_test_points(points: &mut Vec<TestPoint>) {
+fn deduplicate_test_points(layers: &[Layer], points: &mut Vec<TestPoint>) {
     points.sort_by_key(|point| match point.confidence {
         CoverageLevel::Explicit => 0,
         CoverageLevel::Supplemented => 1,
@@ -1170,8 +1183,15 @@ fn deduplicate_test_points(points: &mut Vec<TestPoint>) {
     });
     let mut deduplicated = Vec::<TestPoint>::new();
     for point in points.drain(..) {
+        let point_side = test_point_side_from_layers(layers, &point);
         let duplicate = deduplicated.iter_mut().find(|known| {
-            known.center.distance_sq(point.center) <= 25_000_i128.pow(2)
+            let known_side = test_point_side_from_layers(layers, known);
+            let same_surface = match (known_side, point_side) {
+                (Side::Top | Side::Bottom, Side::Top | Side::Bottom) => known_side == point_side,
+                _ => known.layer_id.is_some() && known.layer_id == point.layer_id,
+            };
+            same_surface
+                && known.center.distance_sq(point.center) <= 25_000_i128.pow(2)
                 && (known.component_ref == point.component_ref
                     || known.net_name == point.net_name
                     || known.component_ref.is_none()
@@ -1194,6 +1214,19 @@ fn deduplicate_test_points(points: &mut Vec<TestPoint>) {
         }
     }
     *points = deduplicated;
+}
+
+fn test_point_side_from_layers(layers: &[Layer], point: &TestPoint) -> Side {
+    point
+        .layer_id
+        .as_deref()
+        .and_then(|layer_id| layers.iter().find(|layer| layer.id == layer_id))
+        .map_or(Side::Na, |layer| layer.side)
+}
+
+fn is_odb_matrix_path(relative: &str) -> bool {
+    let normalized = relative.replace('\\', "/").to_ascii_lowercase();
+    normalized == "matrix/matrix" || normalized.ends_with("/matrix/matrix")
 }
 
 fn odb_layer_name(relative: &str) -> Option<String> {

@@ -218,9 +218,11 @@ fn eligible_pair(
     if source.id == target.id {
         return false;
     }
-    if matches!(source.side, Side::Top | Side::Bottom)
-        && matches!(target.side, Side::Top | Side::Bottom)
-        && source.side != target.side
+    if entity_is_surface_bound(source.kind)
+        && entity_is_surface_bound(target.kind)
+        && (!matches!(source.side, Side::Top | Side::Bottom)
+            || !matches!(target.side, Side::Top | Side::Bottom)
+            || source.side != target.side)
     {
         return false;
     }
@@ -232,6 +234,18 @@ fn eligible_pair(
         return false;
     }
     true
+}
+
+fn entity_is_surface_bound(kind: EntityKind) -> bool {
+    matches!(
+        kind,
+        EntityKind::TestPoint
+            | EntityKind::Component
+            | EntityKind::Copper
+            | EntityKind::BgaCsp
+            | EntityKind::ShieldFence
+            | EntityKind::UvGlue
+    )
 }
 
 fn evaluate_width(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> Vec<Violation> {
@@ -549,7 +563,17 @@ fn entities(design: &Design, kind: EntityKind) -> Vec<GeometryRef<'_>> {
 fn test_point_side(design: &Design, point: &crate::model::TestPoint) -> Side {
     test_point_layer_id(design, point)
         .and_then(|layer_id| design.layers.iter().find(|layer| layer.id == layer_id))
-        .map_or(Side::Na, |layer| layer.side)
+        .map(|layer| layer.side)
+        .or_else(|| {
+            point.component_ref.as_deref().and_then(|reference| {
+                design
+                    .components
+                    .iter()
+                    .find(|component| component.refdes == reference)
+                    .map(|component| component.side)
+            })
+        })
+        .unwrap_or(Side::Na)
 }
 
 fn test_point_layer_id<'a>(
@@ -1049,7 +1073,18 @@ fn confirmed_severity(rule: &RuleDefinition) -> Severity {
 
 fn coverage_for(design: &Design, kind: EntityKind) -> CoverageLevel {
     match kind {
-        EntityKind::TestPoint => design.coverage.test_points,
+        EntityKind::TestPoint => {
+            if design.test_points.iter().any(|test_point| {
+                !matches!(
+                    test_point_side(design, test_point),
+                    Side::Top | Side::Bottom
+                )
+            }) {
+                design.coverage.test_points.weakest(CoverageLevel::Inferred)
+            } else {
+                design.coverage.test_points
+            }
+        }
         EntityKind::Component => {
             if entities(design, EntityKind::Component).is_empty() {
                 CoverageLevel::Missing
@@ -1095,9 +1130,22 @@ fn coverage_for(design: &Design, kind: EntityKind) -> CoverageLevel {
 }
 
 fn required_coverage(design: &Design, rule: &RuleDefinition) -> CoverageLevel {
-    rule.target
+    let mut coverage = rule
+        .target
         .map(|target| coverage_for(design, rule.source).weakest(coverage_for(design, target)))
-        .unwrap_or_else(|| coverage_for(design, rule.source))
+        .unwrap_or_else(|| coverage_for(design, rule.source));
+    if rule.kind == RuleKind::MinimumDistance {
+        for kind in std::iter::once(rule.source).chain(rule.target) {
+            if entity_is_surface_bound(kind)
+                && entities(design, kind)
+                    .iter()
+                    .any(|entity| !matches!(entity.side, Side::Top | Side::Bottom))
+            {
+                coverage = coverage.weakest(CoverageLevel::Inferred);
+            }
+        }
+    }
+    coverage
 }
 
 fn nm_mm(value: i64) -> f64 {
@@ -1127,7 +1175,13 @@ mod tests {
                 max_x: 10_000_000,
                 max_y: 10_000_000,
             },
-            layers: Vec::new(),
+            layers: vec![Layer {
+                id: "top".into(),
+                name: "Top".into(),
+                function: "SIGNAL".into(),
+                side: Side::Top,
+                features: Vec::new(),
+            }],
             components: Vec::new(),
             nets: vec!["A".into(), "B".into()],
             test_points: vec![
@@ -1141,7 +1195,7 @@ mod tests {
                     net_name: Some("A".into()),
                     component_ref: None,
                     confidence: CoverageLevel::Explicit,
-                    layer_id: None,
+                    layer_id: Some("top".into()),
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
                     confirmation: None,
@@ -1156,7 +1210,7 @@ mod tests {
                     net_name: Some("B".into()),
                     component_ref: None,
                     confidence: CoverageLevel::Explicit,
-                    layer_id: None,
+                    layer_id: Some("top".into()),
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
                     confirmation: None,
@@ -1236,7 +1290,13 @@ mod tests {
                 max_x: 10_000_000,
                 max_y: 10_000_000,
             },
-            layers: Vec::new(),
+            layers: vec![Layer {
+                id: "top".into(),
+                name: "Top".into(),
+                function: "SIGNAL".into(),
+                side: Side::Top,
+                features: Vec::new(),
+            }],
             components: Vec::new(),
             nets: vec!["A".into(), "B".into()],
             test_points: vec![
@@ -1250,7 +1310,7 @@ mod tests {
                     net_name: Some("A".into()),
                     component_ref: Some("TP1".into()),
                     confidence: CoverageLevel::Inferred,
-                    layer_id: None,
+                    layer_id: Some("top".into()),
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
                     confirmation: None,
@@ -1265,7 +1325,7 @@ mod tests {
                     net_name: Some("B".into()),
                     component_ref: Some("TP2".into()),
                     confidence: CoverageLevel::Inferred,
-                    layer_id: None,
+                    layer_id: Some("top".into()),
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
                     confirmation: None,
@@ -1636,7 +1696,13 @@ mod tests {
                 max_x: 10_000_000,
                 max_y: 10_000_000,
             },
-            layers: Vec::new(),
+            layers: vec![Layer {
+                id: "top".into(),
+                name: "Top".into(),
+                function: "SIGNAL".into(),
+                side: Side::Top,
+                features: Vec::new(),
+            }],
             components: Vec::new(),
             nets: Vec::new(),
             test_points: (0..4)
@@ -1650,7 +1716,7 @@ mod tests {
                     net_name: None,
                     component_ref: Some(format!("MTP{index}")),
                     confidence: CoverageLevel::Inferred,
-                    layer_id: None,
+                    layer_id: Some("top".into()),
                     source: "fixture".into(),
                     geometry_source: None,
                     confirmation: None,

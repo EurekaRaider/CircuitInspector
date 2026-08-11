@@ -59,6 +59,7 @@ export class BoardRenderer {
     opacity: WebGLUniformLocation | null;
   };
   #boardVertexCount = 0;
+  #tilePath: string | null = null;
   #overlayVertexCount = 0;
   #overlayViolation: Violation | null = null;
   #overlayTestPoint: TestPointCandidate | null = null;
@@ -88,6 +89,12 @@ export class BoardRenderer {
   }
 
   setTile(tile: TilePayload | null): void {
+    const tilePath = tile?.path ?? null;
+    if (tilePath === this.#tilePath) {
+      this.draw();
+      return;
+    }
+    this.#tilePath = tilePath;
     const vertices = tile ? decodeTile(tile.bytes, tile.lod) : new Float32Array();
     this.#boardVertexCount = vertices.length / FLOATS_PER_VERTEX;
     this.#upload(this.#boardBuffer, vertices, this.#gl.STATIC_DRAW);

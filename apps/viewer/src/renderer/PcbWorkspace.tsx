@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardCanvas, type BoardCanvasHandle } from "./BoardCanvas";
 import { DocumentAnalysisScreen } from "./DocumentAnalysisScreen";
 import { translate, type Locale, type Translator } from "./i18n";
-import { defaultLayerIds, isolatedLayerIds, layerIdsForTestPoint, layerIdsForViolation, testPointFocusZoom, violationFocusZoom, violationHasLocation } from "./pcb-layers";
+import { defaultLayerIds, isolatedLayerIds, layerIdsForTestPoint, layerIdsForViolation, layerIdsOnSurface, sameLayerIds, surfaceSideForLayerIds, testPointFocusZoom, testPointSurfaceSide, violationFocusZoom, violationHasLocation, type SurfaceSide } from "./pcb-layers";
 import { findingVerdictCounts, inferredTestPointsForViolation, reviewRoute, type ReviewRoute } from "./pcb-review";
 import { selectApprovedRulePack } from "./rule-catalog";
 import type {
@@ -50,20 +50,25 @@ interface Props {
 }
 
 type BusyAction = "ANALYSIS" | "TEST_POINT_REVIEW" | null;
+type SurfaceValue<T> = Record<SurfaceSide, T>;
+
+const SURFACE_SIDES: SurfaceSide[] = ["TOP", "BOTTOM"];
 
 export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesignId, onCatalogChanged, onOpenRuleLibrary, onReviewWiring }: Props) {
-  const canvasRef = useRef<BoardCanvasHandle>(null);
-  const tileRequest = useRef(0);
-  const lastTileRequestKey = useRef("");
-  const viewportRef = useRef<{ designId: string; viewport: BoundsNm; zoom: number } | undefined>(undefined);
+  const topCanvasRef = useRef<BoardCanvasHandle>(null);
+  const bottomCanvasRef = useRef<BoardCanvasHandle>(null);
+  const tileRequest = useRef<SurfaceValue<number>>({ TOP: 0, BOTTOM: 0 });
+  const lastTileRequestKey = useRef<SurfaceValue<string>>({ TOP: "", BOTTOM: "" });
+  const viewportRef = useRef<SurfaceValue<{ designId: string; viewport: BoundsNm; zoom: number } | undefined>>({ TOP: undefined, BOTTOM: undefined });
+  const tileCacheRef = useRef(new Map<string, TilePayload>());
   const pointerRef = useRef({ xMm: 0, yMm: 0, zoom: 0 });
   const pointerPositionElementRef = useRef<HTMLSpanElement>(null);
   const pointerZoomElementRef = useRef<HTMLSpanElement>(null);
   const testPointReviewRef = useRef<HTMLDivElement>(null);
   const t = useMemo<Translator>(() => (key, variables) => translate(locale, key, variables), [locale]);
   const [design, setDesign] = useState<DesignSummary>();
-  const [tile, setTile] = useState<TilePayload | null>(null);
-  const [enabledLayers, setEnabledLayers] = useState<string[]>([]);
+  const [tiles, setTiles] = useState<SurfaceValue<TilePayload | null>>({ TOP: null, BOTTOM: null });
+  const [enabledLayers, setEnabledLayers] = useState<SurfaceValue<string[]>>({ TOP: [], BOTTOM: [] });
   const [analysis, setAnalysis] = useState<AnalysisSummary>();
   const [initialViolationFocus, setInitialViolationFocus] = useState<Violation | null>(null);
   const [documentAnalysis, setDocumentAnalysis] = useState<DocumentAnalysis>();
@@ -145,15 +150,24 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     if (!design) return;
     queueMicrotask(() => {
       if (initialViolationFocus) focusViolation(initialViolationFocus, design);
-      else canvasRef.current?.fit();
+      else {
+        topCanvasRef.current?.fit();
+        bottomCanvasRef.current?.fit();
+      }
     });
-  }, [design, initialViolationFocus]);
+  }, [design?.id, initialViolationFocus?.id]);
 
   function showDesign(summary: DesignSummary, focusedViolation: Violation | null = null) {
-    lastTileRequestKey.current = "";
-    setTile(null);
+    lastTileRequestKey.current = { TOP: "", BOTTOM: "" };
+    tileRequest.current.TOP += 1;
+    tileRequest.current.BOTTOM += 1;
+    tileCacheRef.current.clear();
+    setTiles({ TOP: null, BOTTOM: null });
     setViewSide("TOP");
-    setEnabledLayers(defaultLayerIds(summary.layers, "TOP"));
+    setEnabledLayers({
+      TOP: defaultLayerIds(summary.layers, "TOP"),
+      BOTTOM: defaultLayerIds(summary.layers, "BOTTOM")
+    });
     setActiveTestPoint(null);
     setInitialViolationFocus(focusedViolation);
     setDesign(summary);
@@ -177,35 +191,47 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       .catch((cause) => setError(message(cause)));
   }
 
-  function switchViewSide() {
-    if (!design) return;
-    const side = viewSide === "TOP" ? "BOTTOM" : "TOP";
-    setViewSide(side);
-    setEnabledLayers(defaultLayerIds(design.layers, side));
-    setActiveTestPoint(null);
+  function canvasForSide(side: SurfaceSide) {
+    return side === "TOP" ? topCanvasRef.current : bottomCanvasRef.current;
+  }
+
+  function updateSurfaceLayers(side: SurfaceSide, next: string[]) {
+    if (sameLayerIds(enabledLayers[side], next)) return false;
+    setEnabledLayers((current) => ({ ...current, [side]: next }));
+    return true;
   }
 
   function selectLayer(layer: LayerSummary, additive: boolean) {
     if (!design) return;
     setActiveTestPoint(null);
-    if (layer.side === "TOP" || layer.side === "BOTTOM") setViewSide(layer.side);
-    setEnabledLayers((current) => additive
+    const side = layer.side === "TOP" || layer.side === "BOTTOM" ? layer.side : viewSide;
+    setViewSide(side);
+    const current = enabledLayers[side];
+    const next = additive
       ? current.includes(layer.id) ? current.filter((id) => id !== layer.id) : [...current, layer.id]
-      : isolatedLayerIds(design.layers, layer.id));
+      : isolatedLayerIds(design.layers, layer.id);
+    updateSurfaceLayers(side, layerIdsOnSurface(design.layers, next, side));
   }
 
   function focusTestPoint(point: TestPointCandidate) {
     if (!design) return;
-    const sourceLayers = layerIdsForTestPoint(design.layers, point);
-    if (sourceLayers.length) {
-      setEnabledLayers(sourceLayers);
-      const side = design.layers.find((layer) => sourceLayers.includes(layer.id) && (layer.side === "TOP" || layer.side === "BOTTOM"))?.side;
-      if (side === "TOP" || side === "BOTTOM") setViewSide(side);
+    const side = testPointSurfaceSide(design.layers, point);
+    if (!side) {
+      setError(locale === "zh-CN" ? "该测试点没有可确认的 Top/Bottom 面别，已停止定位，避免跨面显示和比较。" : "This test point has no confirmed Top/Bottom side. Focus was stopped to avoid cross-side display and comparison.");
+      return;
     }
+    const sourceLayers = layerIdsOnSurface(design.layers, layerIdsForTestPoint(design.layers, point), side);
+    const layersChanged = sourceLayers.length > 0 && updateSurfaceLayers(side, sourceLayers);
+    setViewSide(side);
     setActiveViolation(null);
     setPicked(null);
     setActiveTestPoint(point);
-    canvasRef.current?.focus(point.center.x, point.center.y, testPointFocusZoom(point.radius_nm));
+    const zoom = testPointFocusZoom(point.radius_nm);
+    const canvas = canvasForSide(side);
+    canvas?.focus(point.center.x, point.center.y, zoom, false);
+    const viewport = canvas?.viewport();
+    if (viewport) viewportRef.current[side] = { designId: design.id, viewport: viewport.bounds, zoom: viewport.zoom };
+    if (layersChanged) window.requestAnimationFrame(() => canvasForSide(side)?.focus(point.center.x, point.center.y, zoom, true));
   }
 
   function focusViolation(violation: Violation, currentDesign = design) {
@@ -214,12 +240,16 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     setPicked(null);
     if (!currentDesign || !violationHasLocation(violation)) return;
     const sourceLayers = layerIdsForViolation(currentDesign.layers, violation, testPoints);
-    if (sourceLayers.length) {
-      setEnabledLayers(sourceLayers);
-      const side = currentDesign.layers.find((layer) => sourceLayers.includes(layer.id) && (layer.side === "TOP" || layer.side === "BOTTOM"))?.side;
-      if (side === "TOP" || side === "BOTTOM") setViewSide(side);
-    }
-    canvasRef.current?.focus(violation.x_nm, violation.y_nm, violationFocusZoom(violation));
+    const side = surfaceSideForLayerIds(currentDesign.layers, sourceLayers) ?? viewSide;
+    const visibleLayers = layerIdsOnSurface(currentDesign.layers, sourceLayers, side);
+    const layersChanged = visibleLayers.length > 0 && updateSurfaceLayers(side, visibleLayers);
+    setViewSide(side);
+    const zoom = violationFocusZoom(violation);
+    const canvas = canvasForSide(side);
+    canvas?.focus(violation.x_nm, violation.y_nm, zoom, false);
+    const viewport = canvas?.viewport();
+    if (viewport) viewportRef.current[side] = { designId: currentDesign.id, viewport: viewport.bounds, zoom: viewport.zoom };
+    if (layersChanged) window.requestAnimationFrame(() => canvasForSide(side)?.focus(violation.x_nm, violation.y_nm, zoom, true));
   }
 
   function openTestPointReview(violation: Violation) {
@@ -282,33 +312,48 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   }
 
   const requestTile = useCallback(
-    async (viewport: BoundsNm, zoom: number) => {
+    async (side: SurfaceSide, viewport: BoundsNm, zoom: number) => {
       if (!design) return;
       const lod = zoom < 8 ? 2 : zoom < 30 ? 1 : 0;
+      const layerIds = enabledLayers[side];
       const requestKey = [
         design.id,
+        side,
         viewport.min_x,
         viewport.min_y,
         viewport.max_x,
         viewport.max_y,
-        enabledLayers.join(","),
+        [...layerIds].sort().join(","),
         lod
       ].join(":");
-      if (requestKey === lastTileRequestKey.current) return;
-      lastTileRequestKey.current = requestKey;
-      const request = ++tileRequest.current;
+      if (requestKey === lastTileRequestKey.current[side]) return;
+      lastTileRequestKey.current[side] = requestKey;
+      const request = ++tileRequest.current[side];
+      const cached = tileCacheRef.current.get(requestKey);
+      if (cached) {
+        setTiles((current) => current[side]?.path === cached.path ? current : { ...current, [side]: cached });
+        return;
+      }
       try {
         const payload = await window.circuitInspector.getTile({
           design_id: design.id,
           viewport,
-          layer_ids: enabledLayers,
+          layer_ids: layerIds,
           lod,
           max_features: 500_000
         });
-        if (request === tileRequest.current) setTile(payload);
+        if (request === tileRequest.current[side]) {
+          tileCacheRef.current.set(requestKey, payload);
+          while (tileCacheRef.current.size > 8) {
+            const oldest = tileCacheRef.current.keys().next().value;
+            if (oldest == null) break;
+            tileCacheRef.current.delete(oldest);
+          }
+          setTiles((current) => ({ ...current, [side]: payload }));
+        }
       } catch (cause) {
-        if (request === tileRequest.current) {
-          lastTileRequestKey.current = "";
+        if (request === tileRequest.current[side]) {
+          lastTileRequestKey.current[side] = "";
           setError(message(cause));
         }
       }
@@ -326,16 +371,26 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     }
   }, [t]);
 
-  const handleViewportChange = useCallback((viewport: BoundsNm, zoom: number) => {
-    if (design) viewportRef.current = { designId: design.id, viewport, zoom };
+  const handleViewportChange = useCallback((side: SurfaceSide, viewport: BoundsNm, zoom: number) => {
+    if (design) viewportRef.current[side] = { designId: design.id, viewport, zoom };
     updatePointerStatus({ ...pointerRef.current, zoom });
-    void requestTile(viewport, zoom);
+    void requestTile(side, viewport, zoom);
   }, [design, requestTile, updatePointerStatus]);
 
+  const handleTopViewportChange = useCallback((viewport: BoundsNm, zoom: number) => {
+    handleViewportChange("TOP", viewport, zoom);
+  }, [handleViewportChange]);
+
+  const handleBottomViewportChange = useCallback((viewport: BoundsNm, zoom: number) => {
+    handleViewportChange("BOTTOM", viewport, zoom);
+  }, [handleViewportChange]);
+
   useEffect(() => {
-    const current = viewportRef.current;
-    if (!design || !current || current.designId !== design.id) return;
-    void requestTile(current.viewport, current.zoom);
+    if (!design) return;
+    for (const side of SURFACE_SIDES) {
+      const current = viewportRef.current[side];
+      if (current?.designId === design.id) void requestTile(side, current.viewport, current.zoom);
+    }
   }, [design?.id, enabledLayers, requestTile]);
 
   async function runAnalysis() {
@@ -412,20 +467,30 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     }
   }
 
-  const pickObject = useCallback(async (point: { xMm: number; yMm: number }) => {
+  const pickObject = useCallback(async (side: SurfaceSide, point: { xMm: number; yMm: number }) => {
     if (!design) return;
     try {
+      setViewSide(side);
       const toleranceNm = Math.round(Math.max(30_000, 8 / Math.max(pointerRef.current.zoom, 0.02) * 1_000_000));
       const result = await window.circuitInspector.pickDesign({
         design_id: design.id,
         point: { x: Math.round(point.xMm * 1_000_000), y: Math.round(point.yMm * 1_000_000) },
+        layer_ids: enabledLayers[side],
         tolerance_nm: toleranceNm
       });
       setPicked(result.results[0] ?? null);
     } catch (cause) {
       setError(message(cause));
     }
-  }, [design]);
+  }, [design, enabledLayers]);
+
+  const pickTopObject = useCallback((point: { xMm: number; yMm: number }) => {
+    void pickObject("TOP", point);
+  }, [pickObject]);
+
+  const pickBottomObject = useCallback((point: { xMm: number; yMm: number }) => {
+    void pickObject("BOTTOM", point);
+  }, [pickObject]);
 
   async function filterViolations() {
     if (!analysis) return;
@@ -481,7 +546,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       });
       setTestPoints(result.test_points);
       setConfirmedTestPointReport(result.confirmed_test_points_report);
-      showDesign(result.summary);
+      setDesign(result.summary);
       if (priorRulePackId) {
         const refreshed = await window.circuitInspector.runAnalysis(result.summary.id, priorRulePackId);
         setAnalysis(refreshed);
@@ -503,8 +568,28 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
 
   const violations = queriedViolations ?? analysis?.violations ?? [];
   const findingCounts = findingVerdictCounts(violations);
-  const inferredTestPoints = testPoints.filter((point) => point.confidence === "INFERRED");
-  const confirmedTestPointCount = testPoints.filter((point) => point.confidence === "EXPLICIT").length;
+  const testPointSummary = useMemo(() => {
+    const inferred: TestPointCandidate[] = [];
+    let confirmed = 0;
+    let top = 0;
+    let bottom = 0;
+    for (const point of testPoints) {
+      if (point.confidence === "INFERRED") inferred.push(point);
+      if (point.confidence === "EXPLICIT") confirmed += 1;
+      const side = testPointSurfaceSide(design?.layers ?? [], point);
+      if (side === "TOP") top += 1;
+      if (side === "BOTTOM") bottom += 1;
+    }
+    return { inferred, confirmed, top, bottom };
+  }, [design?.id, design?.layers, testPoints]);
+  const inferredTestPoints = testPointSummary.inferred;
+  const confirmedTestPointCount = testPointSummary.confirmed;
+  const topTestPointCount = testPointSummary.top;
+  const bottomTestPointCount = testPointSummary.bottom;
+  const activeTestPointSide = activeTestPoint && design ? testPointSurfaceSide(design.layers, activeTestPoint) : null;
+  const activeViolationSide = activeViolation && design
+    ? surfaceSideForLayerIds(design.layers, layerIdsForViolation(design.layers, activeViolation, testPoints)) ?? viewSide
+    : viewSide;
   const sourceName = design?.source_path.split(/[\\/]/).at(-1);
   const progressLabel = busyAction === "TEST_POINT_REVIEW"
     ? analysis
@@ -571,21 +656,13 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
           >
             {locale === "zh-CN" ? "EN" : "中"}
           </button>
-          <ToolbarButton label={t("fitBoard")} onClick={() => canvasRef.current?.fit()} disabled={!design}>
+          <ToolbarButton label={t("fitBoard")} onClick={() => { topCanvasRef.current?.fit(); bottomCanvasRef.current?.fit(); }} disabled={!design}>
             <ArrowsOutSimpleIcon size={16} />
           </ToolbarButton>
           <ToolbarButton label={t("measure")} active={measureMode} onClick={() => setMeasureMode((value) => !value)} disabled={!design}>
             <RulerIcon size={16} />
           </ToolbarButton>
-          <button
-            className="icon-button min-w-[3.4rem] px-2 font-mono text-[9px] tracking-[0.035em]"
-            title={t("switchSide")}
-            aria-label={t("switchSide")}
-            disabled={!design}
-            onClick={switchViewSide}
-          >
-            {viewSide === "TOP" ? "TOP" : "BOTTOM"}
-          </button>
+          <div className="grid h-9 min-w-[6.4rem] grid-cols-2 overflow-hidden rounded-lg border border-white/[0.08] bg-[#101214] font-mono text-[8px] tracking-[0.035em] text-[#777875]" aria-label={locale === "zh-CN" ? "Top 与 Bottom 双面视图" : "Top and Bottom split view"}><span className={`grid place-items-center ${viewSide === "TOP" ? "bg-[#c5a063]/10 text-[#d7b474]" : ""}`}>TOP</span><span className={`grid place-items-center border-l border-white/[0.07] ${viewSide === "BOTTOM" ? "bg-[#c5a063]/10 text-[#d7b474]" : ""}`}>BOTTOM</span></div>
           <button className="primary-button ml-0.5" onClick={() => void chooseDesign()} disabled={busy}>
             <FolderOpenIcon size={16} />
             {t("openDesign")}
@@ -611,7 +688,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
               <div className="border-b border-white/[0.065] px-3 py-3">
                 <div className="mb-2 px-2 text-[9px] leading-4 text-[#696a67]">{locale === "zh-CN" ? "单击仅查看该层；Shift+单击可叠加多层。" : "Click for a single-layer view; Shift-click to stack layers."}</div>
                 {design.layers.map((layer, index) => {
-                  const checked = enabledLayers.includes(layer.id);
+                  const checked = enabledLayers[viewSide].includes(layer.id);
                   return (
                     <button
                       key={layer.id}
@@ -647,9 +724,9 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                   {busyAction === "TEST_POINT_REVIEW" && <div role="status" className="mb-2 flex items-center gap-2 rounded-md border border-[#c5a063]/20 bg-[#c5a063]/[0.045] px-2 py-2 text-[9px] leading-4 text-[#b99a65]"><CircleNotchIcon size={12} className="shrink-0 animate-spin" />{analysis ? (locale === "zh-CN" ? "正在保存身份结论、更新 MD，并用原规则包重新分析" : "Saving identity decisions, updating the MD, and rerunning the prior rule pack") : (locale === "zh-CN" ? "正在保存身份结论并更新 MD" : "Saving identity decisions and updating the MD")}</div>}
                   <div className="max-h-64 space-y-1 overflow-y-auto">
                     {inferredTestPoints.map((point) => (
-                      <div key={point.id} className={`rounded-lg border px-2 py-2 text-[10px] text-[#9b9c98] ${activeTestPoint?.id === point.id ? "border-[#d2b173]/55 bg-[#d2b173]/[0.07]" : "border-white/[0.06]"}`}>
+                      <div key={point.id} style={{ contentVisibility: "auto", containIntrinsicSize: "0 156px" }} className={`rounded-lg border px-2 py-2 text-[10px] text-[#9b9c98] ${activeTestPoint?.id === point.id ? "border-[#d2b173]/55 bg-[#d2b173]/[0.07]" : "border-white/[0.06]"}`}>
                         <button className="block w-full truncate text-left font-mono text-[#d2b173]" onClick={() => focusTestPoint(point)}>{point.component_ref ?? point.id}</button>
-                        <div className="mt-1 truncate">{point.net_name ?? "NET -"}</div>
+                        <div className="mt-1 truncate">{point.net_name ?? "NET -"} · {point.side}</div>
                         <TestPointReviewEvidence point={point} locale={locale} />
                         <div className="mt-2 grid grid-cols-2 gap-1"><button className="secondary-button h-7 px-1 text-[8px]" disabled={busy} title={locale === "zh-CN" ? "确认该候选确实是测试点；是否符合规则由重新分析决定" : "Confirm that this candidate is a test point; rule compliance is decided by reanalysis"} onClick={() => void reviewTestPoints([point.id])}>{locale === "zh-CN" ? "确认为测试点" : "Confirm identity"}</button><button className="secondary-button h-7 px-1 text-[8px]" disabled={busy} title={locale === "zh-CN" ? "确认该候选不是测试点，并从当前设计缓存移除" : "Confirm this candidate is not a test point and remove it from the current design cache"} onClick={() => { if (window.confirm(locale === "zh-CN" ? "确认该候选不是测试点？它将从当前设计缓存中移除；这不代表规则 PASS。" : "Confirm this candidate is not a test point? It will be removed from the current design cache; this does not mean the rule passes.")) void reviewTestPoints([], [point.id]); }}>{locale === "zh-CN" ? "不是测试点" : "Not a test point"}</button></div>
                       </div>
@@ -664,30 +741,50 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
 
         <div className="canvas-stage relative min-h-0 overflow-hidden">
           {design ? (
-            <BoardCanvas
-              ref={canvasRef}
-              bounds={design.bounds}
-              tile={tile}
-              activeViolation={violationHasLocation(activeViolation) ? activeViolation : null}
-              activeTestPoint={activeTestPoint}
-              mirrored={viewSide === "BOTTOM"}
-              measureMode={measureMode}
-              onViewportChange={handleViewportChange}
-              onPointerWorld={updatePointerStatus}
-              onMeasure={setMeasureDistance}
-              onPick={pickObject}
-            />
+            <div className="grid size-full grid-cols-2 gap-px bg-white/[0.08]">
+              <div className={`relative min-w-0 overflow-hidden bg-[#111416] ring-inset ${viewSide === "TOP" ? "ring-1 ring-[#c5a063]/35" : ""}`} onPointerDownCapture={() => setViewSide("TOP")}>
+                <BoardCanvas
+                  ref={topCanvasRef}
+                  bounds={design.bounds}
+                  tile={tiles.TOP}
+                  activeViolation={activeViolationSide === "TOP" && violationHasLocation(activeViolation) ? activeViolation : null}
+                  activeTestPoint={activeTestPointSide === "TOP" ? activeTestPoint : null}
+                  mirrored={false}
+                  measureMode={measureMode}
+                  onViewportChange={handleTopViewportChange}
+                  onPointerWorld={updatePointerStatus}
+                  onMeasure={setMeasureDistance}
+                  onPick={pickTopObject}
+                />
+                <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-white/[0.09] bg-[#101315]/90 px-2.5 py-1.5 font-mono text-[8px] text-[#b8b5ae] backdrop-blur-md">TOP · {topTestPointCount} TP<br /><span className="text-[#737570]">{locale === "zh-CN" ? "从板顶外侧观看" : "VIEWED FROM TOP"}</span></div>
+              </div>
+              <div className={`relative min-w-0 overflow-hidden bg-[#111416] ring-inset ${viewSide === "BOTTOM" ? "ring-1 ring-[#c5a063]/35" : ""}`} onPointerDownCapture={() => setViewSide("BOTTOM")}>
+                <BoardCanvas
+                  ref={bottomCanvasRef}
+                  bounds={design.bounds}
+                  tile={tiles.BOTTOM}
+                  activeViolation={activeViolationSide === "BOTTOM" && violationHasLocation(activeViolation) ? activeViolation : null}
+                  activeTestPoint={activeTestPointSide === "BOTTOM" ? activeTestPoint : null}
+                  mirrored
+                  measureMode={measureMode}
+                  onViewportChange={handleBottomViewportChange}
+                  onPointerWorld={updatePointerStatus}
+                  onMeasure={setMeasureDistance}
+                  onPick={pickBottomObject}
+                />
+                <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-white/[0.09] bg-[#101315]/90 px-2.5 py-1.5 font-mono text-[8px] text-[#b8b5ae] backdrop-blur-md">BOTTOM · {bottomTestPointCount} TP<br /><span className="text-[#737570]">{locale === "zh-CN" ? "镜像 · 从板底外侧观看" : "MIRRORED · VIEWED FROM BOTTOM"}</span></div>
+              </div>
+            </div>
           ) : (
             <EmptyCanvas onOpen={() => void chooseDesign()} t={t} />
           )}
-          {design && <div className="pointer-events-none absolute right-5 top-5 rounded-lg border border-white/[0.09] bg-[#101315]/90 px-3 py-2 font-mono text-[9px] text-[#b8b5ae] backdrop-blur-md">{viewSide} TEST CONTACT VIEW · {viewSide === "BOTTOM" ? (locale === "zh-CN" ? "已镜像 · 从板底外侧观看" : "MIRRORED · VIEWED FROM BOTTOM OUTSIDE") : (locale === "zh-CN" ? "未镜像 · 从板顶外侧观看" : "UNMIRRORED · VIEWED FROM TOP OUTSIDE")}</div>}
           {busy && <LoadingRail label={progressLabel} progress={progress?.progress ?? 12} />}
           {activeTestPoint && (
             <div className="popover-surface absolute left-1/2 top-5 flex max-w-[min(680px,calc(100%-40px))] -translate-x-1/2 items-center gap-3 rounded-xl px-4 py-3">
               <CrosshairIcon size={17} className="shrink-0 text-[#e0b86e]" />
               <div className="min-w-0">
                 <div className="truncate text-[11px] font-medium text-[#e7e0d4]">{locale === "zh-CN" ? "测试点定位" : "Test-point focus"} · {activeTestPoint.component_ref ?? activeTestPoint.id}</div>
-                <div className="mt-1 truncate font-mono text-[9px] text-[#878681]">{activeTestPoint.net_name ?? "NET -"} · X {(activeTestPoint.center.x / 1_000_000).toFixed(3)} mm · Y {(activeTestPoint.center.y / 1_000_000).toFixed(3)} mm</div>
+                <div className="mt-1 truncate font-mono text-[9px] text-[#878681]">{activeTestPoint.side} · {activeTestPoint.net_name ?? "NET -"} · X {(activeTestPoint.center.x / 1_000_000).toFixed(3)} mm · Y {(activeTestPoint.center.y / 1_000_000).toFixed(3)} mm</div>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[9px] text-[#d1ad6f]">
                   <span>{locale === "zh-CN" ? "测试点直径" : "Test-point diameter"} {formatNm(activeTestPoint.radius_nm == null ? null : activeTestPoint.radius_nm * 2)}</span>
                   <span>{locale === "zh-CN" ? "最近板边净距" : "Nearest board-edge clearance"} {formatNm(activeTestPoint.review_context?.board_edge.distance_nm)}</span>
@@ -727,7 +824,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                     className="reveal-row flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left text-[12px] text-[#d1d0cb] transition-colors hover:bg-white/5 active:translate-y-px"
                     style={{ animationDelay: `${Math.min(index, 12) * 30}ms` }}
                     onClick={() => {
-                      if (result.xNm != null && result.yNm != null) canvasRef.current?.focus(result.xNm, result.yNm);
+                      if (result.xNm != null && result.yNm != null) canvasForSide(viewSide)?.focus(result.xNm, result.yNm);
                       setSearchResults([]);
                     }}
                   >
@@ -785,7 +882,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
               <label className="mt-2 flex items-center gap-2 text-[9px] text-[#777b77]"><input type="checkbox" checked={bottomMirroredInTopView} onChange={(event) => setBottomMirroredInTopView(event.target.checked)} />{locale === "zh-CN" ? "Bottom 在 Top 坐标视图中为镜像；Bottom 接触视图仍从 Bottom 观看" : "Bottom is mirrored in Top coordinates; contact view is still viewed from Bottom"}</label>
               <button className="secondary-button mt-2 w-full" disabled={!design || !selectedTestPlan || !layoutOrigin.trim() || !panelStepRepeat.trim() || !layoutApprover.trim() || busy} onClick={() => void approveLayoutBaseline()}><CheckCircleIcon size={15} />{layoutBaseline && layoutBaseline.design_id === design?.id && layoutBaseline.test_plan_id === selectedTestPlan ? (locale === "zh-CN" ? "Layout 基线已批准" : "Layout baseline approved") : (locale === "zh-CN" ? "批准 Layout 基线" : "Approve Layout baseline")}</button>
               <button className="primary-button mt-2 w-full" disabled={!design || !selectedRulePack || !selectedTestPlan || layoutBaseline?.design_id !== design.id || layoutBaseline.test_plan_id !== selectedTestPlan || busy} onClick={() => void runTestAccessAnalysis()}><ShieldCheckIcon size={15} />{locale === "zh-CN" ? "运行 Layout DFT 闭环" : "Run Layout DFT closure"}</button>
-              <p className="mt-2 text-[9px] leading-4 text-[#70736f]">{locale === "zh-CN" ? "Viewer 默认显示当前外层接触面；分析仍读取全部层、钻孔、网络和语义。生产放行不会由静态 PASS 自动完成。" : "The Viewer defaults to the contact surface; analysis still reads all layers, drills, nets, and semantics. Static PASS never auto-releases production."}</p>
+              <p className="mt-2 text-[9px] leading-4 text-[#70736f]">{locale === "zh-CN" ? "Viewer 同时分面显示 Top 与 Bottom；面相关距离只在同面比较，板边和贯穿工装孔仍作为共享几何。生产放行不会由静态 PASS 自动完成。" : "The Viewer shows Top and Bottom separately. Surface-bound distances compare only within the same side; board edges and through tooling holes remain shared geometry. Static PASS never auto-releases production."}</p>
             </div>
             {rulePacks.some((pack) => pack.status === "DRAFT") && (
               <div className="mt-4 border-t border-white/[0.065] pt-3">

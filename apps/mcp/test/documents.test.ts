@@ -82,6 +82,28 @@ describe("rule document extraction", () => {
     expect(result.rulePack.review_items).toEqual([]);
   });
 
+  it("normalizes equivalent inch, mil, and millimeter limits without changing an explicit center metric", async () => {
+    const cache = await mkdtemp(path.join(os.tmpdir(), "circuit-inspector-rules-"));
+    temporaryDirectories.push(cache);
+    const fixture = path.join(cache, "dual-unit-spacing.md");
+    await writeFile(
+      fixture,
+      "Test point center-to-center spacing shall be at least 0.020 in (20 mil / 0.508 mm).",
+      "utf8"
+    );
+
+    const result = await extractRulePack([fixture], cache, "Dual-unit spacing");
+
+    expect(result.rulePack.rules).toHaveLength(1);
+    expect(result.rulePack.rules[0]).toMatchObject({
+      kind: "MINIMUM_DISTANCE",
+      source: "TEST_POINT",
+      target: "TEST_POINT",
+      metric: "CENTER_TO_CENTER",
+      threshold_nm: 508_000
+    });
+  });
+
   it("accepts a complete model-generated rule-source template and returns a clean validation result", async () => {
     const cache = await mkdtemp(path.join(os.tmpdir(), "circuit-inspector-rules-"));
     temporaryDirectories.push(cache);

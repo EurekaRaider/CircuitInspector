@@ -45,14 +45,14 @@ describe("PCB REVIEW routing", () => {
   });
 
   it("routes inferred test-point findings to candidate review", () => {
-    const point: TestPointCandidate = { id: "tp", center: { x: 1, y: 2 }, radius_nm: 3, net_name: null, component_ref: "TP1", confidence: "INFERRED", layer_id: null, source: "fixture", geometry_source: "fixture" };
+    const point: TestPointCandidate = { id: "tp", side: "TOP", center: { x: 1, y: 2 }, radius_nm: 3, net_name: null, component_ref: "TP1", confidence: "INFERRED", layer_id: null, source: "fixture", geometry_source: "fixture" };
     expect(reviewRoute({ ...baseViolation, message: "required entities are inferred" }, baseRule, [point])).toBe("TEST_POINT_REVIEW");
   });
 
   it("selects the candidate explicitly referenced by the finding instead of the first inferred point", () => {
     const points: TestPointCandidate[] = [
-      { id: "tp-first", center: { x: 1, y: 2 }, radius_nm: 3, net_name: "SENSE", component_ref: "TP1", confidence: "INFERRED", layer_id: "top", source: "fixture", geometry_source: "fixture" },
-      { id: "tp-related", center: { x: 3, y: 4 }, radius_nm: 3, net_name: "SENSE", component_ref: "TP2", confidence: "INFERRED", layer_id: "top", source: "fixture", geometry_source: "fixture" }
+      { id: "tp-first", side: "TOP", center: { x: 1, y: 2 }, radius_nm: 3, net_name: "SENSE", component_ref: "TP1", confidence: "INFERRED", layer_id: "top", source: "fixture", geometry_source: "fixture" },
+      { id: "tp-related", side: "TOP", center: { x: 3, y: 4 }, radius_nm: 3, net_name: "SENSE", component_ref: "TP2", confidence: "INFERRED", layer_id: "top", source: "fixture", geometry_source: "fixture" }
     ];
 
     expect(inferredTestPointsForViolation({ ...baseViolation, entity_ids: ["tp-related"] }, points).map((point) => point.id)).toEqual(["tp-related"]);
@@ -60,8 +60,8 @@ describe("PCB REVIEW routing", () => {
 
   it("does not fall back to the first candidate when an overall semantic finding has no point evidence", () => {
     const points: TestPointCandidate[] = [
-      { id: "tp-first", center: { x: 1, y: 2 }, radius_nm: 3, net_name: null, component_ref: null, confidence: "INFERRED", layer_id: null, source: "fixture", geometry_source: "fixture" },
-      { id: "tp-second", center: { x: 3, y: 4 }, radius_nm: 3, net_name: null, component_ref: null, confidence: "INFERRED", layer_id: null, source: "fixture", geometry_source: "fixture" }
+      { id: "tp-first", side: "NA", center: { x: 1, y: 2 }, radius_nm: 3, net_name: null, component_ref: null, confidence: "INFERRED", layer_id: null, source: "fixture", geometry_source: "fixture" },
+      { id: "tp-second", side: "NA", center: { x: 3, y: 4 }, radius_nm: 3, net_name: null, component_ref: null, confidence: "INFERRED", layer_id: null, source: "fixture", geometry_source: "fixture" }
     ];
 
     expect(inferredTestPointsForViolation(baseViolation, points)).toEqual([]);
@@ -92,6 +92,7 @@ describe("PCB REVIEW routing", () => {
   it("shows board-edge and nearest-test-point evidence for manual review", () => {
     const point: TestPointCandidate = {
       id: "tp-a",
+      side: "TOP",
       center: { x: 1_000_000, y: 2_000_000 },
       radius_nm: 100_000,
       net_name: "SENSE",

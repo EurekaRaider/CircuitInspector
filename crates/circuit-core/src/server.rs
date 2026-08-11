@@ -288,6 +288,8 @@ fn pick_request(params: Value) -> CoreResult<Value> {
         design_id: String,
         cache_dir: PathBuf,
         point: crate::model::PointNm,
+        #[serde(default)]
+        layer_ids: Vec<String>,
         #[serde(default = "default_tolerance")]
         tolerance_nm: i64,
     }
@@ -298,8 +300,22 @@ fn pick_request(params: Value) -> CoreResult<Value> {
     let cache = CacheStore::new(&params.cache_dir)?;
     let design = cache.load_design(&params.design_id)?;
     let tolerance = params.tolerance_nm.clamp(1_000, 10_000_000);
+    let layer_enabled = |layer_id: &str| {
+        params.layer_ids.is_empty() || params.layer_ids.iter().any(|id| id == layer_id)
+    };
+    let side_enabled = |side: Side| {
+        params.layer_ids.is_empty()
+            || design
+                .layers
+                .iter()
+                .any(|layer| layer.side == side && layer_enabled(&layer.id))
+    };
     let mut results = Vec::new();
-    for component in &design.components {
+    for component in design
+        .components
+        .iter()
+        .filter(|component| side_enabled(component.side))
+    {
         let distance = component.bounds.distance_to_point(params.point);
         if distance <= tolerance {
             results.push(json!({
@@ -315,7 +331,10 @@ fn pick_request(params: Value) -> CoreResult<Value> {
             }));
         }
     }
-    for point in &design.test_points {
+    for point in design.test_points.iter().filter(|point| {
+        let side = test_point_side(&design, point);
+        matches!(side, Side::Top | Side::Bottom) && side_enabled(side)
+    }) {
         let distance = ((point.center.distance_sq(params.point) as f64)
             .sqrt()
             .round() as i64)
@@ -336,6 +355,9 @@ fn pick_request(params: Value) -> CoreResult<Value> {
         }
     }
     for layer in &design.layers {
+        if !layer_enabled(&layer.id) {
+            continue;
+        }
         for feature in &layer.features {
             let distance = feature.geometry.bounds().distance_to_point(params.point);
             if distance <= tolerance {
@@ -377,6 +399,7 @@ fn list_test_points_request(params: Value) -> CoreResult<Value> {
 struct TestPointReviewCandidate<'a> {
     #[serde(flatten)]
     point: &'a TestPoint,
+    side: Side,
     review_context: TestPointReviewContext<'a>,
 }
 
@@ -411,6 +434,7 @@ fn test_points_with_review_context(design: &Design) -> Vec<TestPointReviewCandid
         .iter()
         .map(|point| TestPointReviewCandidate {
             point,
+            side: test_point_side(design, point),
             review_context: TestPointReviewContext {
                 metric: "EDGE_TO_EDGE",
                 board_edge: if let Some(radius) = point.radius_nm {
@@ -600,13 +624,21 @@ fn test_point_side(design: &Design, point: &TestPoint) -> Side {
         .layer_id
         .as_deref()
         .and_then(|layer_id| design.layers.iter().find(|layer| layer.id == layer_id))
-        .map_or(Side::Na, |layer| layer.side)
+        .map(|layer| layer.side)
+        .or_else(|| {
+            point.component_ref.as_deref().and_then(|reference| {
+                design
+                    .components
+                    .iter()
+                    .find(|component| component.refdes == reference)
+                    .map(|component| component.side)
+            })
+        })
+        .unwrap_or(Side::Na)
 }
 
 fn same_side(left: Side, right: Side) -> bool {
-    !matches!(left, Side::Top | Side::Bottom)
-        || !matches!(right, Side::Top | Side::Bottom)
-        || left == right
+    matches!(left, Side::Top | Side::Bottom) && left == right
 }
 
 fn point_distance(left: PointNm, right: PointNm) -> i64 {
@@ -889,12 +921,7 @@ fn write_confirmed_test_points_report(
                 ),
                 None => ("PROGRAM_OR_SOURCE_CONFIRMED", "-", "-"),
             };
-            let side = point
-                .layer_id
-                .as_deref()
-                .and_then(|layer_id| design.layers.iter().find(|layer| layer.id == layer_id))
-                .map(|layer| side_label(layer.side))
-                .unwrap_or("NA");
+            let side = side_label(test_point_side(design, point));
             let diameter = point
                 .radius_nm
                 .map(|radius| format!("{:.6}", radius.saturating_mul(2) as f64 / 1_000_000.0))
@@ -1485,7 +1512,13 @@ mod tests {
                 max_x: 10_000_000,
                 max_y: 10_000_000,
             },
-            layers: Vec::new(),
+            layers: vec![crate::model::Layer {
+                id: "top".into(),
+                name: "Top".into(),
+                function: "SIGNAL".into(),
+                side: Side::Top,
+                features: Vec::new(),
+            }],
             components: Vec::new(),
             nets: Vec::new(),
             test_points: vec![
@@ -1499,7 +1532,7 @@ mod tests {
                     net_name: None,
                     component_ref: Some("TP1".into()),
                     confidence: CoverageLevel::Inferred,
-                    layer_id: None,
+                    layer_id: Some("top".into()),
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
                     confirmation: None,
@@ -1514,7 +1547,7 @@ mod tests {
                     net_name: None,
                     component_ref: Some("TP2".into()),
                     confidence: CoverageLevel::Inferred,
-                    layer_id: None,
+                    layer_id: Some("top".into()),
                     source: "fixture".into(),
                     geometry_source: Some("fixture".into()),
                     confirmation: None,
