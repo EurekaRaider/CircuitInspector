@@ -107,7 +107,8 @@ describe("PCB REVIEW routing", () => {
         nearest_test_point: { id: "tp-b", distance_nm: 1_250_000, center: { x: 2_450_000, y: 2_000_000 }, confidence: "INFERRED" },
         nearest_tooling_hole: { id: "drill:4", distance_nm: 2_000_000, center: { x: 3_100_000, y: 2_000_000 }, confidence: "EXPLICIT" },
         nearest_component: { id: "R1", distance_nm: 750_000, center: { x: 1_950_000, y: 2_000_000 }, confidence: "EXPLICIT" },
-        nearest_shield: { id: "SH1", distance_nm: 3_500_000, center: { x: 4_600_000, y: 2_000_000 }, confidence: "INFERRED" }
+        nearest_shield: { id: "SH1", distance_nm: 3_500_000, center: { x: 4_600_000, y: 2_000_000 }, confidence: "INFERRED" },
+        nearest_uv_glue: { id: "uv-1", distance_nm: 2_250_000, center: { x: 3_450_000, y: 2_000_000 }, confidence: "INFERRED" }
       }
     };
     const markup = renderToStaticMarkup(createElement(TestPointReviewEvidence, { point, locale: "zh-CN" }));
@@ -118,6 +119,7 @@ describe("PCB REVIEW routing", () => {
     expect(markup).toContain("最近工装孔净距 · drill:4");
     expect(markup).toContain("最近器件净距 · R1");
     expect(markup).toContain("最近屏蔽结构净距 · SH1 · REVIEW");
+    expect(markup).toContain("最近 UV 胶净距 · uv-1 · REVIEW");
     expect(markup).toContain("pad_usage 工装孔为明确语义");
   });
 });

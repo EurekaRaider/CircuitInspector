@@ -60,7 +60,6 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const tileRequest = useRef<SurfaceValue<number>>({ TOP: 0, BOTTOM: 0 });
   const lastTileRequestKey = useRef<SurfaceValue<string>>({ TOP: "", BOTTOM: "" });
   const viewportRef = useRef<SurfaceValue<{ designId: string; viewport: BoundsNm; zoom: number } | undefined>>({ TOP: undefined, BOTTOM: undefined });
-  const tileCacheRef = useRef(new Map<string, TilePayload>());
   const pointerRef = useRef({ xMm: 0, yMm: 0, zoom: 0 });
   const pointerPositionElementRef = useRef<HTMLSpanElement>(null);
   const pointerZoomElementRef = useRef<HTMLSpanElement>(null);
@@ -161,7 +160,6 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     lastTileRequestKey.current = { TOP: "", BOTTOM: "" };
     tileRequest.current.TOP += 1;
     tileRequest.current.BOTTOM += 1;
-    tileCacheRef.current.clear();
     setTiles({ TOP: null, BOTTOM: null });
     setViewSide("TOP");
     setEnabledLayers({
@@ -316,6 +314,12 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       if (!design) return;
       const lod = zoom < 8 ? 2 : zoom < 30 ? 1 : 0;
       const layerIds = enabledLayers[side];
+      if (layerIds.length === 0) {
+        lastTileRequestKey.current[side] = "";
+        tileRequest.current[side] += 1;
+        setTiles((current) => current[side] == null ? current : { ...current, [side]: null });
+        return;
+      }
       const requestKey = [
         design.id,
         side,
@@ -329,11 +333,6 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       if (requestKey === lastTileRequestKey.current[side]) return;
       lastTileRequestKey.current[side] = requestKey;
       const request = ++tileRequest.current[side];
-      const cached = tileCacheRef.current.get(requestKey);
-      if (cached) {
-        setTiles((current) => current[side]?.path === cached.path ? current : { ...current, [side]: cached });
-        return;
-      }
       try {
         const payload = await window.circuitInspector.getTile({
           design_id: design.id,
@@ -343,12 +342,6 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
           max_features: 500_000
         });
         if (request === tileRequest.current[side]) {
-          tileCacheRef.current.set(requestKey, payload);
-          while (tileCacheRef.current.size > 8) {
-            const oldest = tileCacheRef.current.keys().next().value;
-            if (oldest == null) break;
-            tileCacheRef.current.delete(oldest);
-          }
           setTiles((current) => ({ ...current, [side]: payload }));
         }
       } catch (cause) {
@@ -792,6 +785,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                   <span>{locale === "zh-CN" ? "最近工装孔净距" : "Nearest tooling-hole clearance"} {formatNm(activeTestPoint.review_context?.nearest_tooling_hole?.distance_nm)}{activeTestPoint.review_context?.nearest_tooling_hole ? ` · ${activeTestPoint.review_context.nearest_tooling_hole.id}${activeTestPoint.review_context.nearest_tooling_hole.confidence === "INFERRED" ? " · REVIEW" : ""}` : ""}</span>
                   <span>{locale === "zh-CN" ? "最近器件净距" : "Nearest component clearance"} {formatNm(activeTestPoint.review_context?.nearest_component?.distance_nm)}{activeTestPoint.review_context?.nearest_component ? ` · ${activeTestPoint.review_context.nearest_component.id}` : ""}</span>
                   <span>{locale === "zh-CN" ? "最近屏蔽结构净距" : "Nearest shield clearance"} {formatNm(activeTestPoint.review_context?.nearest_shield?.distance_nm)}{activeTestPoint.review_context?.nearest_shield ? ` · ${activeTestPoint.review_context.nearest_shield.id} · REVIEW` : ""}</span>
+                  <span>{locale === "zh-CN" ? "最近 UV 胶净距" : "Nearest UV-glue clearance"} {formatNm(activeTestPoint.review_context?.nearest_uv_glue?.distance_nm)}{activeTestPoint.review_context?.nearest_uv_glue ? ` · ${activeTestPoint.review_context.nearest_uv_glue.id}${activeTestPoint.review_context.nearest_uv_glue.confidence === "INFERRED" ? " · REVIEW" : ""}` : ""}</span>
                 </div>
               </div>
               <button className="ml-2 rounded-md p-1 text-[#8c8b86] transition-colors hover:bg-white/5 hover:text-[#e7e0d4]" aria-label={locale === "zh-CN" ? "退出测试点定位" : "Exit test-point focus"} onClick={() => setActiveTestPoint(null)}><XIcon size={15} /></button>
@@ -1066,6 +1060,7 @@ export function TestPointReviewEvidence({ point, locale }: { point: TestPointCan
     <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近工装孔净距" : "NEAREST TOOLING HOLE"}{context?.nearest_tooling_hole ? ` · ${context.nearest_tooling_hole.id}${context.nearest_tooling_hole.confidence === "INFERRED" ? " · REVIEW" : ""}` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_tooling_hole?.distance_nm)}</span></div>
     <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近器件净距" : "NEAREST COMPONENT"}{context?.nearest_component ? ` · ${context.nearest_component.id}` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_component?.distance_nm)}</span></div>
     <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近屏蔽结构净距" : "NEAREST SHIELD"}{context?.nearest_shield ? ` · ${context.nearest_shield.id} · REVIEW` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_shield?.distance_nm)}</span></div>
+    <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近 UV 胶净距" : "NEAREST UV GLUE"}{context?.nearest_uv_glue ? ` · ${context.nearest_uv_glue.id}${context.nearest_uv_glue.confidence === "INFERRED" ? " · REVIEW" : ""}` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_uv_glue?.distance_nm)}</span></div>
     <div className="mt-0.5 text-[#626360]">{chinese ? "边缘到边缘；pad_usage 工装孔为明确语义，否则按钻孔候选实测并保持 REVIEW" : "Edge-to-edge; pad_usage tooling holes are explicit, otherwise drill candidates are measured and remain REVIEW"}</div>
   </div>;
 }

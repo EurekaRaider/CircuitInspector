@@ -9,6 +9,7 @@ use crate::model::{
 };
 use crate::rules::{DistanceMetric, EntityKind, RuleDefinition, RuleKind, RulePack};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -163,11 +164,13 @@ fn evaluate_distance(design: &Design, rule: &RuleDefinition, analysis_id: &str) 
     let targets = entities(design, rule.target.unwrap_or(EntityKind::BoardEdge));
     let same_collection = rule.target == Some(rule.source);
     let mut violations = Vec::new();
+    let mut emitted_pairs = HashSet::new();
     for (source_index, source) in sources.iter().enumerate() {
         let mut first_unmeasured = None;
         let mut unmeasured_pairs = 0_usize;
+        let mut nearest_review: Option<(i64, &str, Violation)> = None;
         for (target_index, target) in targets.iter().enumerate() {
-            if same_collection && target_index <= source_index {
+            if same_collection && target_index == source_index {
                 continue;
             }
             if !eligible_pair(rule, source, target) {
@@ -184,17 +187,32 @@ fn evaluate_distance(design: &Design, rule: &RuleDefinition, analysis_id: &str) 
                 continue;
             };
             if measurement.measured_nm < rule.threshold_nm {
-                violations.push(distance_violation(
-                    design,
-                    rule,
-                    analysis_id,
-                    source,
-                    target,
-                    measurement,
-                ));
+                let violation =
+                    distance_violation(design, rule, analysis_id, source, target, measurement);
+                if violation.verdict == Verdict::Review {
+                    if nearest_review.as_ref().is_none_or(|(distance, id, _)| {
+                        measurement.measured_nm < *distance
+                            || (measurement.measured_nm == *distance && target.id < *id)
+                    }) {
+                        nearest_review = Some((measurement.measured_nm, target.id, violation));
+                    }
+                } else if !same_collection
+                    || emitted_pairs.insert(unordered_pair_key(source.id, target.id))
+                {
+                    violations.push(violation);
+                }
             }
         }
-        if let Some(target) = first_unmeasured {
+        if let Some((_, _, violation)) = nearest_review {
+            let pair = unordered_pair_key(&violation.entity_ids[0], &violation.entity_ids[1]);
+            if !same_collection || emitted_pairs.insert(pair) {
+                violations.push(violation);
+            }
+        } else if let Some(target) = first_unmeasured {
+            let pair = unordered_pair_key(source.id, target.id);
+            if same_collection && !emitted_pairs.insert(pair) {
+                continue;
+            }
             violations.push(unmeasured_geometry_violation(
                 design,
                 rule,
@@ -208,6 +226,14 @@ fn evaluate_distance(design: &Design, rule: &RuleDefinition, analysis_id: &str) 
         }
     }
     violations
+}
+
+fn unordered_pair_key(left: &str, right: &str) -> (String, String) {
+    if left <= right {
+        (left.to_owned(), right.to_owned())
+    } else {
+        (right.to_owned(), left.to_owned())
+    }
 }
 
 fn eligible_pair(
@@ -634,7 +660,7 @@ fn feature_ref<'a>(
     }
 }
 
-fn uv_glue_layer_confidence(layer: &crate::model::Layer) -> Option<CoverageLevel> {
+pub(crate) fn uv_glue_layer_confidence(layer: &crate::model::Layer) -> Option<CoverageLevel> {
     if has_explicit_uv_glue_marker(&layer.function) {
         Some(CoverageLevel::Explicit)
     } else if has_glue_candidate_marker(&layer.function) || has_glue_candidate_marker(&layer.name) {
@@ -1580,6 +1606,23 @@ mod tests {
                     confidence: CoverageLevel::Explicit,
                 },
                 Component {
+                    refdes: "R2".into(),
+                    package_name: Some("0603".into()),
+                    center: PointNm {
+                        x: 4_000_000,
+                        y: 1_000_000,
+                    },
+                    bounds: BoundsNm {
+                        min_x: 3_800_000,
+                        min_y: 750_000,
+                        max_x: 4_200_000,
+                        max_y: 1_250_000,
+                    },
+                    side: Side::Top,
+                    pins: vec!["1".into(), "2".into()],
+                    confidence: CoverageLevel::Explicit,
+                },
+                Component {
                     refdes: "SH1".into(),
                     package_name: Some("EMI_SHIELD".into()),
                     center: PointNm {
@@ -1590,6 +1633,23 @@ mod tests {
                         min_x: 4_500_000,
                         min_y: 500_000,
                         max_x: 5_500_000,
+                        max_y: 1_500_000,
+                    },
+                    side: Side::Top,
+                    pins: Vec::new(),
+                    confidence: CoverageLevel::Explicit,
+                },
+                Component {
+                    refdes: "SH2".into(),
+                    package_name: Some("SHIELD_CAN".into()),
+                    center: PointNm {
+                        x: 7_000_000,
+                        y: 1_000_000,
+                    },
+                    bounds: BoundsNm {
+                        min_x: 6_500_000,
+                        min_y: 500_000,
+                        max_x: 7_500_000,
                         max_y: 1_500_000,
                     },
                     side: Side::Top,
@@ -1633,7 +1693,7 @@ mod tests {
                     source: EntityKind::TestPoint,
                     target: Some(EntityKind::Component),
                     metric: Some(DistanceMetric::BodyToPad),
-                    threshold_nm: 2_000_000,
+                    threshold_nm: 4_000_000,
                     severity: Some(Severity::Error),
                     layer_functions: Vec::new(),
                     same_net_only: false,
@@ -1647,7 +1707,7 @@ mod tests {
                     source: EntityKind::TestPoint,
                     target: Some(EntityKind::ShieldFence),
                     metric: Some(DistanceMetric::EdgeToEdge),
-                    threshold_nm: 5_000_000,
+                    threshold_nm: 7_000_000,
                     severity: Some(Severity::Warning),
                     layer_functions: Vec::new(),
                     same_net_only: false,
@@ -1671,6 +1731,15 @@ mod tests {
             .unwrap();
         assert_eq!(component.measured_value_nm, Some(1_400_000));
         assert!(component.id.contains("R1"));
+        assert_eq!(
+            analysis
+                .violations
+                .iter()
+                .filter(|finding| finding.rule_id == "tp-component")
+                .count(),
+            3,
+            "confirmed failures must not be collapsed"
+        );
         let shield = analysis
             .violations
             .iter()
@@ -1680,6 +1749,15 @@ mod tests {
         assert_eq!(shield.verdict, Verdict::Review);
         assert_eq!(shield.semantic_confidence, CoverageLevel::Inferred);
         assert!(shield.id.contains("SH1"));
+        assert_eq!(
+            analysis
+                .violations
+                .iter()
+                .filter(|finding| finding.rule_id == "tp-shield")
+                .count(),
+            1,
+            "only the nearest inferred shield candidate needs review"
+        );
     }
 
     #[test]
@@ -1749,6 +1827,94 @@ mod tests {
         assert!(findings.iter().all(|finding| {
             finding.measured_value_nm.is_none() && finding.message.contains("candidate pair(s)")
         }));
+    }
+
+    #[test]
+    fn inferred_test_point_spacing_keeps_only_each_points_nearest_review_pair() {
+        let design = Design {
+            schema_version: Design::SCHEMA_VERSION,
+            id: "nearest-test-point-review".into(),
+            format: DesignFormat::Odbpp,
+            source_path: "fixture".into(),
+            content_hash: "hash".into(),
+            bounds: BoundsNm {
+                min_x: 0,
+                min_y: 0,
+                max_x: 10_000_000,
+                max_y: 10_000_000,
+            },
+            layers: vec![Layer {
+                id: "top".into(),
+                name: "Top".into(),
+                function: "SIGNAL".into(),
+                side: Side::Top,
+                features: Vec::new(),
+            }],
+            components: Vec::new(),
+            nets: Vec::new(),
+            test_points: [1_i64, 2, 4, 8]
+                .into_iter()
+                .enumerate()
+                .map(|(index, x)| TestPoint {
+                    id: format!("tp-{index}"),
+                    center: PointNm {
+                        x: x * 1_000_000,
+                        y: 1_000_000,
+                    },
+                    radius_nm: Some(100_000),
+                    net_name: None,
+                    component_ref: None,
+                    confidence: CoverageLevel::Inferred,
+                    layer_id: Some("top".into()),
+                    source: "fixture".into(),
+                    geometry_source: Some("fixture".into()),
+                    confirmation: None,
+                })
+                .collect(),
+            coverage: SemanticCoverage {
+                test_points: CoverageLevel::Inferred,
+                ..Default::default()
+            },
+            diagnostics: Vec::new(),
+        };
+        let rule = RuleDefinition {
+            id: "tp-spacing".into(),
+            title: "Test point spacing".into(),
+            kind: RuleKind::MinimumDistance,
+            source: EntityKind::TestPoint,
+            target: Some(EntityKind::TestPoint),
+            metric: Some(DistanceMetric::EdgeToEdge),
+            threshold_nm: 10_000_000,
+            severity: Some(Severity::Warning),
+            layer_functions: Vec::new(),
+            same_net_only: false,
+            different_net_only: false,
+            citation: None,
+        };
+
+        let findings = evaluate_distance(&design, &rule, "analysis");
+
+        assert_eq!(findings.len(), 3);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.verdict == Verdict::Review)
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.id.contains("tp-0:tp-1"))
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.id.contains("tp-2:tp-1"))
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.id.contains("tp-3:tp-2"))
+        );
     }
 
     #[test]

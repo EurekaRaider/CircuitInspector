@@ -1,9 +1,10 @@
-use crate::analyze::analyze_design;
+use crate::analyze::{analyze_design, uv_glue_layer_confidence};
 use crate::archive::hash_input;
 use crate::cache::CacheStore;
 use crate::evidence::{render_evidence, write_html_report};
 use crate::geometry::{
-    bounds_to_board_edge, bounds_to_bounds, circle_to_board_edge, circle_to_bounds,
+    bounds_to_board_edge, bounds_to_bounds, bounds_to_geometry, circle_to_board_edge,
+    circle_to_bounds, circle_to_geometry,
 };
 use crate::model::{
     BoundsNm, CoverageLevel, Design, DesignSummary, FeatureGeometry, PointNm, Severity, Side,
@@ -14,7 +15,7 @@ use crate::rules::{
     RuleApproval, RuleDefinition, RulePack, RulePackStatus, RuleReviewDecision, RuleReviewItem,
     RuleReviewResolution,
 };
-use crate::tile::write_tile;
+use crate::tile::{cached_tile, write_tile};
 use crate::{CoreError, CoreResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -221,15 +222,30 @@ fn tile_request(params: Value) -> CoreResult<Value> {
     }
     let params: Params = serde_json::from_value(params)?;
     let cache = CacheStore::new(&params.cache_dir)?;
-    let design = cache.load_design(&params.design_id)?;
-    let tile = write_tile(
+    let max_features = params.max_features.clamp(1_000, 1_000_000);
+    if !cache.design_path(&params.design_id).exists() {
+        return Err(CoreError::NotFound(params.design_id));
+    }
+    let tile = if let Some(tile) = cached_tile(
         &cache,
-        &design,
+        &params.design_id,
         params.viewport,
         &params.layer_ids,
         params.lod,
-        params.max_features.clamp(1_000, 1_000_000),
-    )?;
+        max_features,
+    )? {
+        tile
+    } else {
+        let design = cache.load_design_shared(&params.design_id)?;
+        write_tile(
+            &cache,
+            &design,
+            params.viewport,
+            &params.layer_ids,
+            params.lod,
+            max_features,
+        )?
+    };
     Ok(serde_json::to_value(tile)?)
 }
 
@@ -411,6 +427,7 @@ struct TestPointReviewContext<'a> {
     nearest_tooling_hole: Option<NearestGeometry<'a>>,
     nearest_component: Option<NearestGeometry<'a>>,
     nearest_shield: Option<NearestGeometry<'a>>,
+    nearest_uv_glue: Option<NearestGeometry<'a>>,
 }
 
 #[derive(Serialize)]
@@ -465,6 +482,7 @@ fn test_points_with_review_context(design: &Design) -> Vec<TestPointReviewCandid
                 nearest_tooling_hole: nearest_tooling_hole(design, point),
                 nearest_component: nearest_component(design, point, false),
                 nearest_shield: nearest_component(design, point, true),
+                nearest_uv_glue: nearest_uv_glue(design, point),
             },
         })
         .collect()
@@ -594,6 +612,57 @@ fn nearest_component<'a>(
                 point.confidence.weakest(component.confidence)
             },
         })
+}
+
+fn nearest_uv_glue<'a>(design: &'a Design, point: &'a TestPoint) -> Option<NearestGeometry<'a>> {
+    let side = test_point_side(design, point);
+    design
+        .layers
+        .iter()
+        .filter(|layer| same_side(side, layer.side))
+        .filter_map(|layer| uv_glue_layer_confidence(layer).map(|confidence| (layer, confidence)))
+        .flat_map(|(layer, confidence)| {
+            layer
+                .features
+                .iter()
+                .filter(|feature| feature.polarity == crate::model::Polarity::Dark)
+                .map(move |feature| (feature, confidence))
+        })
+        .map(|(feature, confidence)| {
+            let center = feature.geometry.bounds().center();
+            let distance_nm = point.radius_nm.map_or_else(
+                || {
+                    design
+                        .test_point_bounds(point)
+                        .map(|bounds| bounds_to_geometry(bounds, &feature.geometry).distance_nm)
+                },
+                |radius| {
+                    Some(circle_to_geometry(point.center, radius, &feature.geometry).distance_nm)
+                },
+            );
+            (
+                feature,
+                center,
+                distance_nm.unwrap_or_else(|| point_distance(point.center, center)),
+                distance_nm,
+                point.confidence.weakest(confidence),
+            )
+        })
+        .min_by(
+            |(left, _, left_distance, _, _), (right, _, right_distance, _, _)| {
+                left_distance
+                    .cmp(right_distance)
+                    .then_with(|| left.id.cmp(&right.id))
+            },
+        )
+        .map(
+            |(feature, center, _, distance_nm, confidence)| NearestGeometry {
+                id: &feature.id,
+                distance_nm,
+                center,
+                confidence,
+            },
+        )
 }
 
 fn test_point_distance(design: &Design, left: &TestPoint, right: &TestPoint) -> Option<i64> {
@@ -1512,13 +1581,44 @@ mod tests {
                 max_x: 10_000_000,
                 max_y: 10_000_000,
             },
-            layers: vec![crate::model::Layer {
-                id: "top".into(),
-                name: "Top".into(),
-                function: "SIGNAL".into(),
-                side: Side::Top,
-                features: Vec::new(),
-            }],
+            layers: vec![
+                crate::model::Layer {
+                    id: "top".into(),
+                    name: "Top".into(),
+                    function: "SIGNAL".into(),
+                    side: Side::Top,
+                    features: Vec::new(),
+                },
+                crate::model::Layer {
+                    id: "uv-top".into(),
+                    name: "UV glue top".into(),
+                    function: "UV_GLUE".into(),
+                    side: Side::Top,
+                    features: [3_i64, 8]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, x)| crate::model::Feature {
+                            id: format!("uv-{index}"),
+                            layer_id: "uv-top".into(),
+                            polarity: crate::model::Polarity::Dark,
+                            geometry: FeatureGeometry::Pad {
+                                center: PointNm {
+                                    x: x * 1_000_000,
+                                    y: 4_000_000,
+                                },
+                                size_x_nm: 200_000,
+                                size_y_nm: 200_000,
+                                rotation_deg: 0.0,
+                            },
+                            net_name: None,
+                            component_ref: None,
+                            pin: None,
+                            attributes: Default::default(),
+                            source: "fixture".into(),
+                        })
+                        .collect(),
+                },
+            ],
             components: Vec::new(),
             nets: Vec::new(),
             test_points: vec![
@@ -1574,6 +1674,13 @@ mod tests {
             .unwrap();
         assert_eq!(nearest.id, "tp-b");
         assert_eq!(nearest.distance_nm, Some(2_700_000));
+        let nearest_uv = candidates[0]
+            .review_context
+            .nearest_uv_glue
+            .as_ref()
+            .unwrap();
+        assert_eq!(nearest_uv.id, "uv-0");
+        assert_eq!(nearest_uv.distance_nm, Some(800_000));
 
         design.components = vec![
             crate::model::Component {

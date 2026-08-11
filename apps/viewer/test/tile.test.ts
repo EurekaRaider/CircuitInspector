@@ -117,4 +117,75 @@ describe("compact GPU tiles", () => {
     expect(opacities.slice(-2)).toEqual([0.55, 1]);
     renderer.dispose();
   });
+
+  it("decodes large tiles off the renderer thread before uploading them", () => {
+    vi.stubGlobal("window", { devicePixelRatio: 1 });
+    const uploads: number[] = [];
+    const gl = new Proxy({
+      ARRAY_BUFFER: 1,
+      STATIC_DRAW: 2,
+      DYNAMIC_DRAW: 3,
+      FLOAT: 4,
+      BLEND: 5,
+      SRC_ALPHA: 6,
+      ONE_MINUS_SRC_ALPHA: 7,
+      COLOR_BUFFER_BIT: 8,
+      TRIANGLES: 9,
+      VERTEX_SHADER: 10,
+      FRAGMENT_SHADER: 11,
+      COMPILE_STATUS: 12,
+      LINK_STATUS: 13,
+      createShader: () => ({}),
+      getShaderParameter: () => true,
+      createProgram: () => ({}),
+      getProgramParameter: () => true,
+      createBuffer: () => ({}),
+      getUniformLocation: () => null,
+      bufferData: (_target: number, _vertices: Float32Array, usage: number) => uploads.push(usage)
+    }, {
+      get(target, property) {
+        if (property in target) return target[property as keyof typeof target];
+        return () => undefined;
+      }
+    }) as unknown as WebGL2RenderingContext;
+    const canvas = {
+      width: 800,
+      height: 600,
+      clientWidth: 800,
+      clientHeight: 600,
+      getContext: () => gl
+    } as unknown as HTMLCanvasElement;
+    class FakeWorker {
+      static instance: FakeWorker;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: ErrorEvent) => void) | null = null;
+      postMessage = vi.fn();
+      terminate = vi.fn();
+
+      constructor() {
+        FakeWorker.instance = this;
+      }
+    }
+    vi.stubGlobal("Worker", FakeWorker);
+    const bytes = new ArrayBuffer(300 * 1024);
+    new Uint8Array(bytes).set(new Uint8Array(singleRecordTile()));
+    const renderer = new BoardRenderer(canvas);
+
+    renderer.setTile({
+      path: "/tmp/large.citl",
+      feature_count: 1,
+      bounds: { min_x: 0, min_y: 0, max_x: 10_000_000, max_y: 1_000_000 },
+      lod: 0,
+      bytes
+    });
+
+    expect(FakeWorker.instance.postMessage).toHaveBeenCalledOnce();
+    expect(uploads.filter((usage) => usage === gl.STATIC_DRAW)).toHaveLength(0);
+    FakeWorker.instance.onmessage?.({
+      data: { requestId: 1, vertices: new Float32Array(36) }
+    } as MessageEvent);
+    expect(uploads.filter((usage) => usage === gl.STATIC_DRAW)).toHaveLength(1);
+    renderer.dispose();
+    expect(FakeWorker.instance.terminate).toHaveBeenCalledOnce();
+  });
 });

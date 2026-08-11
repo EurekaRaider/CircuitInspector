@@ -4,6 +4,11 @@ const HEADER_BYTES = 42;
 const RECORD_BYTES = 24;
 const FLOATS_PER_VERTEX = 6;
 const FLOATS_PER_TRIANGLE = FLOATS_PER_VERTEX * 3;
+const ASYNC_TILE_THRESHOLD_BYTES = 256 * 1024;
+
+type TileDecodeResult =
+  | { requestId: number; vertices: Float32Array }
+  | { requestId: number; error: string };
 
 const vertexSource = `#version 300 es
 precision highp float;
@@ -66,6 +71,9 @@ export class BoardRenderer {
   #measure: [number, number, number, number] | undefined;
   #view: ViewState = { centerX: 0, centerY: 0, zoom: 20 };
   #mirrored = false;
+  #decoderWorker: Worker | null = null;
+  #decodeRequest = 0;
+  #disposed = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.#canvas = canvas;
@@ -95,7 +103,44 @@ export class BoardRenderer {
       return;
     }
     this.#tilePath = tilePath;
+    const requestId = ++this.#decodeRequest;
+    if (tile && tile.bytes.byteLength >= ASYNC_TILE_THRESHOLD_BYTES) {
+      const worker = this.#ensureDecoderWorker();
+      if (worker) {
+        worker.postMessage({ requestId, bytes: tile.bytes, lod: tile.lod });
+        return;
+      }
+    }
     const vertices = tile ? decodeTile(tile.bytes, tile.lod) : new Float32Array();
+    this.#applyDecodedTile(requestId, vertices);
+  }
+
+  #ensureDecoderWorker(): Worker | null {
+    if (this.#decoderWorker) return this.#decoderWorker;
+    if (typeof Worker === "undefined") return null;
+    try {
+      const worker = new Worker(new URL("./tile-decoder.worker.ts", import.meta.url), { type: "module" });
+      worker.onmessage = (event: MessageEvent<TileDecodeResult>) => {
+        if (this.#disposed || event.data.requestId !== this.#decodeRequest) return;
+        if ("error" in event.data) {
+          console.error(`CircuitInspector tile decode failed: ${event.data.error}`);
+          return;
+        }
+        this.#applyDecodedTile(event.data.requestId, event.data.vertices);
+      };
+      worker.onerror = (event) => {
+        console.error(`CircuitInspector tile worker failed: ${event.message}`);
+      };
+      this.#decoderWorker = worker;
+      return worker;
+    } catch (cause) {
+      console.error("CircuitInspector could not start the tile worker", cause);
+      return null;
+    }
+  }
+
+  #applyDecodedTile(requestId: number, vertices: Float32Array): void {
+    if (this.#disposed || requestId !== this.#decodeRequest) return;
     this.#boardVertexCount = vertices.length / FLOATS_PER_VERTEX;
     this.#upload(this.#boardBuffer, vertices, this.#gl.STATIC_DRAW);
     this.draw();
@@ -211,6 +256,10 @@ export class BoardRenderer {
   }
 
   dispose(): void {
+    this.#disposed = true;
+    this.#decodeRequest += 1;
+    this.#decoderWorker?.terminate();
+    this.#decoderWorker = null;
     this.#gl.deleteBuffer(this.#boardBuffer);
     this.#gl.deleteBuffer(this.#overlayBuffer);
     this.#gl.deleteProgram(this.#program);

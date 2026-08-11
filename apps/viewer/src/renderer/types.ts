@@ -88,6 +88,7 @@ export interface TestPointCandidate {
     nearest_tooling_hole: NearestGeometry | null;
     nearest_component: NearestGeometry | null;
     nearest_shield: NearestGeometry | null;
+    nearest_uv_glue: NearestGeometry | null;
   };
 }
 

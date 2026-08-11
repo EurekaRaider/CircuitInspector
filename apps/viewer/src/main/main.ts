@@ -514,9 +514,12 @@ ipcMain.handle("design:tile", async (_event, input: Record<string, unknown>) => 
     cache_dir: cacheDir
   });
   const bytes = await readFile(descriptor.path);
+  const payload = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+    ? bytes.buffer
+    : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   return {
     ...descriptor,
-    bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    bytes: payload
   };
 });
 

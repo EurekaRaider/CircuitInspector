@@ -3,6 +3,62 @@ use crate::cache::CacheStore;
 use crate::model::{BoundsNm, Design, FeatureGeometry, PointNm, Polarity, TileDescriptor};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Read;
+
+pub fn cached_tile(
+    cache: &CacheStore,
+    design_id: &str,
+    viewport: BoundsNm,
+    layer_ids: &[String],
+    lod: u8,
+    max_features: usize,
+) -> CoreResult<Option<TileDescriptor>> {
+    let key = tile_cache_key(viewport, layer_ids, lod, max_features)?;
+    let path = cache.tile_path(design_id, &key[..16]);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut header = [0_u8; 10];
+    let valid_header = fs::File::open(&path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok()
+        && &header[..4] == b"CITL"
+        && u16::from_le_bytes(header[4..6].try_into().unwrap()) == 1;
+    let feature_count = u32::from_le_bytes(header[6..10].try_into().unwrap()) as usize;
+    let valid_length = fs::metadata(&path).is_ok_and(|metadata| {
+        metadata.len() >= (42_usize.saturating_add(feature_count.saturating_mul(24))) as u64
+    });
+    if !valid_header || !valid_length {
+        return Ok(None);
+    }
+    Ok(Some(TileDescriptor {
+        path: path.display().to_string(),
+        feature_count,
+        bounds: viewport,
+        lod,
+    }))
+}
+
+fn tile_cache_key(
+    viewport: BoundsNm,
+    layer_ids: &[String],
+    lod: u8,
+    max_features: usize,
+) -> CoreResult<String> {
+    let mut canonical_layers = layer_ids.to_vec();
+    canonical_layers.sort();
+    canonical_layers.dedup();
+    let mut key_hash = Sha256::new();
+    key_hash.update(b"tile-selection-v4-shared-design-cache");
+    key_hash.update(Design::SCHEMA_VERSION.to_le_bytes());
+    key_hash.update(serde_json::to_vec(&(
+        viewport,
+        canonical_layers,
+        lod,
+        max_features,
+    ))?);
+    Ok(hex::encode(key_hash.finalize()))
+}
 
 pub fn write_tile(
     cache: &CacheStore,
@@ -12,29 +68,11 @@ pub fn write_tile(
     lod: u8,
     max_features: usize,
 ) -> CoreResult<TileDescriptor> {
-    let mut key_hash = Sha256::new();
-    key_hash.update(b"tile-selection-v3-components");
-    key_hash.update(serde_json::to_vec(&(
-        viewport,
-        layer_ids,
-        lod,
-        max_features,
-    ))?);
-    let key = hex::encode(key_hash.finalize());
-    let path = cache.tile_path(&design.id, &key[..16]);
-    if path.exists() {
-        let bytes = fs::read(&path)?;
-        let count = bytes
-            .get(6..10)
-            .map(|slice| u32::from_le_bytes(slice.try_into().unwrap()) as usize)
-            .unwrap_or(0);
-        return Ok(TileDescriptor {
-            path: path.display().to_string(),
-            feature_count: count,
-            bounds: viewport,
-            lod,
-        });
+    if let Some(tile) = cached_tile(cache, &design.id, viewport, layer_ids, lod, max_features)? {
+        return Ok(tile);
     }
+    let key = tile_cache_key(viewport, layer_ids, lod, max_features)?;
+    let path = cache.tile_path(&design.id, &key[..16]);
 
     let mut records = Vec::<TileRecord>::new();
     let layer_filter =
@@ -379,7 +417,7 @@ mod tests {
             diagnostics: Vec::new(),
         };
         let tile = write_tile(&cache, &design, design.bounds, &[], 0, 2).unwrap();
-        let bytes = fs::read(tile.path).unwrap();
+        let bytes = fs::read(&tile.path).unwrap();
         assert_eq!(u16::from_le_bytes(bytes[44..46].try_into().unwrap()), 0);
         assert_eq!(u16::from_le_bytes(bytes[68..70].try_into().unwrap()), 1);
     }
@@ -432,9 +470,20 @@ mod tests {
         };
 
         let tile = write_tile(&cache, &design, bounds, &["top-components".into()], 0, 10).unwrap();
-        let bytes = fs::read(tile.path).unwrap();
+        let bytes = fs::read(&tile.path).unwrap();
         assert_eq!(tile.feature_count, 1);
         assert_eq!(bytes[42], 4);
         assert_eq!(u16::from_le_bytes(bytes[44..46].try_into().unwrap()), 0);
+
+        let canonical = write_tile(
+            &cache,
+            &design,
+            bounds,
+            &["top-components".into(), "top-components".into()],
+            0,
+            10,
+        )
+        .unwrap();
+        assert_eq!(canonical.path, tile.path);
     }
 }
