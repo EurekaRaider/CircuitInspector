@@ -20,6 +20,7 @@ import { DocumentAnalysisScreen } from "./DocumentAnalysisScreen";
 import { translate, type Locale, type Translator } from "./i18n";
 import { defaultLayerIds, isolatedLayerIds, layerIdsForTestPoint, layerIdsForViolation, testPointFocusZoom, violationFocusZoom, violationHasLocation } from "./pcb-layers";
 import { findingVerdictCounts, reviewRoute, type ReviewRoute } from "./pcb-review";
+import { selectApprovedRulePack } from "./rule-catalog";
 import type {
   AnalysisSummary,
   DocumentAnalysis,
@@ -84,8 +85,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     try {
       const result = await window.circuitInspector.listRulePacks();
       setRulePacks(result.rule_packs);
-      const approved = result.rule_packs.find((pack) => pack.status === "APPROVED");
-      if (approved) setSelectedRulePack((current) => current || approved.id);
+      setSelectedRulePack((current) => selectApprovedRulePack(result.rule_packs, current));
     } catch (cause) {
       setError(message(cause));
     }
@@ -94,8 +94,13 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   useEffect(() => {
     void loadRules();
     const disposeProgress = window.circuitInspector.onProgress(setProgress);
+    const disposeRuleCatalog = window.circuitInspector.onRuleCatalogChanged(() => void loadRules());
+    const refreshOnFocus = () => void loadRules();
+    window.addEventListener("focus", refreshOnFocus);
     return () => {
       disposeProgress();
+      disposeRuleCatalog();
+      window.removeEventListener("focus", refreshOnFocus);
     };
   }, [loadRules]);
 
@@ -581,7 +586,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                   <span>{locale === "zh-CN" ? "测试点直径" : "Test-point diameter"} {formatNm(activeTestPoint.radius_nm == null ? null : activeTestPoint.radius_nm * 2)}</span>
                   <span>{locale === "zh-CN" ? "最近板边净距" : "Nearest board-edge clearance"} {formatNm(activeTestPoint.review_context?.board_edge.distance_nm)}</span>
                   <span>{locale === "zh-CN" ? "最近测试点净距" : "Nearest test-point clearance"} {formatNm(activeTestPoint.review_context?.nearest_test_point?.distance_nm)}{activeTestPoint.review_context?.nearest_test_point ? ` · ${activeTestPoint.review_context.nearest_test_point.id}` : ""}</span>
-                  <span>{locale === "zh-CN" ? "最近工装孔净距" : "Nearest tooling-hole clearance"} {formatNm(activeTestPoint.review_context?.nearest_tooling_hole?.distance_nm)}{activeTestPoint.review_context?.nearest_tooling_hole ? ` · ${activeTestPoint.review_context.nearest_tooling_hole.id}` : ""}</span>
+                  <span>{locale === "zh-CN" ? "最近工装孔净距" : "Nearest tooling-hole clearance"} {formatNm(activeTestPoint.review_context?.nearest_tooling_hole?.distance_nm)}{activeTestPoint.review_context?.nearest_tooling_hole ? ` · ${activeTestPoint.review_context.nearest_tooling_hole.id}${activeTestPoint.review_context.nearest_tooling_hole.confidence === "INFERRED" ? " · REVIEW" : ""}` : ""}</span>
                   <span>{locale === "zh-CN" ? "最近器件净距" : "Nearest component clearance"} {formatNm(activeTestPoint.review_context?.nearest_component?.distance_nm)}{activeTestPoint.review_context?.nearest_component ? ` · ${activeTestPoint.review_context.nearest_component.id}` : ""}</span>
                   <span>{locale === "zh-CN" ? "最近屏蔽结构净距" : "Nearest shield clearance"} {formatNm(activeTestPoint.review_context?.nearest_shield?.distance_nm)}{activeTestPoint.review_context?.nearest_shield ? ` · ${activeTestPoint.review_context.nearest_shield.id} · REVIEW` : ""}</span>
                 </div>
@@ -815,7 +820,7 @@ function ReviewGuidance({ route, rule, locale, onReviewTestPoints, onOpenRuleLib
   const content = route === "TEST_POINT_REVIEW"
     ? { title: chinese ? "先确认测试点候选" : "Confirm test-point candidates first", body: chinese ? "该规则依赖推断测试点。逐个定位、确认或排除后，重新运行分析才能得到 PASS/FAIL。" : "This rule depends on inferred test points. Locate and confirm or reject each candidate, then rerun analysis for PASS/FAIL." }
     : route === "ENTITY_IDENTITY_REVIEW"
-      ? { title: chinese ? "确认屏蔽结构身份" : "Confirm shield identity", body: chinese ? "距离已由导入几何计算，但屏蔽结构是依据器件位号或封装名识别的候选；确认对象身份前保持 REVIEW。" : "The distance is measured from imported geometry, but the shield is a candidate inferred from its reference or package name. Keep REVIEW until its identity is confirmed." }
+      ? { title: chinese ? "确认目标实体身份" : "Confirm target identity", body: chinese ? "距离已由导入几何计算，但目标对象来自层名、器件信息或钻孔几何候选；确认其确为规则目标前保持 REVIEW。" : "The distance is measured from imported geometry, but the target is inferred from a layer name, component metadata, or drill geometry. Keep REVIEW until its identity is confirmed." }
     : route === "UNSUPPORTED_ENTITY"
       ? { title: chinese ? "当前版本无法关闭此 REVIEW" : "This REVIEW cannot be closed in this build", body: chinese ? "该规则依赖尚未建模的实体。请在规则库中保留为 REVIEW、修改适用对象或停用该规则；不能用盲点确认伪造成 PASS。" : "The rule depends on an entity that is not modeled yet. Keep it as REVIEW, change its scope, or disable it in the rule library; a blind confirmation cannot become PASS." }
       : route === "MISSING_SEMANTICS"
@@ -841,10 +846,10 @@ export function TestPointReviewEvidence({ point, locale }: { point: TestPointCan
     <div className="flex items-center justify-between gap-2"><span>{chinese ? "测试点直径" : "DIAMETER"}</span><span className="text-[#d1ad6f]">{formatNm(point.radius_nm == null ? null : point.radius_nm * 2)}</span></div>
     <div className="flex items-center justify-between gap-2"><span>{chinese ? "最近板边净距" : "BOARD EDGE"}</span><span className="text-[#d1ad6f]">{formatNm(context?.board_edge.distance_nm)}</span></div>
     <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近测试点净距" : "NEAREST TEST POINT"}{context?.nearest_test_point ? ` · ${context.nearest_test_point.id}` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_test_point?.distance_nm)}</span></div>
-    <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近工装孔净距" : "NEAREST TOOLING HOLE"}{context?.nearest_tooling_hole ? ` · ${context.nearest_tooling_hole.id}` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_tooling_hole?.distance_nm)}</span></div>
+    <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近工装孔净距" : "NEAREST TOOLING HOLE"}{context?.nearest_tooling_hole ? ` · ${context.nearest_tooling_hole.id}${context.nearest_tooling_hole.confidence === "INFERRED" ? " · REVIEW" : ""}` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_tooling_hole?.distance_nm)}</span></div>
     <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近器件净距" : "NEAREST COMPONENT"}{context?.nearest_component ? ` · ${context.nearest_component.id}` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_component?.distance_nm)}</span></div>
     <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{chinese ? "最近屏蔽结构净距" : "NEAREST SHIELD"}{context?.nearest_shield ? ` · ${context.nearest_shield.id} · REVIEW` : ""}</span><span className="shrink-0 text-[#d1ad6f]">{formatNm(context?.nearest_shield?.distance_nm)}</span></div>
-    <div className="mt-0.5 text-[#626360]">{chinese ? "边缘到边缘；工装孔来自 ODB++ pad_usage，屏蔽结构身份需确认" : "Edge-to-edge; tooling holes use ODB++ pad_usage and shield identity requires review"}</div>
+    <div className="mt-0.5 text-[#626360]">{chinese ? "边缘到边缘；pad_usage 工装孔为明确语义，否则按钻孔候选实测并保持 REVIEW" : "Edge-to-edge; pad_usage tooling holes are explicit, otherwise drill candidates are measured and remain REVIEW"}</div>
   </div>;
 }
 

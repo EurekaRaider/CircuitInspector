@@ -37,6 +37,7 @@ import {
 } from "@circuit-inspector/workflows";
 import { CoreClient } from "./core-client.js";
 import { circuitInspectorMcpLaunch, configureOpenCodeMcp } from "./opencode-integration.js";
+import { watchRuleCatalog } from "./rule-catalog-watcher.js";
 import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, withArtifactId } from "./security.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -51,6 +52,7 @@ if (app.isPackaged) {
 const core = new CoreClient();
 const grantedInputPaths = new Set<string>();
 let window: BrowserWindow | undefined;
+let disposeRuleCatalogWatcher: (() => void) | undefined;
 let pendingDeepLink = process.argv.find((argument) => argument.startsWith("circuitinspector://"));
 
 app.setName("CircuitInspector");
@@ -91,6 +93,15 @@ app.whenReady().then(async () => {
   } catch (error) {
     process.stderr.write(`OpenCode MCP configuration skipped: ${error instanceof Error ? error.message : String(error)}\n`);
   }
+  try {
+    disposeRuleCatalogWatcher = await watchRuleCatalog(cacheDir, () => {
+      if (window && !window.isDestroyed()) window.webContents.send("rule-catalog-changed");
+    }, {
+      onError: (error) => process.stderr.write(`Rule catalog watcher failed: ${error.message}\n`)
+    });
+  } catch (error) {
+    process.stderr.write(`Rule catalog watcher unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
   if (process.platform === "darwin") app.dock?.setIcon(iconPath);
   createWindow();
   app.on("activate", () => {
@@ -102,7 +113,10 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => core.close());
+app.on("before-quit", () => {
+  disposeRuleCatalogWatcher?.();
+  core.close();
+});
 
 function createWindow() {
   window = new BrowserWindow({

@@ -195,7 +195,7 @@ Local PDF, DOCX, and Markdown specifications can be indexed with page, paragraph
 
 V1 contains rule paths for:
 
-- Test point to test point, component, ODB++ tooling hole, shield candidate, board edge, and keep-out clearance
+- Test point to test point, component, board edge, tooling-hole geometry, shield candidate, and UV-glue layer geometry; inferred identities retain measured evidence as `REVIEW`
 - Test-point accessibility
 - Minimum trace width and copper spacing
 - Copper to board-edge and hole-to-copper clearance

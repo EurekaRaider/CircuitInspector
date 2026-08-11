@@ -479,6 +479,53 @@ impl Design {
             })
             .collect()
     }
+
+    pub fn tooling_hole_candidates(&self) -> Vec<(&Layer, &Feature, CoverageLevel)> {
+        let explicit = self.tooling_hole_drills();
+        if !explicit.is_empty() {
+            return explicit
+                .into_iter()
+                .map(|(layer, feature)| (layer, feature, CoverageLevel::Explicit))
+                .collect();
+        }
+        self.layers
+            .iter()
+            .flat_map(|layer| {
+                layer.features.iter().filter_map(move |feature| {
+                    matches!(feature.geometry, FeatureGeometry::Drill { .. }).then_some((
+                        layer,
+                        feature,
+                        CoverageLevel::Inferred,
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    pub fn test_point_bounds(&self, point: &TestPoint) -> Option<BoundsNm> {
+        point.radius_nm.map_or_else(
+            || {
+                point.component_ref.as_deref().and_then(|reference| {
+                    self.components
+                        .iter()
+                        .find(|component| component.refdes == reference)
+                        .map(|component| component.bounds)
+                        .filter(|bounds| {
+                            !bounds.is_empty()
+                                && (bounds.max_x > bounds.min_x || bounds.max_y > bounds.min_y)
+                        })
+                })
+            },
+            |radius| {
+                Some(BoundsNm {
+                    min_x: point.center.x - radius,
+                    min_y: point.center.y - radius,
+                    max_x: point.center.x + radius,
+                    max_y: point.center.y + radius,
+                })
+            },
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

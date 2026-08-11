@@ -53,6 +53,12 @@ describe("PCB REVIEW routing", () => {
     expect(reviewRoute(baseViolation, { ...baseRule, target: "BGA_CSP" }, [])).toBe("UNSUPPORTED_ENTITY");
   });
 
+  it("routes measured UV glue and candidate tooling-hole geometry to identity review", () => {
+    const measured = { ...baseViolation, semantic_confidence: "INFERRED" as const, measured_value_nm: 600_000, evidence_points: [{ x: 1, y: 2 }] };
+    expect(reviewRoute(measured, { ...baseRule, target: "UV_GLUE" }, [])).toBe("ENTITY_IDENTITY_REVIEW");
+    expect(reviewRoute(measured, { ...baseRule, target: "TOOLING_HOLE" }, [])).toBe("ENTITY_IDENTITY_REVIEW");
+  });
+
   it("routes measured shield candidates to identity review", () => {
     expect(reviewRoute(
       { ...baseViolation, semantic_confidence: "INFERRED", measured_value_nm: 600_000, evidence_points: [{ x: 1, y: 2 }] },
@@ -93,6 +99,6 @@ describe("PCB REVIEW routing", () => {
     expect(markup).toContain("最近工装孔净距 · drill:4");
     expect(markup).toContain("最近器件净距 · R1");
     expect(markup).toContain("最近屏蔽结构净距 · SH1 · REVIEW");
-    expect(markup).toContain("工装孔来自 ODB++ pad_usage");
+    expect(markup).toContain("pad_usage 工装孔为明确语义");
   });
 });

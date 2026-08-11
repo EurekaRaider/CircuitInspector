@@ -17,6 +17,13 @@ pub struct BoundsMeasurement {
     pub bounds_point: PointNm,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeMeasurement {
+    pub distance_nm: i64,
+    pub source_point: PointNm,
+    pub target_point: PointNm,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct SegmentNm {
     start: PointNm,
@@ -72,6 +79,266 @@ pub fn circle_to_bounds(center: PointNm, radius_nm: i64, bounds: BoundsNm) -> Bo
         circle_point: point_toward(center, bounds_point, radius_nm.min(center_distance_nm)),
         bounds_point,
     }
+}
+
+pub fn bounds_to_bounds(source: BoundsNm, target: BoundsNm) -> EdgeMeasurement {
+    let (source_x, target_x) =
+        axis_edge_points(source.min_x, source.max_x, target.min_x, target.max_x);
+    let (source_y, target_y) =
+        axis_edge_points(source.min_y, source.max_y, target.min_y, target.max_y);
+    let source_point = PointNm {
+        x: source_x,
+        y: source_y,
+    };
+    let target_point = PointNm {
+        x: target_x,
+        y: target_y,
+    };
+    EdgeMeasurement {
+        distance_nm: distance(source_point, target_point),
+        source_point,
+        target_point,
+    }
+}
+
+pub fn circle_to_geometry(
+    center: PointNm,
+    radius_nm: i64,
+    geometry: &FeatureGeometry,
+) -> EdgeMeasurement {
+    match geometry {
+        FeatureGeometry::Pad { .. } | FeatureGeometry::ComponentBody { .. } => {
+            let measurement = circle_to_bounds(center, radius_nm, geometry.bounds());
+            EdgeMeasurement {
+                distance_nm: measurement.distance_nm,
+                source_point: measurement.circle_point,
+                target_point: measurement.bounds_point,
+            }
+        }
+        FeatureGeometry::Drill {
+            center: target,
+            diameter_nm,
+            ..
+        } => circle_to_circle(center, radius_nm, *target, diameter_nm / 2),
+        FeatureGeometry::Line {
+            start,
+            end,
+            width_nm,
+        } => circle_to_segments(
+            center,
+            radius_nm,
+            &[SegmentNm {
+                start: *start,
+                end: *end,
+            }],
+            width_nm / 2,
+            false,
+        ),
+        FeatureGeometry::Arc {
+            start,
+            end,
+            center: arc_center,
+            clockwise,
+            width_nm,
+        } => {
+            let mut segments = Vec::new();
+            append_arc_segments(&mut segments, *start, *end, *arc_center, *clockwise);
+            circle_to_segments(center, radius_nm, &segments, width_nm / 2, false)
+        }
+        FeatureGeometry::Region { points } => {
+            let mut segments = Vec::new();
+            append_geometry_segments(&mut segments, geometry);
+            circle_to_segments(
+                center,
+                radius_nm,
+                &segments,
+                0,
+                point_in_polygon(center, points),
+            )
+        }
+    }
+}
+
+pub fn bounds_to_geometry(bounds: BoundsNm, geometry: &FeatureGeometry) -> EdgeMeasurement {
+    match geometry {
+        FeatureGeometry::Pad { .. } | FeatureGeometry::ComponentBody { .. } => {
+            bounds_to_bounds(bounds, geometry.bounds())
+        }
+        FeatureGeometry::Drill {
+            center,
+            diameter_nm,
+            ..
+        } => {
+            let measurement = circle_to_bounds(*center, diameter_nm / 2, bounds);
+            EdgeMeasurement {
+                distance_nm: measurement.distance_nm,
+                source_point: measurement.bounds_point,
+                target_point: measurement.circle_point,
+            }
+        }
+        FeatureGeometry::Line {
+            start,
+            end,
+            width_nm,
+        } => bounds_to_segments(
+            bounds,
+            &[SegmentNm {
+                start: *start,
+                end: *end,
+            }],
+            width_nm / 2,
+            false,
+        ),
+        FeatureGeometry::Arc {
+            start,
+            end,
+            center,
+            clockwise,
+            width_nm,
+        } => {
+            let mut segments = Vec::new();
+            append_arc_segments(&mut segments, *start, *end, *center, *clockwise);
+            bounds_to_segments(bounds, &segments, width_nm / 2, false)
+        }
+        FeatureGeometry::Region { points } => {
+            let mut segments = Vec::new();
+            append_geometry_segments(&mut segments, geometry);
+            let overlaps = point_in_polygon(bounds.center(), points)
+                || points.iter().any(|point| point_in_bounds(*point, bounds));
+            bounds_to_segments(bounds, &segments, 0, overlaps)
+        }
+    }
+}
+
+fn axis_edge_points(
+    source_min: i64,
+    source_max: i64,
+    target_min: i64,
+    target_max: i64,
+) -> (i64, i64) {
+    if source_max < target_min {
+        (source_max, target_min)
+    } else if target_max < source_min {
+        (source_min, target_max)
+    } else {
+        let overlap_min = source_min.max(target_min);
+        let overlap_max = source_max.min(target_max);
+        let midpoint = overlap_min.saturating_add((overlap_max - overlap_min) / 2);
+        (midpoint, midpoint)
+    }
+}
+
+fn circle_to_circle(
+    source_center: PointNm,
+    source_radius_nm: i64,
+    target_center: PointNm,
+    target_radius_nm: i64,
+) -> EdgeMeasurement {
+    let center_distance_nm = distance(source_center, target_center);
+    EdgeMeasurement {
+        distance_nm: center_distance_nm
+            .saturating_sub(source_radius_nm)
+            .saturating_sub(target_radius_nm)
+            .max(0),
+        source_point: point_toward(
+            source_center,
+            target_center,
+            source_radius_nm.min(center_distance_nm),
+        ),
+        target_point: point_toward(
+            target_center,
+            source_center,
+            target_radius_nm.min(center_distance_nm),
+        ),
+    }
+}
+
+fn circle_to_segments(
+    center: PointNm,
+    radius_nm: i64,
+    segments: &[SegmentNm],
+    target_radius_nm: i64,
+    overlaps_area: bool,
+) -> EdgeMeasurement {
+    if overlaps_area {
+        return EdgeMeasurement {
+            distance_nm: 0,
+            source_point: center,
+            target_point: center,
+        };
+    }
+    let (center_distance_nm, centerline_point) = segments
+        .iter()
+        .map(|segment| {
+            let point = closest_point_on_segment(center, *segment);
+            (distance(center, point), point)
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .unwrap_or((0, center));
+    EdgeMeasurement {
+        distance_nm: center_distance_nm
+            .saturating_sub(radius_nm)
+            .saturating_sub(target_radius_nm)
+            .max(0),
+        source_point: point_toward(center, centerline_point, radius_nm.min(center_distance_nm)),
+        target_point: point_toward(
+            centerline_point,
+            center,
+            target_radius_nm.min(center_distance_nm),
+        ),
+    }
+}
+
+fn bounds_to_segments(
+    bounds: BoundsNm,
+    segments: &[SegmentNm],
+    target_radius_nm: i64,
+    overlaps_area: bool,
+) -> EdgeMeasurement {
+    if overlaps_area {
+        let point = bounds.center();
+        return EdgeMeasurement {
+            distance_nm: 0,
+            source_point: point,
+            target_point: point,
+        };
+    }
+    let (centerline_distance_nm, source_point, centerline_point) = segments
+        .iter()
+        .map(|segment| bounds_to_segment(bounds, *segment))
+        .min_by_key(|(distance, _, _)| *distance)
+        .unwrap_or((0, bounds.center(), bounds.center()));
+    EdgeMeasurement {
+        distance_nm: centerline_distance_nm
+            .saturating_sub(target_radius_nm)
+            .max(0),
+        source_point,
+        target_point: point_toward(
+            centerline_point,
+            source_point,
+            target_radius_nm.min(centerline_distance_nm),
+        ),
+    }
+}
+
+fn point_in_polygon(point: PointNm, polygon: &[PointNm]) -> bool {
+    if polygon.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut previous = polygon[polygon.len() - 1];
+    for current in polygon {
+        let crosses = (current.y > point.y) != (previous.y > point.y)
+            && (point.x as f64)
+                < (previous.x - current.x) as f64 * (point.y - current.y) as f64
+                    / (previous.y - current.y) as f64
+                    + current.x as f64;
+        if crosses {
+            inside = !inside;
+        }
+        previous = *current;
+    }
+    inside
 }
 
 fn board_edge_segments(design: &Design) -> (Vec<SegmentNm>, CoverageLevel) {

@@ -408,6 +408,7 @@ export interface ViewerApi {
   parseTableText(kind: TableKind, text: string): Promise<TableImportResult>;
   exportTable(kind: TableKind, rows: Array<Record<string, unknown>>, format: TableFormat, locale: "zh-CN" | "en-US"): Promise<{ ok: boolean; path: string | null }>;
   onProgress(callback: (event: ProgressEvent) => void): () => void;
+  onRuleCatalogChanged(callback: () => void): () => void;
   onDeepLink(callback: (url: string) => void): () => void;
 }
 

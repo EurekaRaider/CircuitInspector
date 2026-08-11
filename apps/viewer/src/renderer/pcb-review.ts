@@ -10,12 +10,13 @@ export function findingVerdictCounts(findings: Array<Pick<Violation, "verdict">>
   }, { fail: 0, review: 0 });
 }
 
-const UNSUPPORTED_ENTITIES = new Set(["PANEL_TAB", "BGA_CSP", "UV_GLUE"]);
+const UNSUPPORTED_ENTITIES = new Set(["PANEL_TAB", "BGA_CSP"]);
+const INFERRED_IDENTITY_ENTITIES = new Set(["SHIELD_FENCE", "TOOLING_HOLE", "UV_GLUE"]);
 
 export function reviewRoute(violation: Violation, rule: RuleDefinition | undefined, testPoints: TestPointCandidate[]): ReviewRoute {
   const entities = [rule?.source, rule?.target].filter((value): value is NonNullable<typeof value> => Boolean(value));
   if (entities.some((entity) => UNSUPPORTED_ENTITIES.has(entity))) return "UNSUPPORTED_ENTITY";
-  if (entities.includes("SHIELD_FENCE") && violation.semantic_confidence === "INFERRED") return "ENTITY_IDENTITY_REVIEW";
+  if (entities.some((entity) => INFERRED_IDENTITY_ENTITIES.has(entity)) && violation.semantic_confidence === "INFERRED") return "ENTITY_IDENTITY_REVIEW";
   if (entities.includes("TEST_POINT") && (
     violation.message.toLocaleLowerCase("en-US").includes("test-point identity")
     || testPoints.some((point) => point.confidence === "INFERRED")

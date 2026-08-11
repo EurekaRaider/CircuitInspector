@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { approvalBlockers, reviewSuggestion, severityLabel } from "../src/renderer/RuleLibrary.js";
+import { selectApprovedRulePack } from "../src/renderer/rule-catalog.js";
 import type { RulePack } from "../src/renderer/types.js";
 
 function draftPack(): RulePack {
@@ -34,6 +35,14 @@ function draftPack(): RulePack {
 }
 
 describe("rule-library approval gate", () => {
+  it("refreshes the layout-review selection when the approved catalog changes", () => {
+    const first = { ...draftPack(), id: "approved-a", status: "APPROVED" as const };
+    const second = { ...draftPack(), id: "approved-b", status: "APPROVED" as const };
+    expect(selectApprovedRulePack([first, second], second.id)).toBe(second.id);
+    expect(selectApprovedRulePack([first], second.id)).toBe(first.id);
+    expect(selectApprovedRulePack([draftPack()], first.id)).toBe("");
+  });
+
   it("requires every severity and extracted review item to be confirmed", () => {
     const pack = draftPack();
     expect(approvalBlockers(pack)).toEqual(["UNCONFIRMED_SEVERITY", "UNACKNOWLEDGED_REVIEW_ITEM"]);

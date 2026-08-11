@@ -47,6 +47,11 @@ const api = {
     ipcRenderer.on("core-progress", listener);
     return () => ipcRenderer.removeListener("core-progress", listener);
   },
+  onRuleCatalogChanged: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("rule-catalog-changed", listener);
+    return () => ipcRenderer.removeListener("rule-catalog-changed", listener);
+  },
   onDeepLink: (callback: (url: string) => void) => {
     const listener = (_event: unknown, url: string) => callback(url);
     ipcRenderer.on("deep-link", listener);

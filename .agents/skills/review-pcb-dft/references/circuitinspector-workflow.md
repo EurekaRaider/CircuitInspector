@@ -81,8 +81,9 @@ Distance-rule entities are drawn from:
 - `COPPER`
 - `BOARD_EDGE`
 - `DRILL`
-- `TOOLING_HOLE` when ODB++ supplies `.pad_usage=tooling_hole`
+- `TOOLING_HOLE`; ODB++ `.pad_usage=tooling_hole` is explicit, while otherwise available drill geometry is measured only as an inferred candidate and remains `REVIEW`
 - `SHIELD_FENCE` candidates inferred from an explicit shield-like component reference or package name; measurements remain `REVIEW` until identity is confirmed
+- `UV_GLUE` geometry from an explicit UV-glue layer function; generic glue/adhesive/dispense functions or matching layer names are inferred candidates that remain `REVIEW`
 
 Distance metrics are:
 
@@ -90,7 +91,7 @@ Distance metrics are:
 - `EDGE_TO_EDGE`
 - `BODY_TO_PAD`
 
-Rules can filter layer functions and same-net or different-net relationships. Typical supported checks include test-point diameter and spacing, test-point-to-component, tooling-hole, shield-candidate, and board-edge clearance, copper spacing or edge clearance, drill-to-copper clearance, trace width, and annular ring.
+Rules can filter layer functions and same-net or different-net relationships. Typical supported checks include test-point diameter and spacing, test-point-to-component, tooling-hole, UV-glue-edge, shield-candidate, and board-edge clearance, copper spacing or edge clearance, drill-to-copper clearance, trace width, and annular ring. When a test-point radius is absent but the inferred TP/MTP component has a usable package outline, edge-clearance checks use that outline and retain `REVIEW` until the test-point identity is confirmed.
 
 Do not describe the current engine as automatically validating probe angle, component height, solder-mask opening, side accessibility, fixture support, clamps, tooling, full net access, boundary-scan topology, programming, or powered FCT.
 
