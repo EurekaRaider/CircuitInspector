@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import {
   traceSchematicInterface
 } from "../src/schematic.js";
 import { traceInterfacePaths } from "../src/schematic-graph.js";
+import { hasLargeRasterImage, hasVisibleSchematicPixels } from "../src/schematic-pdf.js";
 import { compareFixtureWiring } from "../src/wiring.js";
 import { createWibConstraintSet, qualifyWibDesign } from "../src/wib-qualification.js";
 
@@ -23,6 +24,16 @@ afterEach(async () => {
 });
 
 describe("schematic document v2", () => {
+  it("detects visible page pixels and full-page raster content", () => {
+    const blank = new Uint8ClampedArray(80).fill(255);
+    const visible = new Uint8ClampedArray(blank);
+    for (let offset = 0; offset < 64; offset += 4) visible.set([20, 20, 20, 255], offset);
+    expect(hasVisibleSchematicPixels(blank)).toBe(false);
+    expect(hasVisibleSchematicPixels(visible)).toBe(true);
+    expect(hasLargeRasterImage([85], [["image", 1584, 1224]], 85, { width: 792, height: 612 })).toBe(true);
+    expect(hasLargeRasterImage([85], [["logo", 80, 40]], 85, { width: 792, height: 612 })).toBe(false);
+  });
+
   it("imports a multi-page vector PDF, traces through a passive, and confirms only selected paths", async () => {
     const cacheDir = await temporaryCache();
     const imported = await importSchematicDocument(
@@ -34,6 +45,7 @@ describe("schematic document v2", () => {
 
     expect(imported).toMatchObject({ schema_version: 2, source_format: "PDF", status: "DRAFT" });
     expect(imported.pages).toHaveLength(2);
+    expect(imported.source_page_count).toBe(2);
     expect(imported.components.map((component) => component.refdes)).toEqual(expect.arrayContaining(["J1", "R104", "U7"]));
     expect(imported.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain("CONFLICTING_NET_LABELS");
     expect(imported.graph_pins.find((pin) => pin.id === "pin-U7-36")).toMatchObject({ page: 2 });
@@ -54,6 +66,23 @@ describe("schematic document v2", () => {
     expect(confirmed.confirmed_scopes[0]?.path_ids).toEqual([sclPath!.id]);
     expect(confirmed.pins.find((pin) => pin.pin === "1")?.confidence).toBe("EXPLICIT");
     expect(confirmed.pins.find((pin) => pin.pin === "2")?.confidence).toBe("INFERRED");
+  });
+
+  it("imports and renders every page after the fourth page", async () => {
+    const cacheDir = await temporaryCache();
+    const imported = await importSchematicDocument(
+      path.join(fixtureRoot, "wib-schematic-six-pages.pdf"),
+      "WIB",
+      cacheDir
+    );
+
+    expect(imported.source_page_count).toBe(6);
+    expect(imported.pages.map((page) => page.number)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(imported.components.find((component) => component.refdes === "J6")).toMatchObject({ page: 6 });
+    for (const page of imported.pages) {
+      expect((await readFile(page.render_path)).byteLength).toBeGreaterThan(1_000);
+      expect((await readFile(page.thumbnail_path)).byteLength).toBeGreaterThan(500);
+    }
   });
 
   it("keeps multiple IC endpoints in REVIEW instead of choosing one", async () => {
@@ -152,7 +181,7 @@ describe("schematic document v2", () => {
 
     expect(imported.pages).toHaveLength(2);
     expect(imported.pages.every((page) => page.extraction === "OCR")).toBe(true);
-    expect(imported.parser_version).toBe("schematic-v2.0.3");
+    expect(imported.parser_version).toBe("schematic-v2.0.4");
     for (const page of imported.pages) {
       expect((await readFile(page.render_path)).byteLength).toBeGreaterThan(1_000);
       expect((await readFile(page.thumbnail_path)).byteLength).toBeGreaterThan(500);
@@ -162,12 +191,12 @@ describe("schematic document v2", () => {
 
     await writeFile(
       path.join(cacheDir, "schematics", imported.id, "document.json"),
-      JSON.stringify({ ...imported, parser_version: "schematic-v2.0.1" }),
+      JSON.stringify({ ...imported, pages: imported.pages.slice(0, 1) }),
       "utf8"
     );
-    await unlink(imported.pages[1]!.render_path);
     const rebuilt = await readSchematicDocument(imported.id, cacheDir);
-    expect(rebuilt.parser_version).toBe("schematic-v2.0.3");
+    expect(rebuilt.parser_version).toBe("schematic-v2.0.4");
+    expect(rebuilt.pages).toHaveLength(2);
     expect((await readFile(rebuilt.pages[1]!.render_path)).byteLength).toBeGreaterThan(1_000);
   }, 120_000);
 

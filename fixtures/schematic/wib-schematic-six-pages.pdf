@@ -1,0 +1,343 @@
+%PDF-1.3
+%“Œ‹ž ReportLab Generated PDF document (opensource)
+1 0 obj
+<<
+/F1 2 0 R /F2 3 0 R /F3 4 0 R
+>>
+endobj
+2 0 obj
+<<
+/BaseFont /Helvetica /Encoding /WinAnsiEncoding /Name /F1 /Subtype /Type1 /Type /Font
+>>
+endobj
+3 0 obj
+<<
+/BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /Name /F2 /Subtype /Type1 /Type /Font
+>>
+endobj
+4 0 obj
+<<
+/BaseFont /Courier /Encoding /WinAnsiEncoding /Name /F3 /Subtype /Type1 /Type /Font
+>>
+endobj
+5 0 obj
+<<
+/Contents 14 0 R /MediaBox [ 0 0 792 612 ] /Parent 13 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+6 0 obj
+<<
+/Contents 15 0 R /MediaBox [ 0 0 792 612 ] /Parent 13 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+7 0 obj
+<<
+/Contents 16 0 R /MediaBox [ 0 0 792 612 ] /Parent 13 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+8 0 obj
+<<
+/Contents 17 0 R /MediaBox [ 0 0 792 612 ] /Parent 13 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+9 0 obj
+<<
+/Contents 18 0 R /MediaBox [ 0 0 792 612 ] /Parent 13 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+10 0 obj
+<<
+/Contents 19 0 R /MediaBox [ 0 0 792 612 ] /Parent 13 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+11 0 obj
+<<
+/PageMode /UseNone /Pages 13 0 R /Type /Catalog
+>>
+endobj
+12 0 obj
+<<
+/Author (anonymous) /CreationDate (D:20260811125427+08'00') /Creator (anonymous) /Keywords () /ModDate (D:20260811125427+08'00') /Producer (ReportLab PDF Library - \(opensource\)) 
+  /Subject (unspecified) /Title (CircuitInspector multi-page WIB schematic fixture) /Trapped /False
+>>
+endobj
+13 0 obj
+<<
+/Count 6 /Kids [ 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R ] /Type /Pages
+>>
+endobj
+14 0 obj
+<<
+/Length 855
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+BT /F2 10 Tf 12 TL ET
+BT 1 0 0 1 34 575 Tm (CONTROLLED MULTI-PAGE PIN EVIDENCE) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+BT 1 0 0 1 34 557 Tm (J1 PIN 1 NET WIB_PAGE_1) Tj T* ET
+BT 1 0 0 1 34 545 Tm (U1 PIN 1 NET WIB_PAGE_1) Tj T* ET
+1.2 w
+n 100 250 105 120 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 146.384 352 Tm (J1) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 58 328 m 100 328 l S
+BT 1 0 0 1 90.2 325 Tm (1) Tj T* ET
+BT 1 0 0 1 107 325 Tm (WIB_PAGE_1) Tj T* ET
+1.2 w
+n 480 220 150 190 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 547.971 392 Tm (U1) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 438 368 m 480 368 l S
+BT 1 0 0 1 470.2 365 Tm (1) Tj T* ET
+BT 1 0 0 1 487 365 Tm (WIB_PAGE_1) Tj T* ET
+1.4 w
+n 205 328 m 480 368 l S
+BT 1 0 0 1 300 360 Tm (WIB_PAGE_1) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 34 25 Tm (PAGE 1 / MULTI-PAGE WIB) Tj T* ET
+ 
+endstream
+endobj
+15 0 obj
+<<
+/Length 855
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+BT /F2 10 Tf 12 TL ET
+BT 1 0 0 1 34 575 Tm (CONTROLLED MULTI-PAGE PIN EVIDENCE) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+BT 1 0 0 1 34 557 Tm (J2 PIN 1 NET WIB_PAGE_2) Tj T* ET
+BT 1 0 0 1 34 545 Tm (U2 PIN 2 NET WIB_PAGE_2) Tj T* ET
+1.2 w
+n 100 250 105 120 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 146.384 352 Tm (J2) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 58 328 m 100 328 l S
+BT 1 0 0 1 90.2 325 Tm (1) Tj T* ET
+BT 1 0 0 1 107 325 Tm (WIB_PAGE_2) Tj T* ET
+1.2 w
+n 480 220 150 190 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 547.971 392 Tm (U2) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 438 368 m 480 368 l S
+BT 1 0 0 1 470.2 365 Tm (2) Tj T* ET
+BT 1 0 0 1 487 365 Tm (WIB_PAGE_2) Tj T* ET
+1.4 w
+n 205 328 m 480 368 l S
+BT 1 0 0 1 300 360 Tm (WIB_PAGE_2) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 34 25 Tm (PAGE 2 / MULTI-PAGE WIB) Tj T* ET
+ 
+endstream
+endobj
+16 0 obj
+<<
+/Length 855
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+BT /F2 10 Tf 12 TL ET
+BT 1 0 0 1 34 575 Tm (CONTROLLED MULTI-PAGE PIN EVIDENCE) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+BT 1 0 0 1 34 557 Tm (J3 PIN 1 NET WIB_PAGE_3) Tj T* ET
+BT 1 0 0 1 34 545 Tm (U3 PIN 3 NET WIB_PAGE_3) Tj T* ET
+1.2 w
+n 100 250 105 120 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 146.384 352 Tm (J3) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 58 328 m 100 328 l S
+BT 1 0 0 1 90.2 325 Tm (1) Tj T* ET
+BT 1 0 0 1 107 325 Tm (WIB_PAGE_3) Tj T* ET
+1.2 w
+n 480 220 150 190 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 547.971 392 Tm (U3) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 438 368 m 480 368 l S
+BT 1 0 0 1 470.2 365 Tm (3) Tj T* ET
+BT 1 0 0 1 487 365 Tm (WIB_PAGE_3) Tj T* ET
+1.4 w
+n 205 328 m 480 368 l S
+BT 1 0 0 1 300 360 Tm (WIB_PAGE_3) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 34 25 Tm (PAGE 3 / MULTI-PAGE WIB) Tj T* ET
+ 
+endstream
+endobj
+17 0 obj
+<<
+/Length 855
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+BT /F2 10 Tf 12 TL ET
+BT 1 0 0 1 34 575 Tm (CONTROLLED MULTI-PAGE PIN EVIDENCE) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+BT 1 0 0 1 34 557 Tm (J4 PIN 1 NET WIB_PAGE_4) Tj T* ET
+BT 1 0 0 1 34 545 Tm (U4 PIN 4 NET WIB_PAGE_4) Tj T* ET
+1.2 w
+n 100 250 105 120 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 146.384 352 Tm (J4) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 58 328 m 100 328 l S
+BT 1 0 0 1 90.2 325 Tm (1) Tj T* ET
+BT 1 0 0 1 107 325 Tm (WIB_PAGE_4) Tj T* ET
+1.2 w
+n 480 220 150 190 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 547.971 392 Tm (U4) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 438 368 m 480 368 l S
+BT 1 0 0 1 470.2 365 Tm (4) Tj T* ET
+BT 1 0 0 1 487 365 Tm (WIB_PAGE_4) Tj T* ET
+1.4 w
+n 205 328 m 480 368 l S
+BT 1 0 0 1 300 360 Tm (WIB_PAGE_4) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 34 25 Tm (PAGE 4 / MULTI-PAGE WIB) Tj T* ET
+ 
+endstream
+endobj
+18 0 obj
+<<
+/Length 855
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+BT /F2 10 Tf 12 TL ET
+BT 1 0 0 1 34 575 Tm (CONTROLLED MULTI-PAGE PIN EVIDENCE) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+BT 1 0 0 1 34 557 Tm (J5 PIN 1 NET WIB_PAGE_5) Tj T* ET
+BT 1 0 0 1 34 545 Tm (U5 PIN 5 NET WIB_PAGE_5) Tj T* ET
+1.2 w
+n 100 250 105 120 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 146.384 352 Tm (J5) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 58 328 m 100 328 l S
+BT 1 0 0 1 90.2 325 Tm (1) Tj T* ET
+BT 1 0 0 1 107 325 Tm (WIB_PAGE_5) Tj T* ET
+1.2 w
+n 480 220 150 190 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 547.971 392 Tm (U5) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 438 368 m 480 368 l S
+BT 1 0 0 1 470.2 365 Tm (5) Tj T* ET
+BT 1 0 0 1 487 365 Tm (WIB_PAGE_5) Tj T* ET
+1.4 w
+n 205 328 m 480 368 l S
+BT 1 0 0 1 300 360 Tm (WIB_PAGE_5) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 34 25 Tm (PAGE 5 / MULTI-PAGE WIB) Tj T* ET
+ 
+endstream
+endobj
+19 0 obj
+<<
+/Length 855
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+BT /F2 10 Tf 12 TL ET
+BT 1 0 0 1 34 575 Tm (CONTROLLED MULTI-PAGE PIN EVIDENCE) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+BT 1 0 0 1 34 557 Tm (J6 PIN 1 NET WIB_PAGE_6) Tj T* ET
+BT 1 0 0 1 34 545 Tm (U6 PIN 6 NET WIB_PAGE_6) Tj T* ET
+1.2 w
+n 100 250 105 120 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 146.384 352 Tm (J6) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 58 328 m 100 328 l S
+BT 1 0 0 1 90.2 325 Tm (1) Tj T* ET
+BT 1 0 0 1 107 325 Tm (WIB_PAGE_6) Tj T* ET
+1.2 w
+n 480 220 150 190 re S
+BT /F2 11 Tf 13.2 TL ET
+BT 1 0 0 1 547.971 392 Tm (U6) Tj T* ET
+BT /F3 8 Tf 9.6 TL ET
+n 438 368 m 480 368 l S
+BT 1 0 0 1 470.2 365 Tm (6) Tj T* ET
+BT 1 0 0 1 487 365 Tm (WIB_PAGE_6) Tj T* ET
+1.4 w
+n 205 328 m 480 368 l S
+BT 1 0 0 1 300 360 Tm (WIB_PAGE_6) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 34 25 Tm (PAGE 6 / MULTI-PAGE WIB) Tj T* ET
+ 
+endstream
+endobj
+xref
+0 20
+0000000000 65535 f 
+0000000061 00000 n 
+0000000112 00000 n 
+0000000219 00000 n 
+0000000331 00000 n 
+0000000436 00000 n 
+0000000631 00000 n 
+0000000826 00000 n 
+0000001021 00000 n 
+0000001216 00000 n 
+0000001411 00000 n 
+0000001607 00000 n 
+0000001677 00000 n 
+0000001980 00000 n 
+0000002071 00000 n 
+0000002977 00000 n 
+0000003883 00000 n 
+0000004789 00000 n 
+0000005695 00000 n 
+0000006601 00000 n 
+trailer
+<<
+/ID 
+[<b68031f74d317ec4f4ae451ce1c6f242><b68031f74d317ec4f4ae451ce1c6f242>]
+% ReportLab generated PDF document -- digest (opensource)
+
+/Info 12 0 R
+/Root 11 0 R
+/Size 20
+>>
+startxref
+7507
+%%EOF

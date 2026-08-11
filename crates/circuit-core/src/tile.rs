@@ -410,6 +410,7 @@ mod tests {
             }],
             components: vec![Component {
                 refdes: "U1".into(),
+                package_name: None,
                 center: PointNm {
                     x: 5_000_000,
                     y: 5_000_000,

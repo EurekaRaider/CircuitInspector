@@ -18,7 +18,8 @@ import { classifySchematicComponent } from "./schematic-graph.js";
 
 const PAGE_RENDER_MAX_EDGE = 4096;
 const TEXT_TOKEN_MINIMUM = 4;
-export const SCHEMATIC_PARSER_VERSION = "schematic-v2.0.3";
+const HYBRID_PAGE_TEXT_TOKEN_MAXIMUM = 32;
+export const SCHEMATIC_PARSER_VERSION = "schematic-v2.0.4";
 const REF_DESIGNATOR = /^(?:U|IC|MCU|FPGA|J|P|CN|X|CONN|R|C|L|FB|F|FL|NTC|PTC|D|TVS|ESD|Q)\d+[A-Z0-9_-]*$/i;
 const EXPLICIT_PIN_ROW = /\b((?:U|IC|MCU|FPGA|J|P|CN|X|CONN|R|C|L|FB|F|FL|NTC|PTC|D|TVS|ESD|Q)\d+[A-Z0-9_-]*)\s+(?:PIN\s*)?([A-Z0-9]+)\s+(?:NET(?:\s*NAME)?\s*[:=]?\s*)?([A-Z_+/.#-][A-Z0-9_+/.#-]*)\b/i;
 const COMPACT_EXPLICIT_PIN_ROW = /^((?:U|IC|MCU|FPGA|J|P|CN|X|CONN|R|C|L|FB|F|FL|NTC|PTC|D|TVS|ESD|Q)\d+[A-Z0-9_-]*?)_?PIN([A-Z0-9]+)NET(?:NAME)?[:=]?([A-Z_+/.#-][A-Z0-9_+/.#-]*)$/i;
@@ -78,7 +79,21 @@ export async function parseSchematicPdf(input: PdfParseInput): Promise<Schematic
         const context = canvas.getContext("2d");
         context.fillStyle = "#ffffff";
         context.fillRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvas: canvas as unknown as HTMLCanvasElement, viewport }).promise;
+        await page.render({ canvas: null, canvasContext: context as unknown as CanvasRenderingContext2D, viewport, background: "#ffffff" }).promise;
+        const extractedTokens = await pdfTextTokens(page, scale, canvas.height);
+        const operatorList = await page.getOperatorList();
+        let imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+        if (!hasVisibleSchematicPixels(imageData.data)) {
+          if (operatorList.fnArray.length > 0) {
+            context.fillStyle = "#ffffff";
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            await page.render({ canvas: null, canvasContext: context as unknown as CanvasRenderingContext2D, viewport, intent: "print", background: "#ffffff" }).promise;
+            imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+            if (!hasVisibleSchematicPixels(imageData.data)) {
+              diagnostics.push({ code: "SCHEMATIC_PAGE_RENDER_EMPTY", severity: "WARNING", message: `Page ${pageNumber} contains PDF drawing operations but rendered blank; review the source page before confirming evidence.` });
+            }
+          }
+        }
         const png = canvas.toBuffer("image/png");
         const renderPath = path.join(pagesDirectory, `page-${pageNumber}.png`);
         await writeFile(renderPath, png);
@@ -88,11 +103,13 @@ export async function parseSchematicPdf(input: PdfParseInput): Promise<Schematic
         const thumbnailPath = path.join(pagesDirectory, `page-${pageNumber}-thumb.png`);
         await writeFile(thumbnailPath, thumbnail.toBuffer("image/png"));
 
-        const extractedTokens = await pdfTextTokens(page, scale, canvas.height);
-        const useOcr = meaningfulTokenCount(extractedTokens) < TEXT_TOKEN_MINIMUM;
+        const textTokenCount = meaningfulTokenCount(extractedTokens);
+        const useOcr = textTokenCount < TEXT_TOKEN_MINIMUM || (
+          textTokenCount < HYBRID_PAGE_TEXT_TOKEN_MAXIMUM
+          && hasLargeRasterImage(operatorList.fnArray, operatorList.argsArray, pdfjs.OPS.paintImageXObject, baseViewport)
+        );
         const tokens = useOcr ? await recognizePage(png, input.onProgress, pageNumber, pdf.numPages) : extractedTokens;
         pageTokens.set(pageNumber, tokens);
-        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
         const detectedWires = detectOrthogonalWires(imageData.data, canvas.width, canvas.height, tokens, pageNumber, input);
         wires.push(...detectedWires);
         junctions.push(...detectJunctions(imageData.data, canvas.width, canvas.height, detectedWires, pageNumber, input));
@@ -133,6 +150,7 @@ export async function parseSchematicPdf(input: PdfParseInput): Promise<Schematic
     source_path: input.sourcePath,
     source_hash: input.sourceHash,
     source_format: "PDF",
+    source_page_count: pdf.numPages,
     revision: input.revision,
     status: "DRAFT",
     pages,
@@ -152,6 +170,33 @@ export async function parseSchematicPdf(input: PdfParseInput): Promise<Schematic
     diagnostics,
     confirmation: null
   };
+}
+
+export function hasVisibleSchematicPixels(rgba: Uint8ClampedArray) {
+  let visiblePixels = 0;
+  for (let offset = 0; offset + 3 < rgba.length; offset += 4) {
+    if ((rgba[offset + 3] ?? 0) > 16 && Math.min(rgba[offset] ?? 255, rgba[offset + 1] ?? 255, rgba[offset + 2] ?? 255) < 248) {
+      visiblePixels += 1;
+      if (visiblePixels >= 16) return true;
+    }
+  }
+  return false;
+}
+
+export function hasLargeRasterImage(
+  operations: number[],
+  argumentsByOperation: unknown[][],
+  paintImageOperation: number,
+  page: { width: number; height: number }
+) {
+  return operations.some((operation, index) => {
+    if (operation !== paintImageOperation) return false;
+    const args = argumentsByOperation[index] ?? [];
+    const width = typeof args[1] === "number" ? args[1] : 0;
+    const height = typeof args[2] === "number" ? args[2] : 0;
+    return (width >= page.width * 0.45 && height >= page.height * 0.45)
+      || (width >= page.height * 0.45 && height >= page.width * 0.45);
+  });
 }
 
 async function pdfTextTokens(page: { getTextContent(): Promise<{ items: unknown[] }> }, scale: number, pageHeight: number): Promise<TextToken[]> {

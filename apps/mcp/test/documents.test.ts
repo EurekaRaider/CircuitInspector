@@ -49,7 +49,7 @@ describe("rule document extraction", () => {
       { kind: "MINIMUM_DIAMETER", target: null, threshold: 800_000 },
       { kind: "MINIMUM_DIAMETER", target: null, threshold: 550_000 },
       { kind: "MINIMUM_DISTANCE", target: "BOARD_EDGE", threshold: 1_200_000 },
-      { kind: "MINIMUM_DISTANCE", target: "DRILL", threshold: 2_000_000 },
+      { kind: "MINIMUM_DISTANCE", target: "TOOLING_HOLE", threshold: 2_000_000 },
       { kind: "MINIMUM_DISTANCE", target: "PANEL_TAB", threshold: 4_000_000 }
     ]);
     expect(result.rulePack.rules.every((rule) => rule.severity === null)).toBe(true);

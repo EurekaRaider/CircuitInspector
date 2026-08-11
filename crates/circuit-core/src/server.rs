@@ -2,10 +2,10 @@ use crate::analyze::analyze_design;
 use crate::archive::hash_input;
 use crate::cache::CacheStore;
 use crate::evidence::{render_evidence, write_html_report};
-use crate::geometry::circle_to_board_edge;
+use crate::geometry::{circle_to_board_edge, circle_to_bounds};
 use crate::model::{
-    BoundsNm, CoverageLevel, Design, DesignSummary, FeatureGeometry, PointNm, Severity, TestPoint,
-    Verdict,
+    BoundsNm, CoverageLevel, Design, DesignSummary, FeatureGeometry, PointNm, Severity, Side,
+    TestPoint, Verdict,
 };
 use crate::parsers::import_design;
 use crate::rules::{RuleApproval, RuleDefinition, RulePack, RulePackStatus, RuleReviewItem};
@@ -373,7 +373,10 @@ struct TestPointReviewCandidate<'a> {
 struct TestPointReviewContext<'a> {
     metric: &'static str,
     board_edge: DistanceEvidence,
-    nearest_test_point: Option<NearestTestPoint<'a>>,
+    nearest_test_point: Option<NearestGeometry<'a>>,
+    nearest_tooling_hole: Option<NearestGeometry<'a>>,
+    nearest_component: Option<NearestGeometry<'a>>,
+    nearest_shield: Option<NearestGeometry<'a>>,
 }
 
 #[derive(Serialize)]
@@ -384,70 +387,184 @@ struct DistanceEvidence {
 }
 
 #[derive(Serialize)]
-struct NearestTestPoint<'a> {
+struct NearestGeometry<'a> {
     id: &'a str,
     distance_nm: Option<i64>,
     center: PointNm,
+    confidence: CoverageLevel,
 }
 
 fn test_points_with_review_context(design: &Design) -> Vec<TestPointReviewCandidate<'_>> {
     design
         .test_points
         .iter()
-        .map(|point| {
-            let nearest_test_point =
-                design
-                    .test_points
-                    .iter()
-                    .filter(|other| other.id != point.id)
-                    .map(|other| {
-                        let center_distance_nm = (point.center.distance_sq(other.center) as f64)
-                            .sqrt()
-                            .round() as i64;
-                        let distance_nm = point.radius_nm.zip(other.radius_nm).map(
-                            |(point_radius, other_radius)| {
-                                center_distance_nm
-                                    .saturating_sub(point_radius)
-                                    .saturating_sub(other_radius)
-                                    .max(0)
-                            },
-                        );
-                        (other, center_distance_nm, distance_nm)
-                    })
-                    .min_by(|(left, left_distance, _), (right, right_distance, _)| {
-                        left_distance
-                            .cmp(right_distance)
-                            .then_with(|| left.id.cmp(&right.id))
-                    })
-                    .map(|(other, _, distance_nm)| NearestTestPoint {
-                        id: &other.id,
-                        distance_nm,
-                        center: other.center,
-                    });
-            TestPointReviewCandidate {
-                point,
-                review_context: TestPointReviewContext {
-                    metric: "EDGE_TO_EDGE",
-                    board_edge: point.radius_nm.map_or(
+        .map(|point| TestPointReviewCandidate {
+            point,
+            review_context: TestPointReviewContext {
+                metric: "EDGE_TO_EDGE",
+                board_edge: point.radius_nm.map_or(
+                    DistanceEvidence {
+                        distance_nm: None,
+                        point: None,
+                        confidence: CoverageLevel::Inferred,
+                    },
+                    |radius| {
+                        let measurement = circle_to_board_edge(design, point.center, radius);
                         DistanceEvidence {
-                            distance_nm: None,
-                            point: None,
-                            confidence: CoverageLevel::Inferred,
-                        },
-                        |radius| {
-                            let measurement = circle_to_board_edge(design, point.center, radius);
-                            DistanceEvidence {
-                                distance_nm: Some(measurement.distance_nm),
-                                point: Some(measurement.edge_point),
-                                confidence: measurement.confidence,
-                            }
-                        },
-                    ),
-                    nearest_test_point,
-                },
-            }
+                            distance_nm: Some(measurement.distance_nm),
+                            point: Some(measurement.edge_point),
+                            confidence: measurement.confidence,
+                        }
+                    },
+                ),
+                nearest_test_point: nearest_test_point(design, point),
+                nearest_tooling_hole: nearest_tooling_hole(design, point),
+                nearest_component: nearest_component(design, point, false),
+                nearest_shield: nearest_component(design, point, true),
+            },
         })
         .collect()
+}
+
+fn nearest_test_point<'a>(design: &'a Design, point: &'a TestPoint) -> Option<NearestGeometry<'a>> {
+    let side = test_point_side(design, point);
+    design
+        .test_points
+        .iter()
+        .filter(|other| other.id != point.id && same_side(side, test_point_side(design, other)))
+        .map(|other| {
+            let center_distance_nm = point_distance(point.center, other.center);
+            let distance_nm =
+                point
+                    .radius_nm
+                    .zip(other.radius_nm)
+                    .map(|(point_radius, other_radius)| {
+                        center_distance_nm
+                            .saturating_sub(point_radius)
+                            .saturating_sub(other_radius)
+                            .max(0)
+                    });
+            (
+                other,
+                distance_nm.unwrap_or(center_distance_nm),
+                distance_nm,
+            )
+        })
+        .min_by(|(left, left_distance, _), (right, right_distance, _)| {
+            left_distance
+                .cmp(right_distance)
+                .then_with(|| left.id.cmp(&right.id))
+        })
+        .map(|(other, _, distance_nm)| NearestGeometry {
+            id: &other.id,
+            distance_nm,
+            center: other.center,
+            confidence: point.confidence.weakest(other.confidence),
+        })
+}
+
+fn nearest_tooling_hole<'a>(
+    design: &'a Design,
+    point: &'a TestPoint,
+) -> Option<NearestGeometry<'a>> {
+    design
+        .tooling_hole_drills()
+        .into_iter()
+        .map(|(_, feature)| feature)
+        .filter_map(|feature| {
+            let FeatureGeometry::Drill {
+                center,
+                diameter_nm,
+                ..
+            } = feature.geometry
+            else {
+                return None;
+            };
+            let center_distance_nm = point_distance(point.center, center);
+            let distance_nm = point.radius_nm.map(|point_radius| {
+                center_distance_nm
+                    .saturating_sub(point_radius)
+                    .saturating_sub(diameter_nm / 2)
+                    .max(0)
+            });
+            Some((
+                feature,
+                center,
+                distance_nm.unwrap_or(center_distance_nm),
+                distance_nm,
+            ))
+        })
+        .min_by(
+            |(left, _, left_distance, _), (right, _, right_distance, _)| {
+                left_distance
+                    .cmp(right_distance)
+                    .then_with(|| left.id.cmp(&right.id))
+            },
+        )
+        .map(|(feature, center, _, distance_nm)| NearestGeometry {
+            id: &feature.id,
+            distance_nm,
+            center,
+            confidence: CoverageLevel::Explicit,
+        })
+}
+
+fn nearest_component<'a>(
+    design: &'a Design,
+    point: &'a TestPoint,
+    shield_only: bool,
+) -> Option<NearestGeometry<'a>> {
+    let side = test_point_side(design, point);
+    design
+        .components
+        .iter()
+        .filter(|component| same_side(side, component.side))
+        .filter(|component| !component.is_test_point_marker())
+        .filter(|component| component.is_shield_candidate() == shield_only)
+        .map(|component| {
+            let center_distance_nm = component.bounds.distance_to_point(point.center);
+            let distance_nm = point
+                .radius_nm
+                .map(|radius| circle_to_bounds(point.center, radius, component.bounds).distance_nm);
+            (
+                component,
+                distance_nm.unwrap_or(center_distance_nm),
+                distance_nm,
+            )
+        })
+        .min_by(|(left, left_distance, _), (right, right_distance, _)| {
+            left_distance
+                .cmp(right_distance)
+                .then_with(|| left.refdes.cmp(&right.refdes))
+        })
+        .map(|(component, _, distance_nm)| NearestGeometry {
+            id: &component.refdes,
+            distance_nm,
+            center: component.center,
+            confidence: if shield_only {
+                CoverageLevel::Inferred
+            } else {
+                point.confidence.weakest(component.confidence)
+            },
+        })
+}
+
+fn test_point_side(design: &Design, point: &TestPoint) -> Side {
+    point
+        .layer_id
+        .as_deref()
+        .and_then(|layer_id| design.layers.iter().find(|layer| layer.id == layer_id))
+        .map_or(Side::Na, |layer| layer.side)
+}
+
+fn same_side(left: Side, right: Side) -> bool {
+    !matches!(left, Side::Top | Side::Bottom)
+        || !matches!(right, Side::Top | Side::Bottom)
+        || left == right
+}
+
+fn point_distance(left: PointNm, right: PointNm) -> i64 {
+    (left.distance_sq(right) as f64).sqrt().round() as i64
 }
 
 fn review_test_points_request(params: Value) -> CoreResult<Value> {

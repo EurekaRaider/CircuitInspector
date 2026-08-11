@@ -294,6 +294,16 @@ pub struct Feature {
     pub source: String,
 }
 
+impl Feature {
+    pub fn has_tooling_hole_usage(&self) -> bool {
+        self.attributes.iter().any(|(key, value)| {
+            key.trim_start_matches('.')
+                .eq_ignore_ascii_case("pad_usage")
+                && value.eq_ignore_ascii_case("tooling_hole")
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layer {
     pub id: String,
@@ -306,11 +316,67 @@ pub struct Layer {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Component {
     pub refdes: String,
+    #[serde(default)]
+    pub package_name: Option<String>,
     pub center: PointNm,
     pub bounds: BoundsNm,
     pub side: Side,
     pub pins: Vec<String>,
     pub confidence: CoverageLevel,
+}
+
+impl Component {
+    pub fn is_test_point_marker(&self) -> bool {
+        let reference = self.refdes.to_ascii_uppercase();
+        let reference_match = ["MTP", "TP"].iter().any(|prefix| {
+            reference.strip_prefix(prefix).is_some_and(|suffix| {
+                !suffix.is_empty()
+                    && suffix
+                        .chars()
+                        .all(|value| value.is_ascii_digit() || value == '_')
+            })
+        });
+        let package_match = self.package_name.as_deref().is_some_and(|value| {
+            let normalized = value.to_ascii_uppercase();
+            [
+                "TEST_POINT",
+                "TESTPOINT",
+                "TEST_PAD",
+                "TESTPAD",
+                "PROBE_PAD",
+                "PROBEPAD",
+            ]
+            .iter()
+            .any(|token| normalized.contains(token))
+        });
+        reference_match || package_match
+    }
+
+    pub fn is_shield_candidate(&self) -> bool {
+        let reference = self.refdes.to_ascii_uppercase();
+        let reference_match = reference.starts_with("SHIELD")
+            || reference.strip_prefix("SH").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|value| value.is_ascii_digit())
+            });
+        let package_match = self.package_name.as_deref().is_some_and(|value| {
+            let normalized = value
+                .to_ascii_uppercase()
+                .replace(|character: char| !character.is_ascii_alphanumeric(), "_");
+            [
+                "EMI_SHIELD",
+                "RF_SHIELD",
+                "SHIELD_CAN",
+                "SHIELD_FRAME",
+                "SHIELD_FENCE",
+                "SHIELD_COVER",
+                "EMI_CAN",
+                "RF_CAN",
+            ]
+            .iter()
+            .any(|token| normalized.contains(token))
+        });
+        reference_match || package_match
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,7 +435,7 @@ pub struct Design {
 }
 
 impl Design {
-    pub const SCHEMA_VERSION: u32 = 3;
+    pub const SCHEMA_VERSION: u32 = 4;
 
     pub fn finalize(&mut self) {
         let mut bounds = BoundsNm::empty();
@@ -384,6 +450,34 @@ impl Design {
         self.bounds = bounds.normalized();
         self.nets.sort();
         self.nets.dedup();
+    }
+
+    pub fn tooling_hole_drills(&self) -> Vec<(&Layer, &Feature)> {
+        const SEMANTIC_MATCH_TOLERANCE_NM: i64 = 25_000;
+        let markers = self
+            .layers
+            .iter()
+            .flat_map(|layer| &layer.features)
+            .filter(|feature| feature.has_tooling_hole_usage())
+            .map(|feature| feature.geometry.bounds().center())
+            .collect::<Vec<_>>();
+        self.layers
+            .iter()
+            .flat_map(|layer| {
+                let markers = &markers;
+                layer.features.iter().filter_map(move |feature| {
+                    let FeatureGeometry::Drill { center, .. } = feature.geometry else {
+                        return None;
+                    };
+                    (feature.has_tooling_hole_usage()
+                        || markers.iter().any(|marker| {
+                            marker.distance_sq(center)
+                                <= i128::from(SEMANTIC_MATCH_TOLERANCE_NM).pow(2)
+                        }))
+                    .then_some((layer, feature))
+                })
+            })
+            .collect()
     }
 }
 

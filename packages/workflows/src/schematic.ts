@@ -221,7 +221,9 @@ export async function readSchematicThumbnail(id: string, pageNumber: number, cac
 }
 
 async function hasCompletePdfPageCache(document: SchematicDocument, root: string) {
-  if (document.pages.length === 0) return false;
+  if (!Number.isSafeInteger(document.source_page_count) || document.source_page_count == null || document.source_page_count < 1 || document.pages.length !== document.source_page_count) return false;
+  const pageNumbers = document.pages.map((page) => page.number).sort((left, right) => left - right);
+  if (pageNumbers.some((pageNumber, index) => pageNumber !== index + 1)) return false;
   try {
     await Promise.all(document.pages.flatMap((page) => [page.render_path, page.thumbnail_path].map(async (file) => {
       const metadata = await stat(assertPathInside(root, file));
@@ -284,6 +286,7 @@ export function structuredPinoutToDocument(pinout: SchematicPinout, id = `schema
     source_path: pinout.source_path,
     source_hash: pinout.source_hash,
     source_format: pinout.source_format,
+    source_page_count: null,
     revision: pinout.revision,
     status: pinout.status,
     pages: [],

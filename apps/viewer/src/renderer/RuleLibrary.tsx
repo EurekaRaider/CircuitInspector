@@ -13,7 +13,7 @@ import type { Locale } from "./i18n";
 import type { RuleDefinition, RulePack } from "./types";
 
 const APPROVER_KEY = "circuit-inspector.approver";
-const ENTITY_OPTIONS = ["TEST_POINT", "COMPONENT", "COPPER", "BOARD_EDGE", "DRILL", "PANEL_TAB", "BGA_CSP", "SHIELD_FENCE", "UV_GLUE"] as const;
+const ENTITY_OPTIONS = ["TEST_POINT", "COMPONENT", "COPPER", "BOARD_EDGE", "DRILL", "TOOLING_HOLE", "PANEL_TAB", "BGA_CSP", "SHIELD_FENCE", "UV_GLUE"] as const;
 const METRIC_OPTIONS = ["CENTER_TO_CENTER", "EDGE_TO_EDGE", "BODY_TO_PAD"] as const;
 const SEVERITY_OPTIONS = ["ERROR", "WARNING", "INFO"] as const;
 

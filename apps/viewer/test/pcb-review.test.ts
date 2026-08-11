@@ -53,6 +53,14 @@ describe("PCB REVIEW routing", () => {
     expect(reviewRoute(baseViolation, { ...baseRule, target: "BGA_CSP" }, [])).toBe("UNSUPPORTED_ENTITY");
   });
 
+  it("routes measured shield candidates to identity review", () => {
+    expect(reviewRoute(
+      { ...baseViolation, semantic_confidence: "INFERRED", measured_value_nm: 600_000, evidence_points: [{ x: 1, y: 2 }] },
+      { ...baseRule, target: "SHIELD_FENCE" },
+      []
+    )).toBe("ENTITY_IDENTITY_REVIEW");
+  });
+
   it("routes coordinate-free findings to missing-input guidance", () => {
     expect(reviewRoute(baseViolation, { ...baseRule, source: "COMPONENT", target: "BOARD_EDGE" }, [])).toBe("MISSING_SEMANTICS");
   });
@@ -71,7 +79,10 @@ describe("PCB REVIEW routing", () => {
       review_context: {
         metric: "EDGE_TO_EDGE",
         board_edge: { distance_nm: 900_000, point: { x: 0, y: 2_000_000 }, confidence: "EXPLICIT" },
-        nearest_test_point: { id: "tp-b", distance_nm: 1_250_000, center: { x: 2_450_000, y: 2_000_000 } }
+        nearest_test_point: { id: "tp-b", distance_nm: 1_250_000, center: { x: 2_450_000, y: 2_000_000 }, confidence: "INFERRED" },
+        nearest_tooling_hole: { id: "drill:4", distance_nm: 2_000_000, center: { x: 3_100_000, y: 2_000_000 }, confidence: "EXPLICIT" },
+        nearest_component: { id: "R1", distance_nm: 750_000, center: { x: 1_950_000, y: 2_000_000 }, confidence: "EXPLICIT" },
+        nearest_shield: { id: "SH1", distance_nm: 3_500_000, center: { x: 4_600_000, y: 2_000_000 }, confidence: "INFERRED" }
       }
     };
     const markup = renderToStaticMarkup(createElement(TestPointReviewEvidence, { point, locale: "zh-CN" }));
@@ -79,6 +90,9 @@ describe("PCB REVIEW routing", () => {
     expect(markup).toContain("0.900 mm");
     expect(markup).toContain("最近测试点净距 · tp-b");
     expect(markup).toContain("1.250 mm");
-    expect(markup).toContain("边缘到边缘；由导入几何计算");
+    expect(markup).toContain("最近工装孔净距 · drill:4");
+    expect(markup).toContain("最近器件净距 · R1");
+    expect(markup).toContain("最近屏蔽结构净距 · SH1 · REVIEW");
+    expect(markup).toContain("工装孔来自 ODB++ pad_usage");
   });
 });

@@ -100,6 +100,28 @@ def wib_pdf(path: Path) -> None:
     canvas.save()
 
 
+def multi_page_wib_pdf(path: Path, page_count: int = 6) -> None:
+    canvas = Canvas(str(path), pagesize=landscape(letter), pageCompression=0)
+    canvas.setTitle("CircuitInspector multi-page WIB schematic fixture")
+    for page_number in range(1, page_count + 1):
+        connector = f"J{page_number}"
+        controller = f"U{page_number}"
+        net_name = f"WIB_PAGE_{page_number}"
+        evidence_rows(canvas, "CONTROLLED MULTI-PAGE PIN EVIDENCE", [
+            f"{connector} PIN 1 NET {net_name}",
+            f"{controller} PIN {page_number} NET {net_name}",
+        ])
+        component(canvas, connector, 100, 250, 105, 120, [("1", net_name)])
+        component(canvas, controller, 480, 220, 150, 190, [(str(page_number), net_name)])
+        canvas.setLineWidth(1.4)
+        canvas.line(205, 328, 480, 368)
+        canvas.drawString(300, 360, net_name)
+        canvas.setFont("Helvetica", 9)
+        canvas.drawString(34, 25, f"PAGE {page_number} / MULTI-PAGE WIB")
+        canvas.showPage()
+    canvas.save()
+
+
 def scanned_copy(source: Path, target: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="circuitinspector-scan-") as temporary:
         prefix = Path(temporary) / "page"
@@ -121,6 +143,7 @@ def main() -> None:
     wib = FIXTURES / "wib-schematic-vector.pdf"
     product_pdf(product)
     wib_pdf(wib)
+    multi_page_wib_pdf(FIXTURES / "wib-schematic-six-pages.pdf")
     scanned_copy(product, FIXTURES / "product-schematic-scanned.pdf")
 
 

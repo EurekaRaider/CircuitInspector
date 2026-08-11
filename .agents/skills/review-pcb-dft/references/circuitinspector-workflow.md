@@ -72,6 +72,7 @@ The current deterministic engine supports these rule kinds:
 - `MINIMUM_DISTANCE`
 - `MINIMUM_WIDTH`
 - `MINIMUM_ANNULAR_RING`
+- `MINIMUM_DIAMETER`
 
 Distance-rule entities are drawn from:
 
@@ -80,6 +81,8 @@ Distance-rule entities are drawn from:
 - `COPPER`
 - `BOARD_EDGE`
 - `DRILL`
+- `TOOLING_HOLE` when ODB++ supplies `.pad_usage=tooling_hole`
+- `SHIELD_FENCE` candidates inferred from an explicit shield-like component reference or package name; measurements remain `REVIEW` until identity is confirmed
 
 Distance metrics are:
 
@@ -87,7 +90,7 @@ Distance metrics are:
 - `EDGE_TO_EDGE`
 - `BODY_TO_PAD`
 
-Rules can filter layer functions and same-net or different-net relationships. Typical supported checks include test-point spacing, test-point-to-component clearance, test-point-to-board-edge clearance, copper spacing or edge clearance, drill-to-copper clearance, trace width, and annular ring.
+Rules can filter layer functions and same-net or different-net relationships. Typical supported checks include test-point diameter and spacing, test-point-to-component, tooling-hole, shield-candidate, and board-edge clearance, copper spacing or edge clearance, drill-to-copper clearance, trace width, and annular ring.
 
 Do not describe the current engine as automatically validating probe angle, component height, solder-mask opening, side accessibility, fixture support, clamps, tooling, full net access, boundary-scan topology, programming, or powered FCT.
 

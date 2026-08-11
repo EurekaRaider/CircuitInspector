@@ -928,6 +928,7 @@ fn merge_feature_semantics(design: &mut Design, x2: bool, x3: bool) {
                 let bounds = feature.geometry.bounds();
                 let component = components.entry(reference.clone()).or_insert(Component {
                     refdes: reference.clone(),
+                    package_name: None,
                     center: bounds.center(),
                     bounds,
                     side: layer.side,

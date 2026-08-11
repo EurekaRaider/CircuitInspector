@@ -174,6 +174,81 @@ fn odb_import_selects_the_board_step_instead_of_merging_panel_geometry() {
 }
 
 #[test]
+fn odb_import_resolves_custom_test_point_symbols_and_tooling_hole_usage() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("odb");
+    for directory in [
+        "matrix",
+        "symbols/tp_custom",
+        "steps/pcb/eda",
+        "steps/pcb/layers/comp_+_top",
+        "steps/pcb/layers/top",
+        "steps/pcb/layers/drill",
+    ] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    std::fs::write(
+        root.join("matrix/matrix"),
+        "UNITS=MM\nSTEP { NAME=pcb }\nLAYER { ROW=1 NAME=comp_+_top CONTEXT=BOARD TYPE=COMPONENT }\nLAYER { ROW=2 NAME=top CONTEXT=BOARD TYPE=SIGNAL }\nLAYER { ROW=3 NAME=drill CONTEXT=BOARD TYPE=DRILL }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("symbols/tp_custom/features"),
+        "UNITS=MM\n$0 r800\nP 0 0 0 P 0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("steps/pcb/eda/data"),
+        "UNITS=MM\nNET TP_NET\nPKG TEST_POINT 0 -0.4 -0.4 0.4 0.4\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("steps/pcb/layers/comp_+_top/components"),
+        "UNITS=MM\nCMP 0 2 2 0 N MTP1 TEST_POINT\nTOP 1 2 2 0 N 0 0 TP_PAD\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("steps/pcb/layers/top/features"),
+        "UNITS=MM\n$0 tp_custom\n$1 r1000\n@0 .pad_usage\nP 2 2 0 P 0\nP 5 5 1 P 0;0=4\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("steps/pcb/layers/drill/features"),
+        "UNITS=MM\n$0 r1000\nP 5 5 0 P 0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("steps/pcb/profile"),
+        "UNITS=MM\nS P 0\nOB 0 0\nOS 10 0\nOS 10 10\nOS 0 10\nOE\n",
+    )
+    .unwrap();
+
+    let design = import_design(&root).unwrap();
+
+    assert_eq!(design.test_points.len(), 1);
+    assert_eq!(design.test_points[0].radius_nm, Some(400_000));
+    assert!(
+        design
+            .layers
+            .iter()
+            .all(|layer| !layer.name.starts_with("layer-"))
+    );
+    assert_eq!(design.tooling_hole_drills().len(), 1);
+
+    let cache = CacheStore::new(temporary.path().join("cache")).unwrap();
+    cache.save_design(&design).unwrap();
+    let listed = dispatch(
+        "list_test_points",
+        json!({ "design_id": design.id, "cache_dir": cache.root() }),
+    )
+    .unwrap();
+    assert_eq!(
+        listed["test_points"][0]["review_context"]["nearest_tooling_hole"]["distance_nm"],
+        3_342_641
+    );
+}
+
+#[test]
 fn core_protocol_imports_analyzes_and_renders_evidence() {
     let temporary = tempfile::tempdir().unwrap();
     let cache = CacheStore::new(temporary.path()).unwrap();

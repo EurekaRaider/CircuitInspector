@@ -17,8 +17,8 @@ export interface ExtractedRule {
   id: string;
   title: string;
   kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING" | "MINIMUM_DIAMETER";
-  source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE";
-  target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE" | null;
+  source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "TOOLING_HOLE" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE";
+  target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "TOOLING_HOLE" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE" | null;
   metric: "CENTER_TO_CENTER" | "EDGE_TO_EDGE" | "BODY_TO_PAD" | null;
   threshold_nm: number;
   severity: "INFO" | "WARNING" | "ERROR" | null;
@@ -167,7 +167,7 @@ function inferPassage(passage: Passage, sequence: number): { rules: ExtractedRul
     }
     const threshold = uniqueThresholds[0]!;
     if (/工装孔|定位孔|tooling\s+hole/i.test(value)) {
-      return executable(baseRule(`tp-tooling-hole-${suffix}`, "测试点到工装孔距离", "MINIMUM_DISTANCE", "TEST_POINT", "DRILL", "EDGE_TO_EDGE", threshold, citation));
+      return executable(baseRule(`tp-tooling-hole-${suffix}`, "测试点到工装孔距离", "MINIMUM_DISTANCE", "TEST_POINT", "TOOLING_HOLE", "EDGE_TO_EDGE", threshold, citation));
     }
     if (/板边|board\s+edge/i.test(value)) {
       return executable(baseRule(`tp-board-edge-${suffix}`, "测试点到板边距离", "MINIMUM_DISTANCE", "TEST_POINT", "BOARD_EDGE", "EDGE_TO_EDGE", threshold, citation));

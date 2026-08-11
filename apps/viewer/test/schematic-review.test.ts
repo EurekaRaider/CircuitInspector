@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { firstPathPage, fitPageTransform, pathFocusPage, zoomTransformAt } from "../src/renderer/SchematicReview.js";
+import { firstPathPage, fitPageTransform, forEachWithConcurrency, pathFocusPage, zoomTransformAt } from "../src/renderer/SchematicReview.js";
 import { SchematicReview } from "../src/renderer/SchematicReview.js";
 import type { SchematicDocument } from "../src/renderer/types.js";
 
@@ -64,8 +64,27 @@ describe("schematic PDF viewport", () => {
 
     expect(markup).toContain('data-testid="schematic-review-layout"');
     expect(markup).toContain("grid-cols-[132px_minmax(0,1fr)_minmax(280px,330px)]");
+    expect(markup).toContain("h-[clamp(36rem,72vh,56rem)]");
+    expect(markup).toContain('data-testid="schematic-page-list"');
+    expect(markup).toContain('data-testid="schematic-interface-candidates"');
+    expect(markup).toContain("max-h-48");
     expect(markup).toContain('data-testid="schematic-review-toolbar"');
     expect(markup).toContain("overflow-x-auto");
     expect(markup).toContain('data-testid="schematic-review-panel"');
+  });
+
+  it("loads every page thumbnail without exceeding the concurrency limit", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const loaded: number[] = [];
+    await forEachWithConcurrency([1, 2, 3, 4, 5, 6, 7], 3, async (page) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      loaded.push(page);
+      active -= 1;
+    });
+    expect(loaded.sort((left, right) => left - right)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(maximumActive).toBe(3);
   });
 });

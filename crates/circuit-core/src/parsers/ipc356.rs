@@ -51,6 +51,7 @@ pub fn parse_ipc356(text: &str, source: &Path) -> Ipc356Data {
                 .entry(component_ref.into())
                 .or_insert_with(|| Component {
                     refdes: component_ref.into(),
+                    package_name: None,
                     center: PointNm { x, y },
                     bounds: crate::model::BoundsNm {
                         min_x: x,

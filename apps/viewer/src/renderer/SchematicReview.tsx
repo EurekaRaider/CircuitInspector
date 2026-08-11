@@ -18,6 +18,7 @@ import type { SchematicDocument, SchematicPagePayload } from "./types";
 type Correction = Parameters<typeof window.circuitInspector.correctSchematic>[0]["corrections"][number];
 type OverlayKey = "components" | "pins" | "nets" | "ocr" | "anchor" | "path";
 type CanvasMode = "PAN" | "ADD_WIRE" | "ADD_JUNCTION";
+const THUMBNAIL_LOAD_CONCURRENCY = 4;
 
 interface Props {
   locale: Locale;
@@ -133,7 +134,7 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
-    if (!viewport || !pagePayload || !pageUrl || !pageImageReady) return;
+    if (!viewport || !pagePayload || !pageUrl) return;
     let frame = 0;
     const fitWhenSized = () => {
       cancelAnimationFrame(frame);
@@ -146,27 +147,25 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [pageImageReady, pagePayload, pageUrl]);
+  }, [pagePayload, pageUrl]);
 
   useEffect(() => {
     let disposed = false;
     const created: string[] = [];
     setThumbnailUrls({});
     setThumbnailFailures([]);
-    void (async () => {
-      for (const page of document.pages) {
-        if (disposed) break;
-        try {
-          const payload = await window.circuitInspector.getSchematicThumbnail({ schematic_id: document.id, page: page.number });
-          if (disposed) break;
-          const url = URL.createObjectURL(new Blob([payload.bytes], { type: "image/png" }));
-          created.push(url);
-          setThumbnailUrls((current) => ({ ...current, [payload.page]: url }));
-        } catch {
-          if (!disposed) setThumbnailFailures((current) => current.includes(page.number) ? current : [...current, page.number]);
-        }
+    void forEachWithConcurrency(document.pages, THUMBNAIL_LOAD_CONCURRENCY, async (page) => {
+      if (disposed) return;
+      try {
+        const payload = await window.circuitInspector.getSchematicThumbnail({ schematic_id: document.id, page: page.number });
+        if (disposed) return;
+        const url = URL.createObjectURL(new Blob([payload.bytes], { type: "image/png" }));
+        created.push(url);
+        setThumbnailUrls((current) => ({ ...current, [payload.page]: url }));
+      } catch {
+        if (!disposed) setThumbnailFailures((current) => current.includes(page.number) ? current : [...current, page.number]);
       }
-    })();
+    });
     return () => {
       disposed = true;
       created.forEach((url) => URL.revokeObjectURL(url));
@@ -175,7 +174,7 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
 
   function applyTransform(next = transformRef.current) {
     transformRef.current = next;
-    if (sheetRef.current) sheetRef.current.style.transform = `translate3d(${next.x}px, ${next.y}px, 0) scale(${next.scale})`;
+    if (sheetRef.current) sheetRef.current.style.transform = transformStyle(next);
     setScaleLabel(Math.round(next.scale * 100));
   }
 
@@ -287,9 +286,9 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
   const pageEvidenceBoxes = selectedPath?.evidence.filter((item) => item.page === pageNumber && item.bbox) ?? [];
 
   return <div className="mt-5 min-w-0 overflow-hidden rounded-xl border border-white/[0.08] bg-[#111416]">
-    <div data-testid="schematic-review-layout" className="isolate grid min-h-[36rem] max-h-[72vh] min-w-0 grid-cols-[132px_minmax(0,1fr)_minmax(280px,330px)]">
-      <aside className="w-[132px] shrink-0 overflow-y-auto border-r border-white/[0.07] bg-[#15181a] p-2" aria-label={chinese ? "原理图页面" : "Schematic pages"}>
-        <div className="px-1 pb-2 font-mono text-[8px] uppercase tracking-[0.12em] text-[#6f726e]">{chinese ? "页面" : "Pages"}</div>
+    <div data-testid="schematic-review-layout" className="isolate grid h-[clamp(36rem,72vh,56rem)] min-w-0 grid-cols-[132px_minmax(0,1fr)_minmax(280px,330px)] overflow-hidden">
+      <aside data-testid="schematic-page-list" className="min-h-0 w-[132px] shrink-0 overflow-y-auto overscroll-contain border-r border-white/[0.07] bg-[#15181a] p-2" aria-label={chinese ? "原理图页面" : "Schematic pages"}>
+        <div className="px-1 pb-2 font-mono text-[8px] uppercase tracking-[0.12em] text-[#6f726e]">{chinese ? `页面 · ${document.pages.length}` : `Pages · ${document.pages.length}`}</div>
         {document.pages.map((page) => <button key={page.number} className={`mb-2 block w-full rounded-lg border p-1 text-left ${pageNumber === page.number ? "border-[#c5a063]/55 bg-[#c5a063]/[0.08]" : "border-white/[0.07] bg-[#101214]"}`} onClick={() => setPageNumber(page.number)}>
           <div className="aspect-[3/4] overflow-hidden rounded bg-white">{thumbnailUrls[page.number] ? <img className="size-full object-contain" src={thumbnailUrls[page.number]} alt="" /> : thumbnailFailures.includes(page.number) ? <div className="grid size-full place-items-center bg-[#f4eee3] font-mono text-[9px] text-[#9a5a48]">{chinese ? "加载失败" : "LOAD FAILED"}</div> : <div className="grid size-full place-items-center"><CircleNotchIcon className="animate-spin text-[#555]" /></div>}</div>
           <div className="mt-1 flex justify-between px-0.5 font-mono text-[8px] text-[#898b87]"><span>{page.number}</span><span>{page.extraction === "OCR" ? "OCR" : "PDF"}</span></div>
@@ -312,8 +311,8 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
             <div className="ml-auto flex gap-1">{(Object.keys(overlays) as OverlayKey[]).map((key) => <button key={key} className={`rounded px-1.5 py-1 font-mono text-[8px] uppercase ${overlays[key] ? "bg-[#c5a063]/15 text-[#d0ad73]" : "text-[#626562]"}`} onClick={() => setOverlays((current) => ({ ...current, [key]: !current[key] }))}>{key}</button>)}</div>
           </div>
         </div>
-        <div ref={viewportRef} className={`relative min-h-0 touch-none overflow-hidden bg-[#0d1011] ${mode === "PAN" ? "cursor-grab active:cursor-grabbing" : "cursor-crosshair"}`} onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-          {pagePayload && pageUrl ? <div ref={sheetRef} className={`absolute left-0 top-0 origin-top-left will-change-transform ${pageImageReady ? "opacity-100" : "opacity-0"}`} style={{ width: pagePayload.page.width, height: pagePayload.page.height }}>
+        <div data-testid="schematic-page-viewport" ref={viewportRef} className={`relative min-h-0 touch-none overflow-hidden bg-[#0d1011] ${mode === "PAN" ? "cursor-grab active:cursor-grabbing" : "cursor-crosshair"}`} onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
+          {pagePayload && pageUrl ? <div ref={sheetRef} className={`absolute left-0 top-0 origin-top-left will-change-transform ${pageImageReady ? "opacity-100" : "opacity-0"}`} style={{ width: pagePayload.page.width, height: pagePayload.page.height, transform: transformStyle(transformRef.current) }}>
             <img className="absolute inset-0 size-full select-none bg-white" draggable={false} src={pageUrl} alt={`${document.role} schematic page ${pageNumber}`} onLoad={() => setPageImageReady(true)} onError={() => { setPageImageReady(false); setPageLoadFailed(true); }} />
             <svg className="absolute inset-0 size-full" viewBox={`0 0 ${pagePayload.page.width} ${pagePayload.page.height}`} aria-label={chinese ? "原理图证据覆盖层" : "Schematic evidence overlays"}>
               {overlays.nets && pagePayload.wires.map((wire) => <line key={wire.id} x1={wire.x1} y1={wire.y1} x2={wire.x2} y2={wire.y2} stroke={selectedWireId === wire.id ? "#ef835f" : "#3aa6a0"} strokeWidth={selectedWireId === wire.id ? 5 : 2} opacity={0.75} onPointerDown={(event) => { event.stopPropagation(); setSelectedWireId(wire.id); }} />)}
@@ -329,11 +328,11 @@ export function SchematicReview({ locale, document, operator, focusPathId, busy,
         </div>
       </main>
 
-      <aside data-testid="schematic-review-panel" className="relative z-10 min-w-0 overflow-y-auto border-l border-white/[0.07] bg-[#15181a] p-3">
+      <aside data-testid="schematic-review-panel" className="relative z-10 min-h-0 min-w-0 overflow-y-auto overscroll-contain border-l border-white/[0.07] bg-[#15181a] p-3">
         <label className="block"><span className="form-label">{chinese ? "操作人（用于校正审计）" : "Operator for correction audit"}</span><input className="workbench-input" value={operator} onChange={(event) => onOperator(event.target.value)} placeholder={chinese ? "姓名或工号" : "Name or employee ID"} /></label>
         {document.diagnostics.length > 0 && <div className="mt-3 space-y-1">{document.diagnostics.slice(0, 5).map((item, index) => <div key={`${item.code}-${index}`} className="rounded-lg border border-[#9b7a45]/25 bg-[#2b2519]/70 px-2 py-1.5 text-[8px] leading-4 text-[#c9a96f]"><b>{item.code}</b> · {item.message}</div>)}</div>}
         <section className="mt-4 border-t border-white/[0.07] pt-3"><div className="flex items-center gap-2 text-[10px] font-semibold text-[#d1cfc9]"><TreeStructureIcon size={14} />{chinese ? "接口候选" : "Interface candidates"}</div>
-          <div className="mt-2 space-y-1">{document.interface_candidates.map((item) => { const component = document.components.find((value) => value.id === item.component_id); return <button key={item.id} className={`w-full rounded-lg border px-2.5 py-2 text-left ${candidateId === item.id ? "border-[#c5a063]/45 bg-[#c5a063]/[0.07]" : "border-white/[0.06]"}`} onClick={() => { setCandidateId(item.id); setSelectedComponentId(item.component_id); }}><div className="flex justify-between text-[10px]"><b>{component?.refdes ?? item.component_id}</b><span className="font-mono text-[#9a8159]">{item.score}</span></div><div className="mt-1 text-[8px] leading-4 text-[#737672]">{item.reasons.join(" · ")}</div></button>; })}</div>
+          <div data-testid="schematic-interface-candidates" className="mt-2 max-h-48 space-y-1 overflow-y-auto overscroll-contain pr-1">{document.interface_candidates.map((item) => { const component = document.components.find((value) => value.id === item.component_id); return <button key={item.id} className={`w-full rounded-lg border px-2.5 py-2 text-left ${candidateId === item.id ? "border-[#c5a063]/45 bg-[#c5a063]/[0.07]" : "border-white/[0.06]"}`} onClick={() => { setCandidateId(item.id); setSelectedComponentId(item.component_id); }}><div className="flex justify-between gap-2 text-[10px]"><b>{component?.refdes ?? item.component_id}</b><span className="shrink-0 font-mono text-[#9a8159]">P{component?.page ?? "-"} · {item.score}</span></div><div className="mt-1 text-[8px] leading-4 text-[#737672]">{item.reasons.join(" · ")}</div></button>; })}</div>
           <button className="primary-button mt-2 w-full" disabled={!candidateId || busy} onClick={() => void onTrace(candidateId)}>{busy ? <CircleNotchIcon className="animate-spin" /> : <PathIcon size={14} />}{chinese ? "确认锚点并追踪" : "Select anchor and trace"}</button>
         </section>
 
@@ -409,6 +408,22 @@ export function fitPageTransform(viewport: { width: number; height: number }, pa
     y: (viewport.height - page.height * scale) / 2,
     scale
   };
+}
+
+export async function forEachWithConcurrency<T>(items: T[], concurrency: number, action: (item: T, index: number) => Promise<void>) {
+  let nextIndex = 0;
+  const workerCount = Math.min(items.length, Math.max(1, Math.floor(concurrency)));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await action(items[index]!, index);
+    }
+  }));
+}
+
+function transformStyle(transform: { x: number; y: number; scale: number }) {
+  return `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`;
 }
 
 export function firstPathPage(evidence: Array<{ page: number | null }>) {

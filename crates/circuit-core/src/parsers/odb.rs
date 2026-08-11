@@ -39,6 +39,8 @@ pub fn parse_odb(
         .map(|text| parse_matrix(&text))
         .unwrap_or_default();
     let selected_step = select_primary_step(&relative_files, &matrix);
+    let custom_symbol_dimensions =
+        load_custom_symbol_dimensions(&relative_files, &mut design.diagnostics);
     let mut eda = EdaData::default();
     for (path, relative) in &relative_files {
         let lower = relative.to_ascii_lowercase();
@@ -71,6 +73,9 @@ pub fn parse_odb(
 
     for (path, relative) in relative_files {
         let lower = relative.to_ascii_lowercase();
+        if odb_symbol_name(&relative).is_some() {
+            continue;
+        }
         if selected_step.as_deref().is_some_and(|selected| {
             odb_step_name(&relative).is_some_and(|step| !step.eq_ignore_ascii_case(selected))
         }) {
@@ -100,8 +105,14 @@ pub fn parse_odb(
                 infer_odb_function(&layer_name)
             };
             let side = odb_layer_side(&layer_name, matrix_layer, &matrix);
-            let parsed =
-                parse_feature_file(&text, path, &layer_id, &function, &mut design.diagnostics);
+            let parsed = parse_feature_file_with_symbols(
+                &text,
+                path,
+                &layer_id,
+                &function,
+                &custom_symbol_dimensions,
+                &mut design.diagnostics,
+            );
             nets.extend(parsed.nets);
             test_points.extend(parsed.test_points);
             if !parsed.features.is_empty() {
@@ -386,11 +397,110 @@ impl OdbUnits {
     }
 }
 
+fn odb_symbol_name(relative: &str) -> Option<&str> {
+    let parts = relative.split('/').collect::<Vec<_>>();
+    let index = parts
+        .iter()
+        .position(|part| part.eq_ignore_ascii_case("symbols"))?;
+    let name = *parts.get(index + 1)?;
+    parts
+        .get(index + 2)
+        .is_some_and(|part| part.eq_ignore_ascii_case("features"))
+        .then_some(name)
+}
+
+fn load_custom_symbol_dimensions(
+    files: &[(&PathBuf, String)],
+    diagnostics: &mut Vec<crate::model::Diagnostic>,
+) -> BTreeMap<String, (i64, i64)> {
+    let sources = files
+        .iter()
+        .filter_map(|(path, relative)| {
+            odb_symbol_name(relative).map(|name| (name.to_ascii_lowercase(), path.as_path()))
+        })
+        .collect::<Vec<_>>();
+    let mut dimensions = BTreeMap::new();
+    for _ in 0..sources.len().max(1) {
+        let mut changed = false;
+        for (name, path) in &sources {
+            let Ok(text) = fs::read_to_string(path) else {
+                continue;
+            };
+            let mut symbol_diagnostics = Vec::new();
+            let parsed = parse_feature_file_with_symbols(
+                &text,
+                path,
+                "odb-custom-symbol",
+                "SYMBOL",
+                &dimensions,
+                &mut symbol_diagnostics,
+            );
+            if parsed.features.is_empty()
+                || parsed
+                    .features
+                    .iter()
+                    .any(|feature| feature.attributes.contains_key(UNRESOLVED_SYMBOL_GEOMETRY))
+            {
+                continue;
+            }
+            let mut bounds = parsed.features[0].geometry.bounds();
+            for feature in parsed.features.iter().skip(1) {
+                bounds.include_bounds(feature.geometry.bounds());
+            }
+            let candidate = (
+                (bounds.max_x - bounds.min_x).max(1),
+                (bounds.max_y - bounds.min_y).max(1),
+            );
+            if dimensions.get(name) != Some(&candidate) {
+                dimensions.insert(name.clone(), candidate);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let unresolved = sources
+        .iter()
+        .filter(|(name, _)| !dimensions.contains_key(name))
+        .count();
+    if unresolved > 0 {
+        diagnostics.push(diagnostic(
+            "ODB_CUSTOM_SYMBOL_GEOMETRY_UNRESOLVED",
+            Severity::Warning,
+            format!(
+                "{unresolved} custom ODB++ symbols could not be reduced to deterministic bounds"
+            ),
+            None,
+        ));
+    }
+    dimensions
+}
+
+#[cfg(test)]
 fn parse_feature_file(
     text: &str,
     source: &Path,
     layer_id: &str,
     layer_function: &str,
+    diagnostics: &mut Vec<crate::model::Diagnostic>,
+) -> ParsedFeatures {
+    parse_feature_file_with_symbols(
+        text,
+        source,
+        layer_id,
+        layer_function,
+        &BTreeMap::new(),
+        diagnostics,
+    )
+}
+
+fn parse_feature_file_with_symbols(
+    text: &str,
+    source: &Path,
+    layer_id: &str,
+    layer_function: &str,
+    custom_symbol_dimensions: &BTreeMap<String, (i64, i64)>,
     diagnostics: &mut Vec<crate::model::Diagnostic>,
 ) -> ParsedFeatures {
     let mut units = OdbUnits::Inch;
@@ -419,7 +529,11 @@ fn parse_feature_file(
                 parts.next().and_then(|value| value.parse::<usize>().ok()),
                 parts.next(),
             ) {
-                if let Some(dimensions) = symbol_dimensions(name, units) {
+                if let Some(dimensions) = custom_symbol_dimensions
+                    .get(&name.to_ascii_lowercase())
+                    .copied()
+                    .or_else(|| symbol_dimensions(name, units))
+                {
                     symbols.insert(index, dimensions);
                 }
             }
@@ -656,9 +770,27 @@ fn parse_feature_attributes(
                     .or_else(|| Some(index.trim_matches('\'').to_owned()))
             })
             .unwrap_or_else(|| "true".into());
-        attributes.insert(name.clone(), value);
+        attributes.insert(name.clone(), normalize_feature_attribute(name, &value));
     }
     attributes
+}
+
+fn normalize_feature_attribute(name: &str, value: &str) -> String {
+    if name
+        .trim_start_matches('.')
+        .eq_ignore_ascii_case("pad_usage")
+    {
+        return match value {
+            "0" => "toeprint",
+            "1" => "via",
+            "2" => "g_fiducial",
+            "3" => "l_fiducial",
+            "4" => "tooling_hole",
+            _ => value,
+        }
+        .to_owned();
+    }
+    value.to_owned()
 }
 
 fn feature_attribute<'a>(
@@ -755,6 +887,7 @@ fn parse_components(
                     reference.clone(),
                     Component {
                         refdes: reference.clone(),
+                        package_name: (!package.is_empty()).then(|| package.to_owned()),
                         center: PointNm { x, y },
                         bounds: transformed_package.unwrap_or(BoundsNm {
                             min_x: x,

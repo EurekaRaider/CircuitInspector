@@ -18,6 +18,7 @@ pub enum EntityKind {
     Copper,
     BoardEdge,
     Drill,
+    ToolingHole,
     PanelTab,
     BgaCsp,
     ShieldFence,

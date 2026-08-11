@@ -64,8 +64,18 @@ export interface TestPointCandidate {
   review_context?: {
     metric: "EDGE_TO_EDGE";
     board_edge: { distance_nm: number | null; point: { x: number; y: number } | null; confidence: CoverageLevel };
-    nearest_test_point: { id: string; distance_nm: number | null; center: { x: number; y: number } } | null;
+    nearest_test_point: NearestGeometry | null;
+    nearest_tooling_hole: NearestGeometry | null;
+    nearest_component: NearestGeometry | null;
+    nearest_shield: NearestGeometry | null;
   };
+}
+
+export interface NearestGeometry {
+  id: string;
+  distance_nm: number | null;
+  center: { x: number; y: number };
+  confidence: CoverageLevel;
 }
 
 export interface RulePack {
@@ -88,8 +98,8 @@ export interface RuleDefinition {
     id: string;
     title: string;
     kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING" | "MINIMUM_DIAMETER";
-    source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE";
-    target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE" | null;
+    source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "TOOLING_HOLE" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE";
+    target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "TOOLING_HOLE" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE" | null;
     metric: "CENTER_TO_CENTER" | "EDGE_TO_EDGE" | "BODY_TO_PAD" | null;
     threshold_nm: number;
     severity: "INFO" | "WARNING" | "ERROR" | null;

@@ -107,8 +107,8 @@ export interface RuleDefinition {
   id: string;
   title: string;
   kind: "MINIMUM_DISTANCE" | "MINIMUM_WIDTH" | "MINIMUM_ANNULAR_RING" | "MINIMUM_DIAMETER";
-  source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE";
-  target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE" | null;
+  source: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "TOOLING_HOLE" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE";
+  target: "TEST_POINT" | "COMPONENT" | "COPPER" | "BOARD_EDGE" | "DRILL" | "TOOLING_HOLE" | "PANEL_TAB" | "BGA_CSP" | "SHIELD_FENCE" | "UV_GLUE" | null;
   metric: "CENTER_TO_CENTER" | "EDGE_TO_EDGE" | "BODY_TO_PAD" | null;
   threshold_nm: number;
   severity: "INFO" | "WARNING" | "ERROR" | null;
@@ -317,6 +317,7 @@ export interface SchematicDocument {
   source_path: string;
   source_hash: string;
   source_format: "JSON" | "CSV" | "TSV" | "TEXT" | "PDF";
+  source_page_count: number | null;
   revision: string | null;
   status: "DRAFT" | "PARTIALLY_CONFIRMED" | "CONFIRMED";
   pages: SchematicPage[];

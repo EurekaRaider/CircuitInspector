@@ -10,6 +10,13 @@ pub struct BoardEdgeMeasurement {
     pub confidence: CoverageLevel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundsMeasurement {
+    pub distance_nm: i64,
+    pub circle_point: PointNm,
+    pub bounds_point: PointNm,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct SegmentNm {
     start: PointNm,
@@ -51,6 +58,19 @@ pub fn bounds_to_board_edge(design: &Design, bounds: BoundsNm) -> BoardEdgeMeasu
         entity_point,
         edge_point,
         confidence,
+    }
+}
+
+pub fn circle_to_bounds(center: PointNm, radius_nm: i64, bounds: BoundsNm) -> BoundsMeasurement {
+    let bounds_point = PointNm {
+        x: center.x.clamp(bounds.min_x, bounds.max_x),
+        y: center.y.clamp(bounds.min_y, bounds.max_y),
+    };
+    let center_distance_nm = distance(center, bounds_point);
+    BoundsMeasurement {
+        distance_nm: center_distance_nm.saturating_sub(radius_nm).max(0),
+        circle_point: point_toward(center, bounds_point, radius_nm.min(center_distance_nm)),
+        bounds_point,
     }
 }
 
