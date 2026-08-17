@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { findingVerdictCounts, inferredTestPointsForViolation, reviewRoute } from "../src/renderer/pcb-review";
-import { TestPointReviewEvidence } from "../src/renderer/PcbWorkspace";
+import { TestPointReviewEvidence, ViolationReviewForm } from "../src/renderer/PcbWorkspace";
 import type { RuleDefinition, TestPointCandidate, Violation } from "../src/renderer/types";
 
 const baseViolation: Violation = {
@@ -83,6 +83,53 @@ describe("PCB REVIEW routing", () => {
       { ...baseRule, target: "SHIELD_FENCE" },
       []
     )).toBe("ENTITY_IDENTITY_REVIEW");
+  });
+
+  it("routes shield-covered test points to an auditable ignore review", () => {
+    const violation: Violation = {
+      ...baseViolation,
+      component_refs: ["SH1", "TP1"],
+      evidence_points: [{ x: 1_000_000, y: 2_000_000 }],
+      review: { kind: "SHIELD_COVERAGE_EXCLUSION", resolution: null }
+    };
+
+    expect(reviewRoute(violation, { ...baseRule, target: "COMPONENT" }, [])).toBe("SHIELD_COVERAGE_REVIEW");
+    const markup = renderToStaticMarkup(createElement(ViolationReviewForm, {
+      violation,
+      locale: "zh-CN",
+      reviewer: "",
+      comment: "",
+      disabled: false,
+      onReviewerChange() {},
+      onCommentChange() {},
+      onIgnore() {},
+      onPass() {},
+      onFail() {}
+    }));
+    expect(markup).toContain("确认屏蔽罩内测试点");
+    expect(markup).toContain("填写 comment");
+    expect(markup).toContain("忽略该 DFT 距离检查");
+    expect(markup).toContain("人工 PASS");
+    expect(markup).toContain("人工 FAIL");
+  });
+
+  it("offers PASS and FAIL dispositions for other REVIEW findings", () => {
+    const markup = renderToStaticMarkup(createElement(ViolationReviewForm, {
+      violation: baseViolation,
+      locale: "zh-CN",
+      reviewer: "owner",
+      comment: "",
+      disabled: false,
+      onReviewerChange() {},
+      onCommentChange() {},
+      onIgnore() {},
+      onPass() {},
+      onFail() {}
+    }));
+    expect(markup).toContain("人工复核判定");
+    expect(markup).toContain("人工 PASS");
+    expect(markup).toContain("人工 FAIL");
+    expect(markup).not.toContain("忽略该 DFT 距离检查");
   });
 
   it("routes coordinate-free findings to missing-input guidance", () => {

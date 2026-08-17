@@ -346,6 +346,29 @@ pub fn write_html_report(
         .iter()
         .map(|violation| {
             let status_class = verdict_class(violation.verdict);
+            let mut details = html(&violation.message);
+            if let Some(review) = &violation.review {
+                let disposition = review.resolution.as_ref().map_or_else(
+                    || "Review disposition: OPEN · shield coverage exclusion; distance was not measured".to_owned(),
+                    |resolution| {
+                        let decision = match resolution.decision {
+                            crate::model::ViolationReviewDecision::Ignore => "IGNORE",
+                            crate::model::ViolationReviewDecision::Pass => "PASS",
+                            crate::model::ViolationReviewDecision::Fail => "FAIL",
+                        };
+                        format!(
+                            "Review disposition: {decision} · By {} · At {} · Comment: {}",
+                            resolution.reviewed_by,
+                            resolution.reviewed_at,
+                            resolution.comment
+                        )
+                    },
+                );
+                details.push_str(&format!(
+                    "<div class=\"review-disposition\">{}</div>",
+                    html(&disposition)
+                ));
+            }
             format!(
                 "<tr class=\"finding-row {status_class}\" data-verdict=\"{}\"><td class=\"rule-id\">{}</td><td><span class=\"row-verdict {status_class}\">{}</span></td><td class=\"entity-list\">{}</td><td class=\"entity-list\">{}</td><td class=\"details\">{}</td></tr>",
                 verdict_label(violation.verdict),
@@ -353,7 +376,7 @@ pub fn write_html_report(
                 verdict_label(violation.verdict),
                 html(&violation.net_names.join(", ")),
                 html(&violation.component_refs.join(", ")),
-                html(&violation.message),
+                details,
             )
         })
         .collect::<String>();
@@ -1671,6 +1694,7 @@ mod tests {
             evidence_points: vec![PointNm { x: 0, y: 0 }],
             evidence_uris: Vec::new(),
             rule_citation: None,
+            review: None,
         }
     }
 

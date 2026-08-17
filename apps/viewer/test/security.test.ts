@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, withArtifactId } from "../src/main/security.js";
+import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, assertViolationReviewUpdate, withArtifactId } from "../src/main/security.js";
 
 describe("viewer IPC security boundaries", () => {
   it("accepts stable IDs and rejects traversal-like artifact identifiers", () => {
@@ -40,5 +40,21 @@ describe("viewer IPC security boundaries", () => {
     expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [{ id: "../rule" }], review_item_resolutions: [] })).toThrow(/Invalid/);
     expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [], review_item_resolutions: "review-1" })).toThrow(/Invalid/);
     expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [], review_item_resolutions: [{ review_item_id: "review-1", decision: "SKIP", note: "", rule_id: null }] })).toThrow(/Invalid/);
+  });
+
+  it("requires an auditable comment when ignoring a shield-coverage review", () => {
+    const valid = assertViolationReviewUpdate({
+      analysis_id: "analysis-1",
+      violation_id: "tp-component:tp-1:SH1",
+      decision: "IGNORE",
+      comment: "Shield can blocks fixture access on the released assembly.",
+      reviewed_by: "dft-owner"
+    });
+    expect(valid.decision).toBe("IGNORE");
+    expect(() => assertViolationReviewUpdate({ ...valid, comment: "" })).toThrow(/comment/);
+    expect(assertViolationReviewUpdate({ ...valid, decision: "PASS", comment: "" }).decision).toBe("PASS");
+    expect(() => assertViolationReviewUpdate({ ...valid, decision: "FAIL", comment: "" })).toThrow(/comment/);
+    expect(() => assertViolationReviewUpdate({ ...valid, decision: "SKIP" })).toThrow(/decision/);
+    expect(() => assertViolationReviewUpdate({ ...valid, analysis_id: "../analysis" })).toThrow(/Invalid/);
   });
 });

@@ -165,6 +165,15 @@ export interface Violation {
   threshold_nm?: number;
   message: string;
   evidence_points?: Array<{ x: number; y: number }>;
+  review?: {
+    kind: "SHIELD_COVERAGE_EXCLUSION" | "MANUAL_ADJUDICATION";
+    resolution: {
+      decision: "IGNORE" | "PASS" | "FAIL";
+      comment: string;
+      reviewed_by: string;
+      reviewed_at: string;
+    } | null;
+  };
 }
 
 export interface AnalysisSummary {
@@ -426,6 +435,7 @@ export interface ViewerApi {
   confirmLayoutBaseline(input: { design_id: string; approved_test_plan_id: string; source_units: "MM" | "INCH" | "MIXED"; coordinate_origin: string; bottom_mirrored_in_top_view: boolean; panel_step_repeat: string; approved_by: string }): Promise<LayoutBaselineConfirmation>;
   readLayoutBaseline(designId: string): Promise<LayoutBaselineConfirmation | null>;
   queryViolations(input: Record<string, unknown>): Promise<{ analysis_id: string; total: number; offset: number; violations: Violation[] }>;
+  reviewViolation(input: { analysis_id: string; violation_id: string; decision: "IGNORE" | "PASS" | "FAIL"; comment: string; reviewed_by: string }): Promise<AnalysisSummary>;
   renderEvidence(input: Record<string, unknown>): Promise<{ analysis_id: string; evidence: Array<{ violation_id: string; png_path: string; svg_path: string }> }>;
   readAnalysis(analysisId: string): Promise<AnyAnalysis>;
   openEvidence(filePath: string): Promise<{ ok: boolean; error: string | null }>;

@@ -83,6 +83,19 @@ export interface Violation {
   evidence_points: Array<{ x: number; y: number }>;
   evidence_uris: string[];
   rule_citation: RuleCitation | null;
+  review?: ViolationReview;
+}
+
+export interface ViolationReview {
+  kind: "SHIELD_COVERAGE_EXCLUSION" | "MANUAL_ADJUDICATION";
+  resolution: ViolationReviewResolution | null;
+}
+
+export interface ViolationReviewResolution {
+  decision: "IGNORE" | "PASS" | "FAIL";
+  comment: string;
+  reviewed_by: string;
+  reviewed_at: string;
 }
 
 export interface RuleCitation {

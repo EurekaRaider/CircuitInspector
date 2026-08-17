@@ -17,6 +17,7 @@ const api = {
   runAnalysis: (designId: string, rulePackId: string) => ipcRenderer.invoke("analysis:run", designId, rulePackId),
   analyzeTestAccess: (input: Record<string, unknown>) => ipcRenderer.invoke("analysis:test-access", input),
   queryViolations: (input: Record<string, unknown>) => ipcRenderer.invoke("analysis:query", input),
+  reviewViolation: (input: Record<string, unknown>) => ipcRenderer.invoke("analysis:review-violation", input),
   renderEvidence: (input: Record<string, unknown>) => ipcRenderer.invoke("evidence:render", input),
   readAnalysis: (analysisId: string) => ipcRenderer.invoke("analysis:read", analysisId),
   openEvidence: (filePath: string) => ipcRenderer.invoke("evidence:open", filePath),

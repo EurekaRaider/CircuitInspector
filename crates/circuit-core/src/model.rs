@@ -626,6 +626,35 @@ pub struct RuleCitation {
     pub excerpt: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ViolationReviewKind {
+    ShieldCoverageExclusion,
+    ManualAdjudication,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ViolationReviewDecision {
+    Ignore,
+    Pass,
+    Fail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViolationReviewResolution {
+    pub decision: ViolationReviewDecision,
+    pub comment: String,
+    pub reviewed_by: String,
+    pub reviewed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViolationReview {
+    pub kind: ViolationReviewKind,
+    pub resolution: Option<ViolationReviewResolution>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Violation {
     pub id: String,
@@ -650,6 +679,8 @@ pub struct Violation {
     pub evidence_points: Vec<PointNm>,
     pub evidence_uris: Vec<String>,
     pub rule_citation: Option<RuleCitation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ViolationReview>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

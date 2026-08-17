@@ -65,3 +65,31 @@ export function assertRuleDraftUpdate(value: unknown): {
     review_item_resolutions: reviewItemResolutions
   };
 }
+
+export function assertViolationReviewUpdate(value: unknown): {
+  analysis_id: string;
+  violation_id: string;
+  decision: "IGNORE" | "PASS" | "FAIL";
+  comment: string;
+  reviewed_by: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid violation review update");
+  const input = value as Record<string, unknown>;
+  if (typeof input.violation_id !== "string" || input.violation_id.length === 0 || input.violation_id.length > 1_024 || /[\u0000-\u001f\u007f]/.test(input.violation_id)) {
+    throw new Error("Invalid violation identifier");
+  }
+  const decision = assertOneOf(input.decision, ["IGNORE", "PASS", "FAIL"] as const, "violation review decision");
+  if (typeof input.comment !== "string" || input.comment.length > 2_000 || ((decision === "IGNORE" || decision === "FAIL") && input.comment.trim().length === 0)) {
+    throw new Error("IGNORE and FAIL review dispositions require a comment of 1 to 2000 characters");
+  }
+  if (typeof input.reviewed_by !== "string" || input.reviewed_by.trim().length === 0 || input.reviewed_by.length > 200) {
+    throw new Error("Invalid violation reviewer");
+  }
+  return {
+    analysis_id: assertArtifactId(input.analysis_id),
+    violation_id: input.violation_id,
+    decision,
+    comment: input.comment.trim(),
+    reviewed_by: input.reviewed_by.trim()
+  };
+}

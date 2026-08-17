@@ -5,7 +5,7 @@ use crate::geometry::{
 };
 use crate::model::{
     AnalysisSummary, BoundsNm, CoverageLevel, Design, Feature, FeatureGeometry, PointNm, Polarity,
-    Severity, Side, Verdict, Violation,
+    Severity, Side, Verdict, Violation, ViolationReview, ViolationReviewKind,
 };
 use crate::rules::{DistanceMetric, EntityKind, RuleDefinition, RuleKind, RulePack};
 use rayon::prelude::*;
@@ -162,10 +162,26 @@ fn evaluate_rule(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> R
 fn evaluate_distance(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> Vec<Violation> {
     let sources = entities(design, rule.source);
     let targets = entities(design, rule.target.unwrap_or(EntityKind::BoardEdge));
+    let shield_candidates =
+        if rule.source == EntityKind::TestPoint && rule.target == Some(EntityKind::Component) {
+            entities(design, EntityKind::ShieldFence)
+        } else {
+            Vec::new()
+        };
     let same_collection = rule.target == Some(rule.source);
     let mut violations = Vec::new();
     let mut emitted_pairs = HashSet::new();
     for (source_index, source) in sources.iter().enumerate() {
+        if let Some(shield) = covering_shield(source, &shield_candidates) {
+            violations.push(shield_coverage_review(
+                design,
+                rule,
+                analysis_id,
+                source,
+                shield,
+            ));
+            continue;
+        }
         let mut first_unmeasured = None;
         let mut unmeasured_pairs = 0_usize;
         let mut nearest_review: Option<(i64, &str, Violation)> = None;
@@ -226,6 +242,89 @@ fn evaluate_distance(design: &Design, rule: &RuleDefinition, analysis_id: &str) 
         }
     }
     violations
+}
+
+fn covering_shield<'a>(
+    source: &GeometryRef<'_>,
+    shields: &'a [GeometryRef<'a>],
+) -> Option<&'a GeometryRef<'a>> {
+    if source.kind != EntityKind::TestPoint || !matches!(source.side, Side::Top | Side::Bottom) {
+        return None;
+    }
+    shields
+        .iter()
+        .filter(|shield| shield.side == source.side)
+        .filter(|shield| {
+            source.center.x >= shield.bounds.min_x
+                && source.center.x <= shield.bounds.max_x
+                && source.center.y >= shield.bounds.min_y
+                && source.center.y <= shield.bounds.max_y
+        })
+        .min_by(|left, right| {
+            bounds_area(left.bounds)
+                .cmp(&bounds_area(right.bounds))
+                .then_with(|| left.id.cmp(right.id))
+        })
+}
+
+fn bounds_area(bounds: BoundsNm) -> i128 {
+    i128::from(bounds.max_x.saturating_sub(bounds.min_x).max(0))
+        * i128::from(bounds.max_y.saturating_sub(bounds.min_y).max(0))
+}
+
+fn shield_coverage_review(
+    design: &Design,
+    rule: &RuleDefinition,
+    analysis_id: &str,
+    source: &GeometryRef<'_>,
+    shield: &GeometryRef<'_>,
+) -> Violation {
+    let mut component_refs = [source.component_ref, shield.component_ref]
+        .into_iter()
+        .flatten()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    component_refs.sort();
+    component_refs.dedup();
+    Violation {
+        id: format!("{}:{}:{}:shield-coverage", rule.id, source.id, shield.id),
+        analysis_id: analysis_id.into(),
+        rule_id: rule.id.clone(),
+        title: rule.title.clone(),
+        severity: confirmed_severity(rule),
+        verdict: Verdict::Review,
+        source_format: design.format.clone(),
+        semantic_confidence: source.confidence.weakest(CoverageLevel::Inferred),
+        net_names: source.net_name.into_iter().map(ToOwned::to_owned).collect(),
+        component_refs,
+        layer_ids: source.layer_id.into_iter().map(ToOwned::to_owned).collect(),
+        entity_ids: vec![source.id.to_owned(), shield.id.to_owned()],
+        x_nm: source.center.x,
+        y_nm: source.center.y,
+        measured_value_nm: None,
+        threshold_nm: Some(rule.threshold_nm),
+        message: format!(
+            "test point {} is inside inferred shield candidate {}; component-clearance measurement was skipped and requires review before this DFT check may be ignored",
+            source.id, shield.id
+        ),
+        evidence_points: vec![
+            source.center,
+            PointNm {
+                x: shield.bounds.min_x,
+                y: shield.bounds.min_y,
+            },
+            PointNm {
+                x: shield.bounds.max_x,
+                y: shield.bounds.max_y,
+            },
+        ],
+        evidence_uris: Vec::new(),
+        rule_citation: rule.citation.clone(),
+        review: Some(ViolationReview {
+            kind: ViolationReviewKind::ShieldCoverageExclusion,
+            resolution: None,
+        }),
+    }
 }
 
 fn unordered_pair_key(left: &str, right: &str) -> (String, String) {
@@ -326,6 +425,7 @@ fn evaluate_width(design: &Design, rule: &RuleDefinition, analysis_id: &str) -> 
                     evidence_points,
                     evidence_uris: Vec::new(),
                     rule_citation: rule.citation.clone(),
+                    review: None,
                 });
             }
         }
@@ -428,6 +528,7 @@ fn diameter_violation(
         evidence_points: vec![point.center],
         evidence_uris: Vec::new(),
         rule_citation: rule.citation.clone(),
+        review: None,
     }
 }
 
@@ -934,6 +1035,7 @@ fn distance_violation(
         evidence_points: vec![measurement.source_point, measurement.target_point],
         evidence_uris: Vec::new(),
         rule_citation: rule.citation.clone(),
+        review: None,
     }
 }
 
@@ -978,6 +1080,7 @@ fn unmeasured_geometry_violation(
         evidence_points: vec![source.center],
         evidence_uris: Vec::new(),
         rule_citation: rule.citation.clone(),
+        review: None,
     }
 }
 
@@ -1017,6 +1120,7 @@ fn review_violation(
         evidence_points: Vec::new(),
         evidence_uris: Vec::new(),
         rule_citation: rule.citation.clone(),
+        review: None,
     }
 }
 
@@ -1758,6 +1862,190 @@ mod tests {
             1,
             "only the nearest inferred shield candidate needs review"
         );
+    }
+
+    #[test]
+    fn component_clearance_reviews_points_inside_shields_and_measures_points_outside() {
+        let design = Design {
+            schema_version: Design::SCHEMA_VERSION,
+            id: "shield-covered-test-point".into(),
+            format: DesignFormat::Odbpp,
+            source_path: "fixture".into(),
+            content_hash: "hash".into(),
+            bounds: BoundsNm {
+                min_x: 0,
+                min_y: 0,
+                max_x: 10_000_000,
+                max_y: 10_000_000,
+            },
+            layers: vec![Layer {
+                id: "top".into(),
+                name: "Top".into(),
+                function: "SIGNAL".into(),
+                side: Side::Top,
+                features: Vec::new(),
+            }],
+            components: vec![
+                Component {
+                    refdes: "SH1".into(),
+                    package_name: Some("SHIELD_CAN".into()),
+                    center: PointNm {
+                        x: 1_250_000,
+                        y: 1_250_000,
+                    },
+                    bounds: BoundsNm {
+                        min_x: 500_000,
+                        min_y: 500_000,
+                        max_x: 2_000_000,
+                        max_y: 2_000_000,
+                    },
+                    side: Side::Top,
+                    pins: Vec::new(),
+                    confidence: CoverageLevel::Explicit,
+                },
+                Component {
+                    refdes: "R-IN".into(),
+                    package_name: Some("0402".into()),
+                    center: PointNm {
+                        x: 1_300_000,
+                        y: 1_000_000,
+                    },
+                    bounds: BoundsNm {
+                        min_x: 1_200_000,
+                        min_y: 900_000,
+                        max_x: 1_400_000,
+                        max_y: 1_100_000,
+                    },
+                    side: Side::Top,
+                    pins: vec!["1".into(), "2".into()],
+                    confidence: CoverageLevel::Explicit,
+                },
+                Component {
+                    refdes: "R-OUT".into(),
+                    package_name: Some("0402".into()),
+                    center: PointNm {
+                        x: 5_000_000,
+                        y: 1_000_000,
+                    },
+                    bounds: BoundsNm {
+                        min_x: 4_700_000,
+                        min_y: 900_000,
+                        max_x: 5_300_000,
+                        max_y: 1_100_000,
+                    },
+                    side: Side::Top,
+                    pins: vec!["1".into(), "2".into()],
+                    confidence: CoverageLevel::Explicit,
+                },
+                Component {
+                    refdes: "SH-BOT".into(),
+                    package_name: Some("SHIELD_CAN".into()),
+                    center: PointNm {
+                        x: 4_000_000,
+                        y: 1_000_000,
+                    },
+                    bounds: BoundsNm {
+                        min_x: 3_500_000,
+                        min_y: 500_000,
+                        max_x: 4_500_000,
+                        max_y: 1_500_000,
+                    },
+                    side: Side::Bottom,
+                    pins: Vec::new(),
+                    confidence: CoverageLevel::Explicit,
+                },
+            ],
+            nets: vec!["INSIDE".into(), "OUTSIDE".into()],
+            test_points: vec![
+                TestPoint {
+                    id: "tp-inside".into(),
+                    center: PointNm {
+                        x: 1_000_000,
+                        y: 1_000_000,
+                    },
+                    radius_nm: Some(100_000),
+                    net_name: Some("INSIDE".into()),
+                    component_ref: Some("TP-IN".into()),
+                    confidence: CoverageLevel::Explicit,
+                    layer_id: Some("top".into()),
+                    source: "fixture".into(),
+                    geometry_source: Some("fixture".into()),
+                    confirmation: None,
+                },
+                TestPoint {
+                    id: "tp-outside".into(),
+                    center: PointNm {
+                        x: 4_000_000,
+                        y: 1_000_000,
+                    },
+                    radius_nm: Some(100_000),
+                    net_name: Some("OUTSIDE".into()),
+                    component_ref: Some("TP-OUT".into()),
+                    confidence: CoverageLevel::Explicit,
+                    layer_id: Some("top".into()),
+                    source: "fixture".into(),
+                    geometry_source: Some("fixture".into()),
+                    confirmation: None,
+                },
+            ],
+            coverage: SemanticCoverage {
+                components: CoverageLevel::Explicit,
+                test_points: CoverageLevel::Explicit,
+                ..Default::default()
+            },
+            diagnostics: Vec::new(),
+        };
+        let pack = RulePack {
+            id: "clearance".into(),
+            version: "1".into(),
+            title: "Clearance".into(),
+            status: RulePackStatus::Approved,
+            rules: vec![RuleDefinition {
+                id: "tp-component".into(),
+                title: "Test point to component".into(),
+                kind: RuleKind::MinimumDistance,
+                source: EntityKind::TestPoint,
+                target: Some(EntityKind::Component),
+                metric: Some(DistanceMetric::BodyToPad),
+                threshold_nm: 1_000_000,
+                severity: Some(Severity::Error),
+                layer_functions: Vec::new(),
+                same_net_only: false,
+                different_net_only: false,
+                citation: None,
+            }],
+            review_items: Vec::new(),
+            approval: Some(RuleApproval {
+                approved_by: "fixture".into(),
+                approved_at: "2026-08-17T00:00:00Z".into(),
+                content_hash: "approved".into(),
+            }),
+        };
+
+        let analysis = analyze_design(&design, &pack).unwrap();
+
+        assert_eq!(analysis.fail_count, 1);
+        assert_eq!(analysis.review_count, 1);
+        let covered = analysis
+            .violations
+            .iter()
+            .find(|finding| finding.entity_ids.contains(&"tp-inside".into()))
+            .unwrap();
+        assert_eq!(covered.verdict, Verdict::Review);
+        assert_eq!(covered.measured_value_nm, None);
+        assert_eq!(covered.component_refs, ["SH1", "TP-IN"]);
+        assert_eq!(
+            covered.review.as_ref().map(|review| review.kind),
+            Some(crate::model::ViolationReviewKind::ShieldCoverageExclusion)
+        );
+        let outside = analysis
+            .violations
+            .iter()
+            .find(|finding| finding.entity_ids.contains(&"tp-outside".into()))
+            .unwrap();
+        assert_eq!(outside.verdict, Verdict::Fail);
+        assert_eq!(outside.measured_value_nm, Some(600_000));
+        assert!(outside.entity_ids.contains(&"R-OUT".into()));
     }
 
     #[test]

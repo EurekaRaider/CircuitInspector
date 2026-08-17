@@ -9,6 +9,7 @@ use crate::geometry::{
 use crate::model::{
     BoundsNm, CoverageLevel, Design, DesignSummary, FeatureGeometry, PointNm, Severity, Side,
     TestPoint, TestPointConfirmation, TestPointConfirmationMethod, Verdict,
+    ViolationReviewDecision, ViolationReviewKind, ViolationReviewResolution,
 };
 use crate::parsers::import_design;
 use crate::rules::{
@@ -113,6 +114,7 @@ pub fn dispatch(method: &str, params: Value) -> CoreResult<Value> {
         "analyze_design" => analyze_request(params),
         "list_analyses" => list_analyses_request(params),
         "query_violations" => query_request(params),
+        "review_violation" => review_violation_request(params),
         "render_evidence" => render_request(params),
         "read_analysis" => read_analysis_request(params),
         other => Err(CoreError::Unsupported(format!("unknown method {other}"))),
@@ -1436,6 +1438,83 @@ fn query_request(params: Value) -> CoreResult<Value> {
     )
 }
 
+fn review_violation_request(params: Value) -> CoreResult<Value> {
+    #[derive(Deserialize)]
+    struct Params {
+        cache_dir: PathBuf,
+        analysis_id: String,
+        violation_id: String,
+        decision: ViolationReviewDecision,
+        comment: String,
+        reviewed_by: String,
+    }
+    let params: Params = serde_json::from_value(params)?;
+    let comment = params.comment.trim();
+    let reviewed_by = params.reviewed_by.trim();
+    if comment.len() > 2_000
+        || matches!(
+            params.decision,
+            ViolationReviewDecision::Ignore | ViolationReviewDecision::Fail
+        ) && comment.is_empty()
+    {
+        return Err(CoreError::Parse(
+            "IGNORE and FAIL review dispositions require a comment of 1 to 2000 characters".into(),
+        ));
+    }
+    if reviewed_by.is_empty() || reviewed_by.len() > 200 {
+        return Err(CoreError::Parse(
+            "violation reviewer must contain 1 to 200 characters".into(),
+        ));
+    }
+    let cache = CacheStore::new(&params.cache_dir)?;
+    let mut analysis = cache.load_analysis(&params.analysis_id)?;
+    let violation = analysis
+        .violations
+        .iter_mut()
+        .find(|violation| violation.id == params.violation_id)
+        .ok_or_else(|| CoreError::NotFound(params.violation_id.clone()))?;
+    if violation.verdict != Verdict::Review {
+        return Err(CoreError::Parse(
+            "only REVIEW findings can receive a review disposition".into(),
+        ));
+    }
+    let review_kind = violation
+        .review
+        .as_ref()
+        .map(|review| review.kind)
+        .unwrap_or(ViolationReviewKind::ManualAdjudication);
+    if params.decision == ViolationReviewDecision::Ignore
+        && review_kind != ViolationReviewKind::ShieldCoverageExclusion
+    {
+        return Err(CoreError::Parse(
+            "only shield-coverage exclusions support this review disposition".into(),
+        ));
+    }
+    let review = violation
+        .review
+        .get_or_insert(crate::model::ViolationReview {
+            kind: ViolationReviewKind::ManualAdjudication,
+            resolution: None,
+        });
+    review.resolution = Some(ViolationReviewResolution {
+        decision: params.decision,
+        comment: comment.into(),
+        reviewed_by: reviewed_by.into(),
+        reviewed_at: unix_timestamp(),
+    });
+    cache.save_analysis(&analysis)?;
+    let design = cache.load_design(&analysis.design_id)?;
+    let report_path = write_html_report(&cache, &design, &analysis)?;
+    let mut value = serde_json::to_value(&analysis)?;
+    if let Value::Object(object) = &mut value {
+        object.insert(
+            "report_path".into(),
+            Value::String(report_path.display().to_string()),
+        );
+    }
+    Ok(value)
+}
+
 fn render_request(params: Value) -> CoreResult<Value> {
     #[derive(Deserialize)]
     struct Params {
@@ -1942,6 +2021,136 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn review_dispositions_are_audited_without_overwriting_the_automated_verdict() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cache = CacheStore::new(temporary.path()).unwrap();
+        let design = Design {
+            schema_version: Design::SCHEMA_VERSION,
+            id: "review-design".into(),
+            format: crate::model::DesignFormat::Odbpp,
+            source_path: "fixture".into(),
+            content_hash: "hash".into(),
+            bounds: BoundsNm {
+                min_x: 0,
+                min_y: 0,
+                max_x: 10_000_000,
+                max_y: 10_000_000,
+            },
+            layers: Vec::new(),
+            components: Vec::new(),
+            nets: Vec::new(),
+            test_points: Vec::new(),
+            coverage: crate::model::SemanticCoverage::default(),
+            diagnostics: Vec::new(),
+        };
+        cache.save_design(&design).unwrap();
+        let finding = |id: &str, review| crate::model::Violation {
+            id: id.into(),
+            analysis_id: "review-analysis".into(),
+            rule_id: "tp-component".into(),
+            title: "Test point to component".into(),
+            severity: Severity::Warning,
+            verdict: Verdict::Review,
+            source_format: crate::model::DesignFormat::Odbpp,
+            semantic_confidence: CoverageLevel::Inferred,
+            net_names: vec!["RESET".into()],
+            component_refs: vec!["TP1".into(), "SH1".into()],
+            layer_ids: vec!["top".into()],
+            entity_ids: vec!["tp-1".into(), "SH1".into()],
+            x_nm: 1_000_000,
+            y_nm: 1_000_000,
+            measured_value_nm: None,
+            threshold_nm: Some(1_000_000),
+            message: "manual review required".into(),
+            evidence_points: vec![PointNm {
+                x: 1_000_000,
+                y: 1_000_000,
+            }],
+            evidence_uris: Vec::new(),
+            rule_citation: None,
+            review,
+        };
+        let analysis = crate::model::AnalysisSummary {
+            id: "review-analysis".into(),
+            design_id: design.id.clone(),
+            rule_pack_id: "rules".into(),
+            verdict: Verdict::Review,
+            pass_count: 0,
+            fail_count: 0,
+            review_count: 2,
+            not_applicable_count: 0,
+            violations: vec![
+                finding("generic-review", None),
+                finding(
+                    "shield-review",
+                    Some(crate::model::ViolationReview {
+                        kind: ViolationReviewKind::ShieldCoverageExclusion,
+                        resolution: None,
+                    }),
+                ),
+            ],
+            report_uri: "circuit://analysis/review-analysis/report".into(),
+            elapsed_ms: 0,
+        };
+        cache.save_analysis(&analysis).unwrap();
+
+        let passed = dispatch(
+            "review_violation",
+            json!({
+                "cache_dir": cache.root(),
+                "analysis_id": analysis.id,
+                "violation_id": "generic-review",
+                "decision": "PASS",
+                "comment": "",
+                "reviewed_by": "dft-owner"
+            }),
+        )
+        .unwrap();
+        assert_eq!(passed["violations"][0]["verdict"], "REVIEW");
+        assert_eq!(
+            passed["violations"][0]["review"]["kind"],
+            "MANUAL_ADJUDICATION"
+        );
+        assert_eq!(
+            passed["violations"][0]["review"]["resolution"]["decision"],
+            "PASS"
+        );
+        assert!(
+            dispatch(
+                "review_violation",
+                json!({
+                    "cache_dir": cache.root(),
+                    "analysis_id": "review-analysis",
+                    "violation_id": "shield-review",
+                    "decision": "FAIL",
+                    "comment": "",
+                    "reviewed_by": "dft-owner"
+                })
+            )
+            .is_err()
+        );
+        let ignored = dispatch(
+            "review_violation",
+            json!({
+                "cache_dir": cache.root(),
+                "analysis_id": "review-analysis",
+                "violation_id": "shield-review",
+                "decision": "IGNORE",
+                "comment": "Shield can blocks fixture access.",
+                "reviewed_by": "dft-owner"
+            }),
+        )
+        .unwrap();
+        assert_eq!(ignored["violations"][1]["verdict"], "REVIEW");
+        assert_eq!(
+            ignored["violations"][1]["review"]["resolution"]["decision"],
+            "IGNORE"
+        );
+        let report = fs::read_to_string(ignored["report_path"].as_str().unwrap()).unwrap();
+        assert!(report.contains("Shield can blocks fixture access."));
     }
 }
 

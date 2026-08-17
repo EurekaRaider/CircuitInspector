@@ -196,6 +196,7 @@ Local PDF, DOCX, and Markdown specifications can be indexed with page, paragraph
 V1 contains rule paths for:
 
 - Test point to test point, component, board edge, tooling-hole geometry, shield candidate, and UV-glue layer geometry; inferred identities retain measured evidence as `REVIEW`
+- For test-point-to-component clearance, a same-side test-point center inside an inferred shield-candidate outline is not numerically measured: it becomes a shield-coverage `REVIEW`; test points outside the outline continue through the approved DFT threshold
 - Test-point accessibility
 - Minimum trace width and copper spacing
 - Copper to board-edge and hole-to-copper clearance
@@ -203,6 +204,8 @@ V1 contains rule paths for:
 - Drill and slot spacing
 
 Results are deliberately broader than PASS/FAIL:
+
+- Every `REVIEW` can record an auditable manual `PASS` or `FAIL` disposition; shield-coverage reviews also allow `IGNORE`. The automated verdict remains `REVIEW`, and `FAIL`/`IGNORE` require a comment.
 
 | Status | Meaning |
 |---|---|

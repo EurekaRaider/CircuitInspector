@@ -52,7 +52,7 @@ import {
 import { CoreClient } from "./core-client.js";
 import { circuitInspectorMcpLaunch, configureOpenCodeMcp } from "./opencode-integration.js";
 import { watchRuleCatalog } from "./rule-catalog-watcher.js";
-import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, withArtifactId } from "./security.js";
+import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, assertViolationReviewUpdate, withArtifactId } from "./security.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const iconPath = path.resolve(directory, "../assets/icon.png");
@@ -590,6 +590,10 @@ ipcMain.handle("analysis:test-access", async (_event, input: {
 ipcMain.handle("analysis:query", (_event, input: Record<string, unknown>) =>
   core.request("query_violations", { cache_dir: cacheDir, ...withArtifactId(input, "analysis_id") })
 );
+ipcMain.handle("analysis:review-violation", (_event, value: unknown) => {
+  const input = assertViolationReviewUpdate(value);
+  return core.request("review_violation", { cache_dir: cacheDir, ...input });
+});
 ipcMain.handle("evidence:render", (_event, input: Record<string, unknown>) =>
   core.request("render_evidence", { cache_dir: cacheDir, ...withArtifactId(input, "analysis_id") })
 );

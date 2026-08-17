@@ -98,6 +98,8 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const [activeTestPoint, setActiveTestPoint] = useState<TestPointCandidate | null>(null);
   const [testPointReviewer, setTestPointReviewer] = useState(() => localStorage.getItem("circuit-inspector.approver") ?? "");
   const [confirmedTestPointReport, setConfirmedTestPointReport] = useState<{ report_path: string; confirmed_count: number } | null>(null);
+  const [violationReviewer, setViolationReviewer] = useState(() => localStorage.getItem("circuit-inspector.approver") ?? "");
+  const [violationReviewComments, setViolationReviewComments] = useState<Record<string, string>>({});
 
   const loadRules = useCallback(async () => {
     try {
@@ -401,6 +403,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       const result = await window.circuitInspector.runAnalysis(design.id, selectedRulePack);
       setAnalysis(result);
       setQueriedViolations(null);
+      setViolationReviewComments({});
       onCatalogChanged?.();
       const first = result.violations.find((violation) => violation.verdict === "FAIL") ?? result.violations[0] ?? null;
       if (first) focusViolation(first);
@@ -518,6 +521,39 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       if (result.evidence[0]) await window.circuitInspector.openEvidence(result.evidence[0].png_path);
       const refreshed = await window.circuitInspector.readAnalysis(analysis.id);
       if (!("kind" in refreshed)) setAnalysis(refreshed);
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reviewViolation(violation: Violation, decision: "IGNORE" | "PASS" | "FAIL") {
+    if (!analysis || !violationReviewer.trim()) {
+      setError(locale === "zh-CN" ? "记录人工复核决定前请输入复核人。" : "Enter a reviewer before recording a manual review disposition.");
+      return;
+    }
+    const comment = violationReviewComments[violation.id] ?? violation.review?.resolution?.comment ?? "";
+    if ((decision === "IGNORE" || decision === "FAIL") && !comment.trim()) {
+      setError(locale === "zh-CN" ? "忽略或人工 FAIL 必须填写 comment。" : "IGNORE and manual FAIL require a comment.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      localStorage.setItem("circuit-inspector.approver", violationReviewer.trim());
+      const result = await window.circuitInspector.reviewViolation({
+        analysis_id: analysis.id,
+        violation_id: violation.id,
+        decision,
+        comment: comment.trim(),
+        reviewed_by: violationReviewer.trim()
+      });
+      const updated = result.violations.find((finding) => finding.id === violation.id) ?? null;
+      setAnalysis(result);
+      setQueriedViolations((current) => current?.map((finding) => finding.id === violation.id ? updated ?? finding : finding) ?? null);
+      setActiveViolation(updated);
+      onCatalogChanged?.();
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -807,7 +843,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
               <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[10px] text-[#969691]">
                 <span>{t("net")} {activeViolation.net_names.join(", ") || "-"}</span>
                 <span>{t("reference")} {activeViolation.component_refs.join(", ") || "-"}</span>
-                {violationHasLocation(activeViolation) ? <span className="text-[#d1ad6f]">{t("measured")} {formatNm(activeViolation.measured_value_nm)} / {t("threshold")} {formatNm(activeViolation.threshold_nm)}</span> : <span className="text-[#d1ad6f]">{locale === "zh-CN" ? "仅语义复核，未执行几何测量" : "Semantic review only; no geometry measurement"}</span>}
+                {activeViolation.measured_value_nm != null ? <span className="text-[#d1ad6f]">{t("measured")} {formatNm(activeViolation.measured_value_nm)} / {t("threshold")} {formatNm(activeViolation.threshold_nm)}</span> : <span className="text-[#d1ad6f]">{activeViolation.review?.kind === "SHIELD_COVERAGE_EXCLUSION" ? (locale === "zh-CN" ? "屏蔽罩内测试点，已跳过距离测量" : "Test point inside shield; distance measurement skipped") : (locale === "zh-CN" ? "仅语义复核，未执行几何测量" : "Semantic review only; no geometry measurement")}</span>}
               </div>
             </div>
           )}
@@ -950,12 +986,24 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                           {violation.component_refs.map((reference) => <Tag key={reference}>{reference}</Tag>)}
                         </div>
                         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[9px] text-[#777875]">
-                          <span>{locale === "zh-CN" ? "实测" : "MEASURED"} {formatNm(violation.measured_value_nm)}</span>
+                          <span>{locale === "zh-CN" ? "实测" : "MEASURED"} {violation.review?.kind === "SHIELD_COVERAGE_EXCLUSION" ? (locale === "zh-CN" ? "已跳过（屏蔽罩内）" : "SKIPPED (INSIDE SHIELD)") : formatNm(violation.measured_value_nm)}</span>
                           <span>{locale === "zh-CN" ? "阈值" : "THRESHOLD"} {formatNm(violation.threshold_nm)}</span>
                           <span>{locale === "zh-CN" ? "位置" : "LOCATION"} {violationHasLocation(violation) ? `X ${(violation.x_nm / 1_000_000).toFixed(3)} · Y ${(violation.y_nm / 1_000_000).toFixed(3)} mm` : (locale === "zh-CN" ? "不可定位" : "unavailable")}</span>
                         </div>
                       </button>
                       {selected && route && <ReviewGuidance route={route} rule={rule} locale={locale} onReviewTestPoints={() => openTestPointReview(violation)} onOpenRuleLibrary={onOpenRuleLibrary} />}
+                      {selected && violation.verdict === "REVIEW" && <ViolationReviewForm
+                        violation={violation}
+                        locale={locale}
+                        reviewer={violationReviewer}
+                        comment={violationReviewComments[violation.id] ?? violation.review?.resolution?.comment ?? ""}
+                        disabled={busy}
+                        onReviewerChange={setViolationReviewer}
+                        onCommentChange={(comment) => setViolationReviewComments((current) => ({ ...current, [violation.id]: comment }))}
+                        onIgnore={() => void reviewViolation(violation, "IGNORE")}
+                        onPass={() => void reviewViolation(violation, "PASS")}
+                        onFail={() => void reviewViolation(violation, "FAIL")}
+                      />}
                     </div>
                   );
                 })}
@@ -1034,7 +1082,9 @@ function EmptyCanvas({ onOpen, t }: { onOpen(): void; t: Translator }) {
 function ReviewGuidance({ route, rule, locale, onReviewTestPoints, onOpenRuleLibrary }: { route: ReviewRoute; rule: RuleDefinition | undefined; locale: Locale; onReviewTestPoints(): void; onOpenRuleLibrary: (() => void) | undefined }) {
   const chinese = locale === "zh-CN";
   const entities = [rule?.source, rule?.target].filter(Boolean).join(" → ") || "-";
-  const content = route === "TEST_POINT_REVIEW"
+  const content = route === "SHIELD_COVERAGE_REVIEW"
+    ? { title: chinese ? "确认屏蔽罩内测试点" : "Confirm test point inside shield", body: chinese ? "测试点中心落入同面屏蔽罩候选外形，因此本条普通器件距离未测量。核对屏蔽罩身份和覆盖范围后，可记录忽略、人工 PASS 或人工 FAIL。" : "The test-point center falls inside a same-side shield candidate, so ordinary component clearance was not measured. Confirm the shield identity and coverage before recording IGNORE, manual PASS, or manual FAIL." }
+    : route === "TEST_POINT_REVIEW"
     ? { title: chinese ? "先确认测试点候选" : "Confirm test-point candidates first", body: chinese ? "该规则依赖推断测试点。逐个定位、确认或排除后，重新运行分析才能得到 PASS/FAIL。" : "This rule depends on inferred test points. Locate and confirm or reject each candidate, then rerun analysis for PASS/FAIL." }
     : route === "ENTITY_IDENTITY_REVIEW"
       ? { title: chinese ? "确认目标实体身份" : "Confirm target identity", body: chinese ? "距离已由导入几何计算，但目标对象来自层名、器件信息或钻孔几何候选；确认其确为规则目标前保持 REVIEW。" : "The distance is measured from imported geometry, but the target is inferred from a layer name, component metadata, or drill geometry. Keep REVIEW until its identity is confirmed." }
@@ -1054,6 +1104,60 @@ function ReviewGuidance({ route, rule, locale, onReviewTestPoints, onOpenRuleLib
       </div>
     </div>
   );
+}
+
+export function ViolationReviewForm({
+  violation,
+  locale,
+  reviewer,
+  comment,
+  disabled,
+  onReviewerChange,
+  onCommentChange,
+  onIgnore,
+  onPass,
+  onFail
+}: {
+  violation: Violation;
+  locale: Locale;
+  reviewer: string;
+  comment: string;
+  disabled: boolean;
+  onReviewerChange(value: string): void;
+  onCommentChange(value: string): void;
+  onIgnore(): void;
+  onPass(): void;
+  onFail(): void;
+}) {
+  const chinese = locale === "zh-CN";
+  const shieldCoverage = violation.review?.kind === "SHIELD_COVERAGE_EXCLUSION";
+  const resolution = violation.review?.resolution;
+  const reviewerPresent = reviewer.trim().length > 0;
+  const commentPresent = comment.trim().length > 0;
+  const resolutionLabel = resolution?.decision === "IGNORE"
+    ? chinese ? "已忽略距离检查" : "Distance check ignored"
+    : resolution?.decision === "PASS"
+      ? chinese ? "人工 PASS" : "Manual PASS"
+      : resolution?.decision === "FAIL"
+        ? chinese ? "人工 FAIL" : "Manual FAIL"
+        : null;
+  return <div className="mx-4 mb-4 rounded-lg border border-white/[0.08] bg-black/10 p-3">
+    <div className="text-[10px] font-semibold text-[#d8d5cd]">{shieldCoverage ? (chinese ? "确认屏蔽罩内测试点" : "Confirm test point inside shield") : (chinese ? "人工复核判定" : "Manual review disposition")}</div>
+    <p className="mt-1.5 text-[9px] leading-4 text-[#797a76]">{chinese ? "原始自动判定保持 REVIEW；这里记录可审计的人工处置，不会伪装成自动几何 PASS/FAIL。" : "The original automated verdict remains REVIEW. This records an auditable human disposition without presenting it as an automated geometry verdict."}</p>
+    <div className="mt-3 grid grid-cols-1 gap-2">
+      <input className="workbench-input h-8 text-[10px]" value={reviewer} onChange={(event) => onReviewerChange(event.target.value)} placeholder={chinese ? "复核人（必填）" : "Reviewer (required)"} />
+      <textarea className="workbench-input min-h-20 resize-y py-2 text-[10px]" value={comment} onChange={(event) => onCommentChange(event.target.value)} placeholder={chinese ? "填写 comment（人工 FAIL 或忽略时必填）" : "Enter comment (required for manual FAIL or IGNORE)"} aria-label={chinese ? "复核 comment" : "Review comment"} />
+    </div>
+    <div className={`mt-3 grid gap-2 ${shieldCoverage ? "grid-cols-3" : "grid-cols-2"}`}>
+      <button className="secondary-button h-8 px-2 text-[9px]" disabled={disabled || !reviewerPresent} onClick={onPass}>{chinese ? "人工 PASS" : "Manual PASS"}</button>
+      <button className="secondary-button h-8 px-2 text-[9px] text-[#d89a8d]" disabled={disabled || !reviewerPresent || !commentPresent} onClick={onFail}>{chinese ? "人工 FAIL" : "Manual FAIL"}</button>
+      {shieldCoverage && <button className="secondary-button h-8 px-2 text-[9px]" disabled={disabled || !reviewerPresent || !commentPresent} onClick={onIgnore}>{chinese ? "忽略该 DFT 距离检查" : "Ignore this DFT clearance check"}</button>}
+    </div>
+    {resolution && <div className="mt-3 rounded-md border border-[#c5a063]/15 bg-[#c5a063]/[0.035] px-2.5 py-2 text-[9px] leading-4 text-[#8f8b82]">
+      <span className="font-semibold text-[#d4af70]">{resolutionLabel}</span> · {resolution.reviewed_by} · {resolution.reviewed_at}
+      {resolution.comment && <div className="mt-1 whitespace-pre-wrap text-[#777873]">{resolution.comment}</div>}
+    </div>}
+  </div>;
 }
 
 export function TestPointReviewEvidence({ point, locale }: { point: TestPointCandidate; locale: Locale }) {

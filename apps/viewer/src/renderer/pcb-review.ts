@@ -1,6 +1,6 @@
 import type { RuleDefinition, TestPointCandidate, Violation } from "./types";
 
-export type ReviewRoute = "TEST_POINT_REVIEW" | "ENTITY_IDENTITY_REVIEW" | "UNSUPPORTED_ENTITY" | "MISSING_SEMANTICS" | "MEASUREMENT_EVIDENCE";
+export type ReviewRoute = "SHIELD_COVERAGE_REVIEW" | "TEST_POINT_REVIEW" | "ENTITY_IDENTITY_REVIEW" | "UNSUPPORTED_ENTITY" | "MISSING_SEMANTICS" | "MEASUREMENT_EVIDENCE";
 
 export function findingVerdictCounts(findings: Array<Pick<Violation, "verdict">>) {
   return findings.reduce((counts, finding) => {
@@ -35,6 +35,7 @@ export function inferredTestPointsForViolation(violation: Violation, testPoints:
 }
 
 export function reviewRoute(violation: Violation, rule: RuleDefinition | undefined, testPoints: TestPointCandidate[]): ReviewRoute {
+  if (violation.review?.kind === "SHIELD_COVERAGE_EXCLUSION") return "SHIELD_COVERAGE_REVIEW";
   const entities = [rule?.source, rule?.target].filter((value): value is NonNullable<typeof value> => Boolean(value));
   const normalizedMessage = violation.message.toLocaleLowerCase("en-US");
   if (entities.some((entity) => UNSUPPORTED_ENTITIES.has(entity))) return "UNSUPPORTED_ENTITY";

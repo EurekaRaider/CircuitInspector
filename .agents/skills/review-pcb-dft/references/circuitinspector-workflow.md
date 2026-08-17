@@ -93,6 +93,8 @@ Distance metrics are:
 
 Rules can filter layer functions and same-net or different-net relationships. Typical supported checks include test-point diameter and spacing, test-point-to-component, tooling-hole, UV-glue-edge, shield-candidate, and board-edge clearance, copper spacing or edge clearance, drill-to-copper clearance, trace width, and annular ring. When a test-point radius is absent but the inferred TP/MTP component has a usable package outline, edge-clearance checks use that outline and retain `REVIEW` until the test-point identity is confirmed.
 
+For `TEST_POINT → COMPONENT` clearance, the current engine first checks whether the test-point center lies inside a same-side inferred shield-candidate component outline. If it does, ordinary component-clearance measurement for that test point is skipped and a structured shield-coverage `REVIEW` is emitted; points outside shield-candidate outlines continue through the approved numeric rule. Because shield identity and its rectangular coverage outline are inferred, this exception is not an automated PASS. Viewer review may record an auditable manual `PASS` or `FAIL` disposition for any `REVIEW`, plus `IGNORE` for this shield-coverage exception. `FAIL` and `IGNORE` require a comment; the automated verdict remains `REVIEW` and the resolution records reviewer and time.
+
 Do not describe the current engine as automatically validating probe angle, component height, solder-mask opening, side accessibility, fixture support, clamps, tooling, full net access, boundary-scan topology, programming, or powered FCT.
 
 ## Verdict and diagnostic interpretation
