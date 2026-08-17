@@ -542,18 +542,28 @@ fn render_svg(
     let measurement = svg_measurement_annotation(violation, viewport, annotation_font);
     let marker_radius = (view_height.min(view_width) * 0.027).clamp(0.08, 0.28);
     let marker_color = verdict_svg_color(violation.verdict);
+    let marker = if diameter_comparison(violation).is_some() {
+        format!(
+            "<circle data-role=\"measurement-center\" cx=\"{marker_x}\" cy=\"{marker_y}\" r=\"{}\" fill=\"{marker_color}\"/>",
+            (marker_radius * 0.18).max(0.025)
+        )
+    } else {
+        format!(
+            "<circle cx=\"{marker_x}\" cy=\"{marker_y}\" r=\"{marker_radius}\" fill=\"none\" stroke=\"{marker_color}\" stroke-width=\"{}\"/><path d=\"M {marker_x} {} L {marker_x} {} M {} {marker_y} L {} {marker_y}\" stroke=\"{marker_color}\" stroke-width=\"{}\"/>",
+            (marker_radius * 0.24).max(0.018),
+            marker_y - marker_radius * 1.45,
+            marker_y + marker_radius * 1.45,
+            marker_x - marker_radius * 1.45,
+            marker_x + marker_radius * 1.45,
+            (marker_radius * 0.14).max(0.012),
+        )
+    };
     let labels = evidence_labels(violation);
     let font_size = (panel_height * 0.16).clamp(0.13, 0.34);
     let panel_padding = (font_size * 1.1).max(0.12);
     format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {view_width} {total_height}\" role=\"img\" aria-label=\"CircuitInspector evidence {}\"><defs><clipPath id=\"plot-clip\"><rect x=\"0\" y=\"0\" width=\"{view_width}\" height=\"{view_height}\"/></clipPath></defs><rect width=\"{view_width}\" height=\"{total_height}\" fill=\"#0d1215\"/><g transform=\"translate(0 {panel_height})\" clip-path=\"url(#plot-clip)\"><rect width=\"{view_width}\" height=\"{view_height}\" fill=\"#11191c\"/>{geometry}{measurement}<circle cx=\"{marker_x}\" cy=\"{marker_y}\" r=\"{marker_radius}\" fill=\"none\" stroke=\"{marker_color}\" stroke-width=\"{}\"/><path d=\"M {marker_x} {} L {marker_x} {} M {} {marker_y} L {} {marker_y}\" stroke=\"{marker_color}\" stroke-width=\"{}\"/></g><g data-role=\"evidence-header\"><rect x=\"0\" y=\"0\" width=\"{view_width}\" height=\"{panel_height}\" fill=\"#182025\"/><rect x=\"0\" y=\"0\" width=\"{}\" height=\"{panel_height}\" fill=\"{marker_color}\"/><text x=\"{panel_padding}\" y=\"{}\" fill=\"#f5f7f8\" font-family=\"ui-monospace,monospace\" font-size=\"{font_size}\" font-weight=\"700\">{}</text><text x=\"{panel_padding}\" y=\"{}\" fill=\"#aab4b9\" font-family=\"ui-monospace,monospace\" font-size=\"{font_size}\">{}</text><text x=\"{panel_padding}\" y=\"{}\" fill=\"#63c6cf\" font-family=\"ui-monospace,monospace\" font-size=\"{font_size}\">{}</text></g></svg>",
-        html(&violation.id),
-        (marker_radius * 0.24).max(0.018),
-        marker_y - marker_radius * 1.45,
-        marker_y + marker_radius * 1.45,
-        marker_x - marker_radius * 1.45,
-        marker_x + marker_radius * 1.45,
-        (marker_radius * 0.14).max(0.012),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {view_width} {total_height}\" role=\"img\" aria-label=\"{}\"><defs><clipPath id=\"plot-clip\"><rect x=\"0\" y=\"0\" width=\"{view_width}\" height=\"{view_height}\"/></clipPath></defs><rect width=\"{view_width}\" height=\"{total_height}\" fill=\"#0d1215\"/><g transform=\"translate(0 {panel_height})\" clip-path=\"url(#plot-clip)\"><rect width=\"{view_width}\" height=\"{view_height}\" fill=\"#11191c\"/>{geometry}{measurement}{marker}</g><g data-role=\"evidence-header\"><rect x=\"0\" y=\"0\" width=\"{view_width}\" height=\"{panel_height}\" fill=\"#182025\"/><rect x=\"0\" y=\"0\" width=\"{}\" height=\"{panel_height}\" fill=\"{marker_color}\"/><text x=\"{panel_padding}\" y=\"{}\" fill=\"#f5f7f8\" font-family=\"ui-monospace,monospace\" font-size=\"{font_size}\" font-weight=\"700\">{}</text><text x=\"{panel_padding}\" y=\"{}\" fill=\"#63c6cf\" font-family=\"ui-monospace,monospace\" font-size=\"{font_size}\">{}</text><text x=\"{panel_padding}\" y=\"{}\" fill=\"#aab4b9\" font-family=\"ui-monospace,monospace\" font-size=\"{font_size}\">{}</text></g></svg>",
+        html(&labels[0]),
         (view_width * 0.006).clamp(0.025, 0.08),
         font_size * 1.35,
         html(&labels[0]),
@@ -568,9 +578,6 @@ fn svg_measurement_annotation(violation: &Violation, viewport: BoundsNm, font_si
     let Some(measured) = violation.measured_value_nm else {
         return String::new();
     };
-    let label = format_nm(measured);
-    let label_width = (label.chars().count() as f64 * font_size * 0.66).max(font_size * 4.2);
-    let label_height = font_size * 1.65;
     let view_width = (viewport.max_x - viewport.min_x).max(1) as f64 / 1_000_000.0;
     let view_height = (viewport.max_y - viewport.min_y).max(1) as f64 / 1_000_000.0;
     let project = |point: PointNm| {
@@ -579,6 +586,49 @@ fn svg_measurement_annotation(violation: &Violation, viewport: BoundsNm, font_si
             (viewport.max_y - point.y) as f64 / 1_000_000.0,
         )
     };
+    if let Some((center, actual, required)) = diameter_comparison(violation) {
+        let (center_x, center_y) = project(center);
+        let actual_radius = actual as f64 / 2_000_000.0;
+        let required_radius = required as f64 / 2_000_000.0;
+        let stroke_width = (font_size * 0.12).max(0.012);
+        let tick = (font_size * 0.72).max(0.08);
+        let actual_label = svg_annotation_label(
+            &format!("ACTUAL {}", format_nm(actual)),
+            center_x,
+            center_y + required_radius + font_size * 1.5,
+            view_width,
+            view_height,
+            font_size,
+            "#63c6cf",
+        );
+        let required_label = svg_annotation_label(
+            &format!("MIN REQUIRED {}", format_nm(required)),
+            center_x,
+            center_y - required_radius - font_size * 1.5,
+            view_width,
+            view_height,
+            font_size,
+            "#ff5b60",
+        );
+        return format!(
+            "<g data-role=\"diameter-comparison\"><circle data-role=\"minimum-required-diameter\" cx=\"{center_x}\" cy=\"{center_y}\" r=\"{required_radius}\" fill=\"none\" stroke=\"#ff5b60\" stroke-width=\"{stroke_width}\" stroke-dasharray=\"{} {}\"/><circle data-role=\"actual-diameter\" cx=\"{center_x}\" cy=\"{center_y}\" r=\"{actual_radius}\" fill=\"none\" stroke=\"#63c6cf\" stroke-width=\"{stroke_width}\"/><line data-role=\"measurement-line\" x1=\"{}\" y1=\"{center_y}\" x2=\"{}\" y2=\"{center_y}\" stroke=\"#63c6cf\" stroke-width=\"{stroke_width}\"/><line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"#63c6cf\" stroke-width=\"{stroke_width}\"/><line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"#63c6cf\" stroke-width=\"{stroke_width}\"/>{required_label}{actual_label}</g>",
+            font_size * 0.65,
+            font_size * 0.42,
+            center_x - actual_radius,
+            center_x + actual_radius,
+            center_x - actual_radius,
+            center_y - tick,
+            center_x - actual_radius,
+            center_y + tick,
+            center_x + actual_radius,
+            center_y - tick,
+            center_x + actual_radius,
+            center_y + tick,
+        );
+    }
+    let label = format!("ACTUAL {}", format_nm(measured));
+    let label_width = (label.chars().count() as f64 * font_size * 0.66).max(font_size * 4.2);
+    let label_height = font_size * 1.65;
     let anchor = violation
         .evidence_points
         .first()
@@ -639,6 +689,30 @@ fn svg_measurement_annotation(violation: &Violation, viewport: BoundsNm, font_si
         (font_size * 0.06).max(0.008),
         label_y + font_size * 0.34,
         html(&label),
+    )
+}
+
+fn svg_annotation_label(
+    text: &str,
+    center_x: f64,
+    center_y: f64,
+    view_width: f64,
+    view_height: f64,
+    font_size: f64,
+    color: &str,
+) -> String {
+    let label_width = (text.chars().count() as f64 * font_size * 0.66).max(font_size * 4.2);
+    let label_height = font_size * 1.65;
+    let label_x = center_x.clamp(label_width / 2.0, view_width - label_width / 2.0);
+    let label_y = center_y.clamp(label_height, view_height - label_height * 0.3);
+    format!(
+        "<g data-role=\"measurement-label\"><rect x=\"{}\" y=\"{}\" width=\"{label_width}\" height=\"{label_height}\" rx=\"{}\" fill=\"#10171a\" stroke=\"{color}\" stroke-width=\"{}\"/><text x=\"{label_x}\" y=\"{}\" fill=\"{color}\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"{font_size}\" font-weight=\"700\">{}</text></g>",
+        label_x - label_width / 2.0,
+        label_y - label_height * 0.72,
+        font_size * 0.35,
+        (font_size * 0.06).max(0.008),
+        label_y + font_size * 0.34,
+        html(text),
     )
 }
 
@@ -787,36 +861,49 @@ fn render_png(
     draw_raster_measurement(&mut image, width, height, transform, violation);
     let (marker_x, marker_y) = transform.point(violation.x_nm, violation.y_nm);
     let marker_color = verdict_raster_color(violation.verdict);
-    draw_circle(
-        &mut image,
-        width,
-        height,
-        marker_x,
-        marker_y,
-        18,
-        marker_color,
-        false,
-    );
-    draw_line(
-        &mut image,
-        width,
-        height,
-        marker_x - 26,
-        marker_y,
-        marker_x + 26,
-        marker_y,
-        marker_color,
-    );
-    draw_line(
-        &mut image,
-        width,
-        height,
-        marker_x,
-        marker_y - 26,
-        marker_x,
-        marker_y + 26,
-        marker_color,
-    );
+    if diameter_comparison(violation).is_some() {
+        draw_circle(
+            &mut image,
+            width,
+            height,
+            marker_x,
+            marker_y,
+            4,
+            marker_color,
+            true,
+        );
+    } else {
+        draw_circle(
+            &mut image,
+            width,
+            height,
+            marker_x,
+            marker_y,
+            18,
+            marker_color,
+            false,
+        );
+        draw_line(
+            &mut image,
+            width,
+            height,
+            marker_x - 26,
+            marker_y,
+            marker_x + 26,
+            marker_y,
+            marker_color,
+        );
+        draw_line(
+            &mut image,
+            width,
+            height,
+            marker_x,
+            marker_y - 26,
+            marker_x,
+            marker_y + 26,
+            marker_color,
+        );
+    }
     fill_rect(
         &mut image,
         width,
@@ -857,7 +944,7 @@ fn render_png(
         16 + 10 * scale,
         &labels[1],
         scale,
-        [155, 164, 168, 255],
+        [85, 186, 193, 255],
     );
     draw_text(
         &mut image,
@@ -867,7 +954,7 @@ fn render_png(
         16 + 20 * scale,
         &labels[2],
         scale,
-        [85, 186, 193, 255],
+        [155, 164, 168, 255],
     );
     let file = File::create(path)?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
@@ -892,8 +979,87 @@ fn draw_raster_measurement(
     let Some(measured) = violation.measured_value_nm else {
         return;
     };
-    let text = format_nm(measured);
     let color = [99, 198, 207, 255];
+    if let Some((center, actual, required)) = diameter_comparison(violation) {
+        let required_color = [255, 91, 96, 255];
+        let (center_x, center_y) = transform.point(center.x, center.y);
+        let actual_radius = (actual as f64 * transform.pixels_per_nm() / 2.0).round() as i32;
+        let required_radius = (required as f64 * transform.pixels_per_nm() / 2.0).round() as i32;
+        for offset in -1..=1 {
+            draw_circle(
+                image,
+                width,
+                height,
+                center_x,
+                center_y,
+                (required_radius + offset).max(1),
+                required_color,
+                false,
+            );
+            draw_circle(
+                image,
+                width,
+                height,
+                center_x,
+                center_y,
+                (actual_radius + offset).max(1),
+                color,
+                false,
+            );
+        }
+        draw_thick_line(
+            image,
+            width,
+            height,
+            center_x - actual_radius,
+            center_y,
+            center_x + actual_radius,
+            center_y,
+            color,
+        );
+        draw_thick_line(
+            image,
+            width,
+            height,
+            center_x - actual_radius,
+            center_y - 9,
+            center_x - actual_radius,
+            center_y + 9,
+            color,
+        );
+        draw_thick_line(
+            image,
+            width,
+            height,
+            center_x + actual_radius,
+            center_y - 9,
+            center_x + actual_radius,
+            center_y + 9,
+            color,
+        );
+        draw_raster_label(
+            image,
+            width,
+            height,
+            transform.plot_top,
+            center_x,
+            center_y - required_radius - 42,
+            &format!("MIN REQUIRED {}", format_nm(required)),
+            required_color,
+        );
+        draw_raster_label(
+            image,
+            width,
+            height,
+            transform.plot_top,
+            center_x,
+            center_y + required_radius + 42,
+            &format!("ACTUAL {}", format_nm(actual)),
+            color,
+        );
+        return;
+    }
+    let text = format!("ACTUAL {}", format_nm(measured));
     let anchor = violation
         .evidence_points
         .first()
@@ -946,6 +1112,7 @@ fn draw_raster_measurement(
             label_x,
             label_y,
             &text,
+            color,
         );
         return;
     }
@@ -962,6 +1129,7 @@ fn draw_raster_measurement(
         label_x,
         label_y,
         &text,
+        color,
     );
 }
 
@@ -973,6 +1141,7 @@ fn draw_raster_label(
     center_x: i32,
     center_y: i32,
     text: &str,
+    color: [u8; 4],
 ) {
     let scale = (width / 900).clamp(2, 4) as i32;
     let text_width = text.chars().count() as i32 * 6 * scale;
@@ -990,16 +1159,7 @@ fn draw_raster_label(
         y0 + box_height,
         [15, 23, 26, 255],
     );
-    draw_line(
-        image,
-        width,
-        height,
-        x0,
-        y0,
-        x0 + box_width,
-        y0,
-        [99, 198, 207, 255],
-    );
+    draw_line(image, width, height, x0, y0, x0 + box_width, y0, color);
     draw_line(
         image,
         width,
@@ -1008,18 +1168,9 @@ fn draw_raster_label(
         y0 + box_height,
         x0 + box_width,
         y0 + box_height,
-        [99, 198, 207, 255],
+        color,
     );
-    draw_text(
-        image,
-        width,
-        height,
-        x0 + 10,
-        y0 + 8,
-        text,
-        scale,
-        [234, 252, 253, 255],
-    );
+    draw_text(image, width, height, x0 + 10, y0 + 8, text, scale, color);
 }
 
 fn evidence_labels(violation: &Violation) -> [String; 3] {
@@ -1041,15 +1192,69 @@ fn evidence_labels(violation: &Violation) -> [String; 3] {
         .threshold_nm
         .map(format_nm)
         .unwrap_or_else(|| "N/A".into());
+    let check = evidence_check_name(violation);
+    let reason = shortfall_nm(violation).map_or_else(
+        || format!("{} | {check}", verdict_label(violation.verdict)),
+        |shortfall| format!("FAIL | {check} BELOW MINIMUM BY {}", format_nm(shortfall)),
+    );
+    let comparison = if shortfall_nm(violation).is_some() {
+        format!("ACTUAL {measured} < MIN REQUIRED {threshold}")
+    } else {
+        format!("MEASURED {measured} | LIMIT {threshold}")
+    };
     [
-        format!(
-            "ISSUE {} | {}",
-            violation.id,
-            verdict_label(violation.verdict)
-        ),
+        reason,
+        comparison,
         format!("NET {nets} | REF {refs} | RULE {}", violation.rule_id),
-        format!("MEASURED {measured} | LIMIT {threshold}"),
     ]
+}
+
+fn evidence_check_name(violation: &Violation) -> String {
+    if is_diameter_check(violation) {
+        let rule = violation.rule_id.to_ascii_uppercase();
+        let title = violation.title.to_ascii_uppercase();
+        if rule.contains("TP") || title.contains("TEST") || violation.title.contains("测试点") {
+            return "TEST-POINT DIAMETER".into();
+        }
+        return "DIAMETER".into();
+    }
+    let title = violation.title.trim();
+    if !title.is_empty() && title.is_ascii() {
+        return title.to_ascii_uppercase();
+    }
+    violation.rule_id.to_ascii_uppercase()
+}
+
+fn is_diameter_check(violation: &Violation) -> bool {
+    violation.rule_id.to_ascii_uppercase().contains("DIAMETER")
+        || violation.title.to_ascii_uppercase().contains("DIAMETER")
+        || violation.title.contains("直径")
+}
+
+fn diameter_comparison(violation: &Violation) -> Option<(PointNm, i64, i64)> {
+    if !is_diameter_check(violation) {
+        return None;
+    }
+    let measured = violation.measured_value_nm.filter(|value| *value > 0)?;
+    let threshold = violation.threshold_nm.filter(|value| *value > 0)?;
+    let center = violation
+        .evidence_points
+        .first()
+        .copied()
+        .unwrap_or(PointNm {
+            x: violation.x_nm,
+            y: violation.y_nm,
+        });
+    Some((center, measured, threshold))
+}
+
+fn shortfall_nm(violation: &Violation) -> Option<i64> {
+    if violation.verdict != Verdict::Fail {
+        return None;
+    }
+    let measured = violation.measured_value_nm?;
+    let threshold = violation.threshold_nm?;
+    (measured < threshold).then(|| threshold.saturating_sub(measured))
 }
 
 fn format_nm(value: i64) -> String {
@@ -1281,6 +1486,8 @@ fn glyph(value: char) -> [u8; 7] {
         '/' => [1, 2, 2, 4, 8, 8, 16],
         '|' => [4, 4, 4, 4, 4, 4, 4],
         ',' => [0, 0, 0, 0, 12, 12, 8],
+        '<' => [1, 2, 4, 8, 4, 2, 1],
+        '=' => [0, 0, 31, 0, 31, 0, 0],
         ' ' => [0; 7],
         _ => [31, 17, 1, 2, 4, 0, 4],
     }
@@ -1461,7 +1668,7 @@ mod tests {
             measured_value_nm: Some(620_000),
             threshold_nm: Some(800_000),
             message: "Measured 0.620 mm is below 0.800 mm".into(),
-            evidence_points: vec![PointNm { x: -310_000, y: 0 }, PointNm { x: 310_000, y: 0 }],
+            evidence_points: vec![PointNm { x: 0, y: 0 }],
             evidence_uris: Vec::new(),
             rule_citation: None,
         }
@@ -1491,6 +1698,8 @@ mod tests {
     #[test]
     fn viewport_contains_measurement_and_preserves_plot_aspect() {
         let mut violation = sample_violation("distance", Verdict::Fail);
+        violation.rule_id = "rule-spacing".into();
+        violation.title = "Test-point spacing".into();
         violation.evidence_points = vec![
             PointNm {
                 x: -8_000_000,
@@ -1519,9 +1728,30 @@ mod tests {
         let svg = render_svg(&design, &violation, viewport, 1600, 1200);
         assert!(svg.contains("data-layer-id=\"target-layer\""));
         assert!(!svg.contains("data-layer-id=\"unrelated-layer\""));
+        assert!(svg.contains("data-role=\"diameter-comparison\""));
+        assert!(svg.contains("data-role=\"actual-diameter\""));
+        assert!(svg.contains("data-role=\"minimum-required-diameter\""));
         assert!(svg.contains("data-role=\"measurement-line\""));
         assert!(svg.contains("data-role=\"measurement-label\""));
-        assert!(svg.contains(">0.620 MM</text>"));
+        assert!(svg.contains(">ACTUAL 0.620 MM</text>"));
+        assert!(svg.contains(">MIN REQUIRED 0.800 MM</text>"));
+        assert!(svg.contains("FAIL | TEST-POINT DIAMETER BELOW MINIMUM BY 0.180 MM"));
+        assert!(svg.contains("ACTUAL 0.620 MM &lt; MIN REQUIRED 0.800 MM"));
+    }
+
+    #[test]
+    fn non_diameter_measurement_keeps_endpoint_annotation() {
+        let design = sample_design();
+        let mut violation = sample_violation("spacing", Verdict::Fail);
+        violation.rule_id = "rule-spacing".into();
+        violation.title = "Test-point spacing".into();
+        violation.evidence_points =
+            vec![PointNm { x: -310_000, y: 0 }, PointNm { x: 310_000, y: 0 }];
+        let viewport = evidence_viewport(&violation, 1600, 1200);
+        let svg = render_svg(&design, &violation, viewport, 1600, 1200);
+        assert!(svg.contains("data-role=\"measurement-line\""));
+        assert!(svg.contains(">ACTUAL 0.620 MM</text>"));
+        assert!(!svg.contains("data-role=\"diameter-comparison\""));
     }
 
     #[test]
@@ -1551,7 +1781,8 @@ mod tests {
         let evidence = render_evidence(&cache, &design, &analysis, &[], 800, 600).unwrap();
         assert_eq!(evidence.len(), 1);
         let svg = fs::read_to_string(&evidence[0].svg_path).unwrap();
-        assert!(svg.contains("data-role=\"measurement-label\""));
+        assert!(svg.contains("data-role=\"actual-diameter\""));
+        assert!(svg.contains("data-role=\"minimum-required-diameter\""));
         let decoder = png::Decoder::new(std::io::BufReader::new(
             File::open(&evidence[0].png_path).unwrap(),
         ));
