@@ -32,11 +32,13 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
   const [error, setError] = useState("");
   const [validation, setValidation] = useState<RuleDocumentValidation | null>(null);
   const rulesTableRef = useRef<HTMLDivElement>(null);
+  const dirtyIdsRef = useRef<string[]>([]);
 
   const selected = packs.find((pack) => pack.id === selectedId) ?? packs[0];
 
-  async function loadRules(preferredId?: string) {
+  async function loadRules(preferredId?: string, requireClean = false) {
     const result = await window.circuitInspector.listRulePacks();
+    if (requireClean && dirtyIdsRef.current.length > 0) return;
     const normalized = result.rule_packs.map((pack) => ({
       ...pack,
       review_items: (pack.review_items ?? []).map((item) => ({
@@ -47,13 +49,23 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
       }))
     }));
     setPacks(normalized);
-    const next = preferredId ?? selectedId;
-    setSelectedId(normalized.some((pack) => pack.id === next) ? next : normalized.find((pack) => pack.status === "DRAFT")?.id ?? normalized[0]?.id ?? "");
+    setSelectedId((current) => {
+      const next = preferredId ?? current;
+      return normalized.some((pack) => pack.id === next) ? next : normalized.find((pack) => pack.status === "DRAFT")?.id ?? normalized[0]?.id ?? "";
+    });
+    dirtyIdsRef.current = [];
     setDirtyIds([]);
   }
 
   useEffect(() => {
     loadRules().catch((cause) => setError(message(cause)));
+    const disposeRuleCatalog = window.circuitInspector.onRuleCatalogChanged(() => {
+      if (dirtyIdsRef.current.length > 0) return;
+      loadRules(undefined, true)
+        .then(onCatalogChanged)
+        .catch((cause) => setError(message(cause)));
+    });
+    return disposeRuleCatalog;
   }, []);
 
   async function chooseDocuments() {
@@ -93,7 +105,7 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
       await loadRules(selected.id);
       onCatalogChanged();
     } catch (cause) {
-      setError(message(cause));
+      await handleDraftMutationError(cause);
     } finally {
       setBusy(false);
     }
@@ -110,7 +122,7 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
       setSelectedId((current) => remaining.some((pack) => pack.id === current)
         ? current
         : remaining.find((pack) => pack.status === "DRAFT")?.id ?? remaining[0]?.id ?? "");
-      setDirtyIds((current) => current.filter((id) => id !== deleting.id));
+      forgetDirty(deleting.id);
       setDeleting(null);
       onCatalogChanged();
     } catch (cause) {
@@ -169,7 +181,19 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
   }
 
   function markDirty(packId: string) {
-    setDirtyIds((current) => current.includes(packId) ? current : [...current, packId]);
+    setDirtyIds((current) => {
+      const next = current.includes(packId) ? current : [...current, packId];
+      dirtyIdsRef.current = next;
+      return next;
+    });
+  }
+
+  function forgetDirty(packId: string) {
+    setDirtyIds((current) => {
+      const next = current.filter((id) => id !== packId);
+      dirtyIdsRef.current = next;
+      return next;
+    });
   }
 
   async function persistDraft(pack: RulePack) {
@@ -179,8 +203,24 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
       review_item_resolutions: pack.review_items.flatMap((item) => item.resolution ? [{ review_item_id: item.id, ...item.resolution }] : [])
     });
     setPacks((current) => current.map((item) => item.id === saved.id ? saved : item));
-    setDirtyIds((current) => current.filter((id) => id !== saved.id));
+    forgetDirty(saved.id);
     return saved;
+  }
+
+  async function handleDraftMutationError(cause: unknown) {
+    const detail = message(cause);
+    if (!detail.includes("NOT_FOUND")) {
+      setError(detail);
+      return;
+    }
+    try {
+      await loadRules();
+      setError(chinese
+        ? "该规则草稿已从本地缓存中删除或移动，规则库已刷新。缺少原始证据时不能安全恢复未保存的复核决定；请重新抽取规则文档后继续复核。"
+        : "This rule draft was deleted or moved from the local cache, so the library was refreshed. Unsaved review decisions cannot be recovered safely without the original evidence; extract the rule document again to continue.");
+    } catch (refreshCause) {
+      setError(message(refreshCause));
+    }
   }
 
   async function saveDraft() {
@@ -191,7 +231,7 @@ export function RuleLibrary({ locale, onCatalogChanged }: { locale: Locale; onCa
       await persistDraft(selected);
       onCatalogChanged();
     } catch (cause) {
-      setError(message(cause));
+      await handleDraftMutationError(cause);
     } finally {
       setBusy(false);
     }

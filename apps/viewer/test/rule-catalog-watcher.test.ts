@@ -1,4 +1,4 @@
-import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,6 +28,31 @@ describe("rule catalog watcher", () => {
       const temporaryPath = path.join(cacheDirectory, "rules", ".rules-new.json.tmp");
       await writeFile(temporaryPath, "{}", "utf8");
       await rename(temporaryPath, path.join(cacheDirectory, "rules", "rules-new.json"));
+      await changed;
+    } finally {
+      dispose();
+    }
+  });
+
+  it("reports a rule pack deleted by another process", async () => {
+    const cacheDirectory = await mkdtemp(path.join(os.tmpdir(), "circuit-rule-catalog-"));
+    temporaryDirectories.push(cacheDirectory);
+    const rulesDirectory = path.join(cacheDirectory, "rules");
+    await mkdir(rulesDirectory, { recursive: true });
+    const rulePath = path.join(rulesDirectory, "rules-deleted.json");
+    await writeFile(rulePath, "{}", "utf8");
+    let resolveChange!: () => void;
+    const changed = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("rule catalog deletion was not reported")), 2_000);
+      resolveChange = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+    });
+    const dispose = await watchRuleCatalog(cacheDirectory, resolveChange, { debounceMs: 5, pollIntervalMs: 10 });
+
+    try {
+      await rm(rulePath);
       await changed;
     } finally {
       dispose();

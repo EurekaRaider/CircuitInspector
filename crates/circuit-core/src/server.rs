@@ -1113,7 +1113,7 @@ fn update_rule_pack_request(params: Value) -> CoreResult<Value> {
     }
     let params: Params = serde_json::from_value(params)?;
     let cache = CacheStore::new(&params.cache_dir)?;
-    let path = rule_path(&cache, &params.rule_pack_id);
+    let path = resolve_rule_path(&cache, &params.rule_pack_id)?;
     let mut pack: RulePack = cache.load_json(&path)?;
     prepare_legacy_draft(&mut pack);
     if pack.status != RulePackStatus::Draft || pack.approval.is_some() {
@@ -1245,7 +1245,7 @@ fn delete_rule_pack_request(params: Value) -> CoreResult<Value> {
     }
     let params: Params = serde_json::from_value(params)?;
     let cache = CacheStore::new(&params.cache_dir)?;
-    let path = rule_path(&cache, &params.rule_pack_id);
+    let path = resolve_rule_path(&cache, &params.rule_pack_id)?;
     let pack: RulePack = cache.load_json(&path)?;
     if pack.id != params.rule_pack_id {
         return Err(CoreError::Rule(
@@ -1268,7 +1268,7 @@ fn approve_rule_pack_request(params: Value) -> CoreResult<Value> {
         return Err(CoreError::Rule("approved_by is required".into()));
     }
     let cache = CacheStore::new(&params.cache_dir)?;
-    let path = rule_path(&cache, &params.rule_pack_id);
+    let path = resolve_rule_path(&cache, &params.rule_pack_id)?;
     let mut pack: RulePack = cache.load_json(&path)?;
     prepare_legacy_draft(&mut pack);
     if pack.status != RulePackStatus::Draft {
@@ -1328,7 +1328,7 @@ fn analyze_request(params: Value) -> CoreResult<Value> {
     let params: Params = serde_json::from_value(params)?;
     let cache = CacheStore::new(&params.cache_dir)?;
     let design = cache.load_design(&params.design_id)?;
-    let rule_pack: RulePack = cache.load_json(&rule_path(&cache, &params.rule_pack_id))?;
+    let rule_pack: RulePack = cache.load_json(&resolve_rule_path(&cache, &params.rule_pack_id)?)?;
     let analysis = analyze_design(&design, &rule_pack)?;
     cache.save_analysis(&analysis)?;
     let report_path = write_html_report(&cache, &design, &analysis)?;
@@ -1523,6 +1523,40 @@ fn rule_path(cache: &CacheStore, id: &str) -> PathBuf {
         })
         .collect::<String>();
     cache.root().join("rules").join(format!("{safe}.json"))
+}
+
+fn resolve_rule_path(cache: &CacheStore, id: &str) -> CoreResult<PathBuf> {
+    let canonical = rule_path(cache, id);
+    if canonical.is_file() {
+        let pack: RulePack = cache.load_json(&canonical)?;
+        if pack.id != id {
+            return Err(CoreError::Rule(
+                "rule pack identifier does not match the cached artifact".into(),
+            ));
+        }
+        return Ok(canonical);
+    }
+
+    let mut matched = None;
+    for entry in fs::read_dir(cache.root().join("rules"))? {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(pack) = cache.load_json::<RulePack>(&path) else {
+            continue;
+        };
+        if pack.id != id {
+            continue;
+        }
+        if matched.is_some() {
+            return Err(CoreError::Rule(format!(
+                "multiple cached rule packs use identifier {id}"
+            )));
+        }
+        matched = Some(path);
+    }
+    matched.ok_or_else(|| CoreError::NotFound(canonical.display().to_string()))
 }
 
 fn modified_unix_ms(path: &Path) -> u128 {
@@ -1811,6 +1845,61 @@ mod tests {
             approved["review_items"][0]["resolution"]["decision"],
             "MODIFY_RULE"
         );
+    }
+
+    #[test]
+    fn draft_with_noncanonical_filename_can_save_review_progress() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cache = CacheStore::new(temporary.path()).unwrap();
+        let path = cache.root().join("rules/imported-draft.json");
+        let draft = json!({
+            "id": "rules-noncanonical",
+            "version": "0.2.0-draft",
+            "title": "Imported draft",
+            "status": "DRAFT",
+            "rules": [{
+                "id": "tp-edge",
+                "title": "Test point to board edge",
+                "kind": "MINIMUM_DISTANCE",
+                "source": "TEST_POINT",
+                "target": "BOARD_EDGE",
+                "metric": "EDGE_TO_EDGE",
+                "threshold_nm": 1_200_000,
+                "severity": null,
+                "layer_functions": [],
+                "same_net_only": false,
+                "different_net_only": false,
+                "citation": {
+                    "source_path": "rules.pdf",
+                    "source_hash": "hash",
+                    "page": 1,
+                    "paragraph": 1,
+                    "excerpt": "At least 1.2 mm"
+                }
+            }],
+            "review_items": [],
+            "approval": null
+        });
+        cache.save_json(&path, &draft).unwrap();
+
+        let mut rule = draft["rules"][0].clone();
+        rule["severity"] = json!("WARNING");
+        let updated = dispatch(
+            "update_rule_pack",
+            json!({
+                "cache_dir": cache.root(),
+                "rule_pack_id": "rules-noncanonical",
+                "rules": [rule],
+                "review_item_resolutions": []
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(updated["rules"][0]["severity"], "WARNING");
+        assert!(path.exists());
+        assert!(!cache.root().join("rules/rules-noncanonical.json").exists());
+        let persisted: Value = cache.load_json(&path).unwrap();
+        assert_eq!(persisted["rules"][0]["severity"], "WARNING");
     }
 
     #[test]
