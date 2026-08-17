@@ -364,6 +364,12 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
     }
   }, [t]);
 
+  const switchViewSide = useCallback((side: SurfaceSide) => {
+    setViewSide(side);
+    const viewport = (side === "TOP" ? topCanvasRef.current : bottomCanvasRef.current)?.viewport();
+    if (viewport) updatePointerStatus({ ...pointerRef.current, zoom: viewport.zoom });
+  }, [updatePointerStatus]);
+
   const handleViewportChange = useCallback((side: SurfaceSide, viewport: BoundsNm, zoom: number) => {
     if (design) viewportRef.current[side] = { designId: design.id, viewport, zoom };
     updatePointerStatus({ ...pointerRef.current, zoom });
@@ -649,13 +655,13 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
           >
             {locale === "zh-CN" ? "EN" : "中"}
           </button>
-          <ToolbarButton label={t("fitBoard")} onClick={() => { topCanvasRef.current?.fit(); bottomCanvasRef.current?.fit(); }} disabled={!design}>
+          <ToolbarButton label={t("fitBoard")} onClick={() => canvasForSide(viewSide)?.fit()} disabled={!design}>
             <ArrowsOutSimpleIcon size={16} />
           </ToolbarButton>
           <ToolbarButton label={t("measure")} active={measureMode} onClick={() => setMeasureMode((value) => !value)} disabled={!design}>
             <RulerIcon size={16} />
           </ToolbarButton>
-          <div className="grid h-9 min-w-[6.4rem] grid-cols-2 overflow-hidden rounded-lg border border-white/[0.08] bg-[#101214] font-mono text-[8px] tracking-[0.035em] text-[#777875]" aria-label={locale === "zh-CN" ? "Top 与 Bottom 双面视图" : "Top and Bottom split view"}><span className={`grid place-items-center ${viewSide === "TOP" ? "bg-[#c5a063]/10 text-[#d7b474]" : ""}`}>TOP</span><span className={`grid place-items-center border-l border-white/[0.07] ${viewSide === "BOTTOM" ? "bg-[#c5a063]/10 text-[#d7b474]" : ""}`}>BOTTOM</span></div>
+          <BoardSideSwitch locale={locale} viewSide={viewSide} disabled={!design} onChange={switchViewSide} />
           <button className="primary-button ml-0.5" onClick={() => void chooseDesign()} disabled={busy}>
             <FolderOpenIcon size={16} />
             {t("openDesign")}
@@ -734,8 +740,8 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
 
         <div className="canvas-stage relative min-h-0 overflow-hidden">
           {design ? (
-            <div className="grid size-full grid-cols-2 gap-px bg-white/[0.08]">
-              <div className={`relative min-w-0 overflow-hidden bg-[#111416] ring-inset ${viewSide === "TOP" ? "ring-1 ring-[#c5a063]/35" : ""}`} onPointerDownCapture={() => setViewSide("TOP")}>
+            <div className="relative size-full bg-[#111416]">
+              <div aria-hidden={viewSide !== "TOP"} className={`absolute inset-0 overflow-hidden bg-[#111416] ${viewSide === "TOP" ? "visible" : "invisible pointer-events-none"}`}>
                 <BoardCanvas
                   ref={topCanvasRef}
                   bounds={design.bounds}
@@ -751,7 +757,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                 />
                 <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-white/[0.09] bg-[#101315]/90 px-2.5 py-1.5 font-mono text-[8px] text-[#b8b5ae] backdrop-blur-md">TOP · {topTestPointCount} TP<br /><span className="text-[#737570]">{locale === "zh-CN" ? "从板顶外侧观看" : "VIEWED FROM TOP"}</span></div>
               </div>
-              <div className={`relative min-w-0 overflow-hidden bg-[#111416] ring-inset ${viewSide === "BOTTOM" ? "ring-1 ring-[#c5a063]/35" : ""}`} onPointerDownCapture={() => setViewSide("BOTTOM")}>
+              <div aria-hidden={viewSide !== "BOTTOM"} className={`absolute inset-0 overflow-hidden bg-[#111416] ${viewSide === "BOTTOM" ? "visible" : "invisible pointer-events-none"}`}>
                 <BoardCanvas
                   ref={bottomCanvasRef}
                   bounds={design.bounds}
@@ -876,7 +882,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
               <label className="mt-2 flex items-center gap-2 text-[9px] text-[#777b77]"><input type="checkbox" checked={bottomMirroredInTopView} onChange={(event) => setBottomMirroredInTopView(event.target.checked)} />{locale === "zh-CN" ? "Bottom 在 Top 坐标视图中为镜像；Bottom 接触视图仍从 Bottom 观看" : "Bottom is mirrored in Top coordinates; contact view is still viewed from Bottom"}</label>
               <button className="secondary-button mt-2 w-full" disabled={!design || !selectedTestPlan || !layoutOrigin.trim() || !panelStepRepeat.trim() || !layoutApprover.trim() || busy} onClick={() => void approveLayoutBaseline()}><CheckCircleIcon size={15} />{layoutBaseline && layoutBaseline.design_id === design?.id && layoutBaseline.test_plan_id === selectedTestPlan ? (locale === "zh-CN" ? "Layout 基线已批准" : "Layout baseline approved") : (locale === "zh-CN" ? "批准 Layout 基线" : "Approve Layout baseline")}</button>
               <button className="primary-button mt-2 w-full" disabled={!design || !selectedRulePack || !selectedTestPlan || layoutBaseline?.design_id !== design.id || layoutBaseline.test_plan_id !== selectedTestPlan || busy} onClick={() => void runTestAccessAnalysis()}><ShieldCheckIcon size={15} />{locale === "zh-CN" ? "运行 Layout DFT 闭环" : "Run Layout DFT closure"}</button>
-              <p className="mt-2 text-[9px] leading-4 text-[#70736f]">{locale === "zh-CN" ? "Viewer 同时分面显示 Top 与 Bottom；面相关距离只在同面比较，板边和贯穿工装孔仍作为共享几何。生产放行不会由静态 PASS 自动完成。" : "The Viewer shows Top and Bottom separately. Surface-bound distances compare only within the same side; board edges and through tooling holes remain shared geometry. Static PASS never auto-releases production."}</p>
+              <p className="mt-2 text-[9px] leading-4 text-[#70736f]">{locale === "zh-CN" ? "Viewer 通过顶部按钮切换 Top 与 Bottom；面相关距离只在同面比较，板边和贯穿工装孔仍作为共享几何。生产放行不会由静态 PASS 自动完成。" : "Use the top controls to switch between Top and Bottom. Surface-bound distances compare only within the same side; board edges and through tooling holes remain shared geometry. Static PASS never auto-releases production."}</p>
             </div>
             {rulePacks.some((pack) => pack.status === "DRAFT") && (
               <div className="mt-4 border-t border-white/[0.065] pt-3">
@@ -1067,6 +1073,30 @@ export function TestPointReviewEvidence({ point, locale }: { point: TestPointCan
 
 function PanelTitle({ title, caption }: { title: string; caption: string }) {
   return <div className="flex h-12 items-center justify-between border-b border-white/[0.065] px-5"><span className="text-[12px] font-semibold tracking-[-0.01em] text-[#dad9d4]">{title}</span><span className="panel-caption">{caption}</span></div>;
+}
+
+export function BoardSideSwitch({ locale, viewSide, disabled, onChange }: { locale: Locale; viewSide: SurfaceSide; disabled: boolean; onChange(side: SurfaceSide): void }) {
+  return (
+    <div
+      className="grid h-9 min-w-[6.4rem] grid-cols-2 overflow-hidden rounded-lg border border-white/[0.08] bg-[#101214] font-mono text-[8px] tracking-[0.035em] text-[#777875]"
+      role="group"
+      aria-label={locale === "zh-CN" ? "Top 与 Bottom 视图切换" : "Switch between Top and Bottom views"}
+    >
+      {SURFACE_SIDES.map((side, index) => (
+        <button
+          key={side}
+          type="button"
+          data-side={side}
+          aria-pressed={viewSide === side}
+          disabled={disabled}
+          className={`grid place-items-center transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${index > 0 ? "border-l border-white/[0.07]" : ""} ${viewSide === side ? "bg-[#c5a063]/10 text-[#d7b474]" : "hover:bg-white/[0.035] hover:text-[#b9b8b3]"}`}
+          onClick={() => onChange(side)}
+        >
+          {side}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function ToolbarButton({ label, children, active, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean }) {
