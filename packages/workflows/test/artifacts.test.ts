@@ -58,4 +58,24 @@ describe("shared local artifact catalog", () => {
     });
     expect(JSON.parse(await readFile(pinoutPath, "utf8"))).toEqual(pinout);
   });
+
+  it("discovers BRD TP catalog, selection, alignment, and selected analysis partitions", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "circuit-brd-tp-catalog-"));
+    roots.push(root);
+    const catalogDir = path.join(root, "brd-catalogs", "catalog-a");
+    await Promise.all([
+      mkdir(catalogDir, { recursive: true }),
+      mkdir(path.join(root, "test-point-selections"), { recursive: true }),
+      mkdir(path.join(root, "test-point-alignments"), { recursive: true }),
+      mkdir(path.join(root, "selected-analyses"), { recursive: true })
+    ]);
+    await writeFile(path.join(catalogDir, "catalog.json"), JSON.stringify({ schema_version: 1, kind: "BRD_TEST_POINT_CATALOG", id: "catalog-a", source_path: "/input/board.brd", candidates: [{ id: "tp1" }], converter: { version: "10.0.2" } }), "utf8");
+    await writeFile(path.join(root, "test-point-selections", "selection-a.json"), JSON.stringify({ schema_version: 1, kind: "TEST_POINT_SELECTION", id: "selection-a", catalog_id: "catalog-a", lifecycle_status: "APPROVED", decisions: [{ candidate_id: "tp1", decision: "REQUIRED" }] }), "utf8");
+    await writeFile(path.join(root, "test-point-alignments", "alignment-a.json"), JSON.stringify({ schema_version: 1, kind: "TEST_POINT_ALIGNMENT", id: "alignment-a", lifecycle_status: "APPROVED", selected: { unique_matches: 1, ambiguous_matches: 0, unmatched: 0 } }), "utf8");
+    await writeFile(path.join(root, "selected-analyses", "analysis-a.json"), JSON.stringify({ schema_version: 1, kind: "SELECTED_TEST_POINT_ANALYSIS", id: "analysis-a", verdict: "REVIEW", report_path: "/cache/report.html", stale: { is_stale: true, reason: "input changed", invalidated_at: "unix:1" } }), "utf8");
+
+    const catalog = await listWorkflowArtifacts(root);
+    expect(catalog.artifacts.map(({ kind }) => kind)).toEqual(expect.arrayContaining(["BRD_TP_CATALOG", "TP_SELECTION", "TP_ALIGNMENT", "ANALYSIS"]));
+    expect(catalog.artifacts.find(({ id }) => id === "analysis-a")).toMatchObject({ analysis_kind: "SELECTED_TEST_POINT_ANALYSIS", status: "STALE", verdict: "REVIEW" });
+  });
 });

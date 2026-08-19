@@ -31,6 +31,7 @@ export class CoreClient {
       const abort = () => {
         this.#pending.delete(id);
         reject(new DOMException("Core request cancelled", "AbortError"));
+        this.#terminateProcessTree(new DOMException("Core process restarted after cancellation", "AbortError"));
       };
       if (signal?.aborted) {
         abort();
@@ -70,6 +71,7 @@ export class CoreClient {
     }
     const child = spawn(this.#binaryPath, [], {
       stdio: ["pipe", "pipe", "pipe"],
+      detached: process.platform !== "win32",
       env: { ...process.env, RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? "1" }
     });
     child.stderr.on("data", (chunk: Buffer) => process.stderr.write(chunk));
@@ -92,6 +94,7 @@ export class CoreClient {
       }
     });
     child.once("exit", (code, signal) => {
+      if (this.#process !== child) return;
       const error = new Error(`CircuitInspector core exited (code=${String(code)}, signal=${String(signal)})`);
       for (const pending of this.#pending.values()) pending.reject(error);
       this.#pending.clear();
@@ -99,6 +102,25 @@ export class CoreClient {
     });
     this.#process = child;
     return child;
+  }
+
+  #terminateProcessTree(error: Error): void {
+    const child = this.#process;
+    if (!child) return;
+    this.#process = undefined;
+    for (const pending of this.#pending.values()) pending.reject(error);
+    this.#pending.clear();
+    if (process.platform === "win32" && child.pid) {
+      const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      killer.unref();
+      return;
+    }
+    try {
+      if (child.pid) process.kill(-child.pid, "SIGTERM");
+      else child.kill("SIGTERM");
+    } catch {
+      child.kill("SIGTERM");
+    }
   }
 }
 

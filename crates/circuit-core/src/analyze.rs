@@ -37,12 +37,24 @@ struct DistanceResult {
 }
 
 pub fn analyze_design(design: &Design, rule_pack: &RulePack) -> CoreResult<AnalysisSummary> {
+    analyze_design_with_rule_ids(design, rule_pack, None, None)
+}
+
+pub fn analyze_design_with_rule_ids(
+    design: &Design,
+    rule_pack: &RulePack,
+    rule_ids: Option<&HashSet<String>>,
+    requested_analysis_id: Option<&str>,
+) -> CoreResult<AnalysisSummary> {
     rule_pack.validate_for_analysis()?;
     let started = Instant::now();
-    let analysis_id = Uuid::new_v4().to_string();
+    let analysis_id = requested_analysis_id
+        .map(str::to_owned)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let per_rule = rule_pack
         .rules
         .par_iter()
+        .filter(|rule| rule_ids.is_none_or(|ids| ids.contains(&rule.id)))
         .map(|rule| evaluate_rule(design, rule, &analysis_id))
         .collect::<Vec<_>>();
     let mut violations = Vec::new();

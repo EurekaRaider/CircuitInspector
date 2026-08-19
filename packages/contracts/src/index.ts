@@ -634,6 +634,157 @@ export interface LayoutTestAccessAnalysis {
   stale?: AnalysisStaleState;
 }
 
+export type ArtifactLifecycle = "DRAFT" | "APPROVED" | "SUPERSEDED";
+export type TestPointDecision = "REQUIRED" | "NOT_REQUIRED" | "REVIEW";
+
+export interface ArtifactApproval {
+  approved_by: string;
+  approved_at: string;
+  content_hash: string;
+  comment?: string;
+}
+
+export interface BrdTestPointCandidateV1 {
+  id: string;
+  source_kind: "ALLEGRO_PROBE" | "ALLEGRO_PROBE_VIA" | "TP_FOOTPRINT";
+  identity_confidence: CoverageLevel;
+  refdes: string | null;
+  net_name: string | null;
+  side: "TOP" | "BOTTOM" | "INNER" | "NA";
+  center: { x: number; y: number };
+  pad_shape: string | null;
+  pad_width_nm: number | null;
+  pad_height_nm: number | null;
+  source_evidence: string[];
+}
+
+export interface BrdTestPointCatalogV1 {
+  schema_version: 1;
+  kind: "BRD_TEST_POINT_CATALOG";
+  id: string;
+  source_path: string;
+  brd_sha256: string;
+  declared_allegro_version: string | null;
+  detected_allegro_version: string | null;
+  product_revision: string | null;
+  bounds: BoundsNm;
+  converter: {
+    name: "KiCad CLI";
+    version: string;
+    executable_path: string;
+    report_path: string;
+    report_hash: string;
+    intermediate_path: string;
+    intermediate_hash: string;
+  };
+  candidates: BrdTestPointCandidateV1[];
+  diagnostics: Diagnostic[];
+  review_csv_path: string;
+  generated_at: string;
+  content_hash: string;
+  cache_hit: boolean;
+}
+
+export interface TestPointSelectionV1 {
+  schema_version: 1;
+  kind: "TEST_POINT_SELECTION";
+  id: string;
+  catalog_id: string;
+  catalog_content_hash: string;
+  brd_sha256: string;
+  lifecycle_status: ArtifactLifecycle;
+  decisions: Array<{ candidate_id: string; decision: TestPointDecision; comment: string }>;
+  imported_by: string;
+  imported_at: string;
+  unresolved_count: number;
+  approval: ArtifactApproval | null;
+  content_hash: string;
+}
+
+export interface TestPointTransformV1 {
+  rotation_deg: 0 | 90 | 180 | 270;
+  mirrored: boolean;
+  swap_sides: boolean;
+  translate_x_nm: number;
+  translate_y_nm: number;
+}
+
+export interface TestPointAlignmentScoreV1 {
+  transform: TestPointTransformV1;
+  unique_matches: number;
+  ambiguous_matches: number;
+  unmatched: number;
+  outline_residual_nm: number;
+  anchor_max_residual_nm: number | null;
+}
+
+export interface SelectedTestPointBindingV1 {
+  candidate_id: string;
+  decision: TestPointDecision;
+  status: "PASS" | "REVIEW";
+  transformed_center: { x: number; y: number };
+  side: "TOP" | "BOTTOM" | "INNER" | "NA";
+  matched_feature_id: string | null;
+  matched_layer_id: string | null;
+  matched_net_name: string | null;
+  matched_center: { x: number; y: number } | null;
+  matched_width_nm: number | null;
+  matched_height_nm: number | null;
+  message: string;
+}
+
+export interface TestPointAlignmentV1 {
+  schema_version: 1;
+  kind: "TEST_POINT_ALIGNMENT";
+  id: string;
+  lifecycle_status: ArtifactLifecycle;
+  selection_id: string;
+  selection_content_hash: string;
+  catalog_id: string;
+  design_id: string;
+  design_content_hash: string;
+  selected: TestPointAlignmentScoreV1;
+  alternatives: TestPointAlignmentScoreV1[];
+  preview_bindings: SelectedTestPointBindingV1[];
+  anchors: Array<{ candidate_id: string; design_point: { x: number; y: number } }>;
+  requires_manual_anchors: boolean;
+  generated_at: string;
+  approval: ArtifactApproval | null;
+  content_hash: string;
+}
+
+export interface SelectedTestPointAnalysisV1 {
+  schema_version: 1;
+  kind: "SELECTED_TEST_POINT_ANALYSIS";
+  id: string;
+  design_id: string;
+  design_content_hash: string;
+  derived_design_id: string;
+  catalog_id: string;
+  catalog_content_hash: string;
+  selection_id: string;
+  selection_content_hash: string;
+  alignment_id: string;
+  alignment_content_hash: string;
+  rule_pack_id: string;
+  rule_pack_content_hash: string;
+  geometry_analysis_id: string;
+  verdict: Verdict;
+  production_readiness_verdict: "REVIEW";
+  pass_count: number;
+  fail_count: number;
+  review_count: number;
+  not_applicable_count: number;
+  required_count: number;
+  bindings: SelectedTestPointBindingV1[];
+  violations: Violation[];
+  diagnostics: Diagnostic[];
+  report_uri: string;
+  report_path: string;
+  elapsed_ms: number;
+  stale?: AnalysisStaleState;
+}
+
 export interface WibInterfaceContract {
   schema_version: 1;
   id: string;
@@ -714,10 +865,10 @@ export interface WibQualification {
   stale?: AnalysisStaleState;
 }
 
-export type DocumentAnalysis = WiringAnalysis | ManufacturingTestPlan | LayoutTestAccessAnalysis | WibQualification;
+export type DocumentAnalysis = WiringAnalysis | ManufacturingTestPlan | LayoutTestAccessAnalysis | WibQualification | SelectedTestPointAnalysisV1;
 export type AnyAnalysis = AnalysisSummary | DocumentAnalysis;
 
-export type ArtifactKind = "DESIGN" | "RULE_PACK" | "PINOUT" | "SCHEMATIC" | "CONSTRAINT_SET" | "INTERFACE_CONTRACT" | "LAYOUT_BASELINE" | "ANALYSIS" | "WORKFLOW_DRAFT";
+export type ArtifactKind = "DESIGN" | "RULE_PACK" | "PINOUT" | "SCHEMATIC" | "CONSTRAINT_SET" | "INTERFACE_CONTRACT" | "LAYOUT_BASELINE" | "BRD_TP_CATALOG" | "TP_SELECTION" | "TP_ALIGNMENT" | "ANALYSIS" | "WORKFLOW_DRAFT";
 
 export interface ArtifactSummary {
   id: string;
@@ -726,7 +877,7 @@ export interface ArtifactSummary {
   subtitle: string;
   status: string | null;
   verdict: Verdict | null;
-  analysis_kind: "GEOMETRY" | "WIRING_COMPARISON" | "MANUFACTURING_TEST_RECOMMENDATIONS" | "LAYOUT_TEST_ACCESS_ANALYSIS" | "WIB_DESIGN_QUALIFICATION" | null;
+  analysis_kind: "GEOMETRY" | "WIRING_COMPARISON" | "MANUFACTURING_TEST_RECOMMENDATIONS" | "LAYOUT_TEST_ACCESS_ANALYSIS" | "WIB_DESIGN_QUALIFICATION" | "SELECTED_TEST_POINT_ANALYSIS" | null;
   source_path: string | null;
   updated_at: string;
 }

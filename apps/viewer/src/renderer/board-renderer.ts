@@ -1,4 +1,4 @@
-import type { BoundsNm, TestPointCandidate, TilePayload, Violation } from "./types";
+import type { BoundsNm, TestPointAlignmentOverlay, TestPointCandidate, TilePayload, Violation } from "./types";
 
 const HEADER_BYTES = 42;
 const RECORD_BYTES = 24;
@@ -68,6 +68,7 @@ export class BoardRenderer {
   #overlayVertexCount = 0;
   #overlayViolation: Violation | null = null;
   #overlayTestPoint: TestPointCandidate | null = null;
+  #alignmentPoints: TestPointAlignmentOverlay[] = [];
   #measure: [number, number, number, number] | undefined;
   #view: ViewState = { centerX: 0, centerY: 0, zoom: 20 };
   #mirrored = false;
@@ -157,9 +158,10 @@ export class BoardRenderer {
     this.draw();
   }
 
-  setOverlay(violation: Violation | null, testPoint: TestPointCandidate | null, measure?: [number, number, number, number]): void {
+  setOverlay(violation: Violation | null, testPoint: TestPointCandidate | null, alignmentPoints: TestPointAlignmentOverlay[] = [], measure?: [number, number, number, number]): void {
     this.#overlayViolation = violation;
     this.#overlayTestPoint = testPoint;
+    this.#alignmentPoints = alignmentPoints;
     this.#measure = measure;
     this.#refreshOverlay();
     this.draw();
@@ -168,13 +170,36 @@ export class BoardRenderer {
   #refreshOverlay(): void {
     const violation = this.#overlayViolation;
     const testPoint = this.#overlayTestPoint;
+    const alignmentPoints = this.#alignmentPoints;
     const measure = this.#measure;
-    if (!violation && !testPoint && !measure) {
+    if (!violation && !testPoint && !alignmentPoints.length && !measure) {
       this.#overlayVertexCount = 0;
       return;
     }
     const vertices: number[] = [];
     const write = arrayVertexWriter(vertices);
+    for (const point of alignmentPoints) {
+      const brdX = point.brd_center.x / 1_000_000;
+      const brdY = point.brd_center.y / 1_000_000;
+      const markerRadius = Math.max(0.04, 7 / this.#view.zoom);
+      addRing(write, brdX, brdY, markerRadius, [0.98, 0.69, 0.27, 1]);
+      if (!point.gerber_center) {
+        addLine(write, brdX - markerRadius, brdY - markerRadius, brdX + markerRadius, brdY + markerRadius, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
+        addLine(write, brdX - markerRadius, brdY + markerRadius, brdX + markerRadius, brdY - markerRadius, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
+        continue;
+      }
+      const gerberX = point.gerber_center.x / 1_000_000;
+      const gerberY = point.gerber_center.y / 1_000_000;
+      const color = point.status === "PASS" ? [0.56, 0.72, 0.42, 1] : [0.88, 0.36, 0.27, 1];
+      addLine(write, brdX, brdY, gerberX, gerberY, 2 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
+      if (point.gerber_width_nm != null && point.gerber_height_nm != null) {
+        const halfWidth = point.gerber_width_nm / 2_000_000;
+        const halfHeight = point.gerber_height_nm / 2_000_000;
+        addRectOutline(write, gerberX - halfWidth, gerberY - halfHeight, gerberX + halfWidth, gerberY + halfHeight, 2 / this.#view.zoom, color);
+      } else {
+        addRing(write, gerberX, gerberY, markerRadius, color);
+      }
+    }
     if (violation) {
       const x = violation.x_nm / 1_000_000;
       const y = violation.y_nm / 1_000_000;
@@ -249,7 +274,7 @@ export class BoardRenderer {
     gl.uniform2f(this.#uniforms.viewport, this.#canvas.width, this.#canvas.height);
     gl.uniform1f(this.#uniforms.zoom, this.#view.zoom * Math.min(window.devicePixelRatio || 1, 2));
     gl.uniform1f(this.#uniforms.mirror, this.#mirrored ? -1 : 1);
-    gl.uniform1f(this.#uniforms.opacity, this.#overlayTestPoint || this.#overlayViolation ? 0.55 : 1);
+    gl.uniform1f(this.#uniforms.opacity, this.#overlayTestPoint || this.#overlayViolation || this.#alignmentPoints.length ? 0.55 : 1);
     this.#drawBuffer(this.#boardBuffer, this.#boardVertexCount);
     gl.uniform1f(this.#uniforms.opacity, 1);
     this.#drawBuffer(this.#overlayBuffer, this.#overlayVertexCount);

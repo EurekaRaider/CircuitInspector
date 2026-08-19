@@ -17,6 +17,7 @@ import {
 import brandMark from "../../assets/icon.svg";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardCanvas, type BoardCanvasHandle } from "./BoardCanvas";
+import { BrdTestPointWorkflow } from "./BrdTestPointWorkflow";
 import { DocumentAnalysisScreen } from "./DocumentAnalysisScreen";
 import { translate, type Locale, type Translator } from "./i18n";
 import { defaultLayerIds, isolatedLayerIds, layerIdsForTestPoint, layerIdsForViolation, layerIdsOnSurface, sameLayerIds, surfaceSideForLayerIds, testPointFocusZoom, testPointSurfaceSide, violationFocusZoom, violationHasLocation, type SurfaceSide } from "./pcb-layers";
@@ -35,6 +36,7 @@ import type {
   PickResult,
   SearchResult,
   TilePayload,
+  TestPointAlignmentOverlay,
   TestPointCandidate,
   Violation
 } from "./types";
@@ -96,6 +98,9 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   const [measureDistance, setMeasureDistance] = useState<number | null>(null);
   const [testPoints, setTestPoints] = useState<TestPointCandidate[]>([]);
   const [activeTestPoint, setActiveTestPoint] = useState<TestPointCandidate | null>(null);
+  const [brdWorkflowOpen, setBrdWorkflowOpen] = useState(false);
+  const [brdWorkflowReference, setBrdWorkflowReference] = useState<{ kind: "catalog" | "selection" | "alignment"; id: string } | null>(null);
+  const [alignmentOverlay, setAlignmentOverlay] = useState<TestPointAlignmentOverlay[]>([]);
   const [testPointReviewer, setTestPointReviewer] = useState(() => localStorage.getItem("circuit-inspector.approver") ?? "");
   const [confirmedTestPointReport, setConfirmedTestPointReport] = useState<{ report_path: string; confirmed_count: number } | null>(null);
   const [violationReviewer, setViolationReviewer] = useState(() => localStorage.getItem("circuit-inspector.approver") ?? "");
@@ -169,6 +174,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       BOTTOM: defaultLayerIds(summary.layers, "BOTTOM")
     });
     setActiveTestPoint(null);
+    setAlignmentOverlay([]);
     setInitialViolationFocus(focusedViolation);
     setDesign(summary);
     setLayoutBaseline(null);
@@ -265,6 +271,14 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   async function openDeepLink(url: string) {
     try {
       const parsed = new URL(url);
+      if (parsed.hostname === "tp-workflow") {
+        const reference = (["catalog", "selection", "alignment"] as const)
+          .map((kind) => ({ kind, id: parsed.searchParams.get(kind) }))
+          .find((item): item is { kind: "catalog" | "selection" | "alignment"; id: string } => Boolean(item.id));
+        setBrdWorkflowReference(reference ?? null);
+        setBrdWorkflowOpen(true);
+        return;
+      }
       const parts = parsed.pathname.split("/").filter(Boolean);
       const analysisId = parsed.hostname === "analysis" ? parts[0] : parts.at(-1);
       if (!analysisId) return;
@@ -310,6 +324,10 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
       setBusy(false);
     }
   }
+
+  const restoreDesign = useCallback(async (designId: string) => {
+    showDesign(await window.circuitInspector.getDesignSummary(designId));
+  }, []);
 
   const requestTile = useCallback(
     async (side: SurfaceSide, viewport: BoundsNm, zoom: number) => {
@@ -652,7 +670,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
   }
 
   return (
-    <main className="app-shell grid h-full min-w-[1000px] grid-rows-[64px_minmax(0,1fr)_32px] overflow-hidden text-[#ecebe7]">
+    <main className="app-shell relative grid h-full min-w-[1000px] grid-rows-[64px_minmax(0,1fr)_32px] overflow-hidden text-[#ecebe7]">
       <header className="topbar title-drag grid grid-cols-[272px_minmax(360px,1fr)_auto] items-center px-5">
         <div className={`flex min-w-0 items-center gap-3 ${window.circuitInspector.platform === "darwin" ? "pl-[70px]" : ""}`}>
           <div className="brand-emblem size-9 shrink-0">
@@ -698,6 +716,9 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
             <RulerIcon size={16} />
           </ToolbarButton>
           <BoardSideSwitch locale={locale} viewSide={viewSide} disabled={!design} onChange={switchViewSide} />
+          <button className="secondary-button" onClick={() => { setBrdWorkflowReference(null); setBrdWorkflowOpen(true); }} disabled={busy}>
+            <CrosshairIcon size={15} />BRD TP
+          </button>
           <button className="primary-button ml-0.5" onClick={() => void chooseDesign()} disabled={busy}>
             <FolderOpenIcon size={16} />
             {t("openDesign")}
@@ -784,6 +805,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                   tile={tiles.TOP}
                   activeViolation={activeViolationSide === "TOP" && violationHasLocation(activeViolation) ? activeViolation : null}
                   activeTestPoint={activeTestPointSide === "TOP" ? activeTestPoint : null}
+                  alignmentPoints={alignmentOverlay.filter((point) => point.side === "TOP")}
                   mirrored={false}
                   measureMode={measureMode}
                   onViewportChange={handleTopViewportChange}
@@ -800,6 +822,7 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
                   tile={tiles.BOTTOM}
                   activeViolation={activeViolationSide === "BOTTOM" && violationHasLocation(activeViolation) ? activeViolation : null}
                   activeTestPoint={activeTestPointSide === "BOTTOM" ? activeTestPoint : null}
+                  alignmentPoints={alignmentOverlay.filter((point) => point.side === "BOTTOM")}
                   mirrored
                   measureMode={measureMode}
                   onViewportChange={handleBottomViewportChange}
@@ -1014,6 +1037,18 @@ export function PcbWorkspace({ locale, onLocaleChange, deepLinkUrl, initialDesig
           )}
         </aside>
       </section>
+      {brdWorkflowOpen && <BrdTestPointWorkflow
+        locale={locale}
+        design={design}
+        rulePacks={rulePacks}
+        initialReference={brdWorkflowReference}
+        onChooseDesign={chooseDesign}
+        onRestoreDesign={restoreDesign}
+        onOverlayChange={setAlignmentOverlay}
+        onOpenAnalysis={(result) => { setDocumentAnalysis(result); setBrdWorkflowOpen(false); }}
+        {...(onCatalogChanged ? { onCatalogChanged } : {})}
+        onClose={() => setBrdWorkflowOpen(false)}
+      />}
 
       <footer className="grid grid-cols-[272px_minmax(0,1fr)_360px] items-center border-t border-white/[0.07] bg-[#131517] font-mono text-[9px] tracking-[0.02em] text-[#696a67]">
         <div className="truncate border-r border-white/[0.07] px-4">{statusLabel}</div>

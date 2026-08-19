@@ -1,6 +1,6 @@
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { BoardRenderer, fitView, type ViewState } from "./board-renderer";
-import type { BoundsNm, TestPointCandidate, TilePayload, Violation } from "./types";
+import type { BoundsNm, TestPointAlignmentOverlay, TestPointCandidate, TilePayload, Violation } from "./types";
 
 export interface BoardCanvasHandle {
   fit(): void;
@@ -13,6 +13,7 @@ interface Props {
   tile: TilePayload | null;
   activeViolation: Violation | null;
   activeTestPoint: TestPointCandidate | null;
+  alignmentPoints: TestPointAlignmentOverlay[];
   mirrored: boolean;
   measureMode: boolean;
   onViewportChange(viewport: BoundsNm, zoom: number): void;
@@ -22,7 +23,7 @@ interface Props {
 }
 
 const BoardCanvasComponent = forwardRef<BoardCanvasHandle, Props>(function BoardCanvas(
-  { bounds, tile, activeViolation, activeTestPoint, mirrored, measureMode, onViewportChange, onPointerWorld, onMeasure, onPick },
+  { bounds, tile, activeViolation, activeTestPoint, alignmentPoints, mirrored, measureMode, onViewportChange, onPointerWorld, onMeasure, onPick },
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -86,8 +87,8 @@ const BoardCanvasComponent = forwardRef<BoardCanvasHandle, Props>(function Board
   }, [mirrored]);
 
   useEffect(() => {
-    rendererRef.current?.setOverlay(activeViolation, activeTestPoint, measure);
-  }, [activeTestPoint, activeViolation, measure]);
+    rendererRef.current?.setOverlay(activeViolation, activeTestPoint, alignmentPoints, measure);
+  }, [activeTestPoint, activeViolation, alignmentPoints, measure]);
 
   useEffect(() => {
     measureRef.current = [];

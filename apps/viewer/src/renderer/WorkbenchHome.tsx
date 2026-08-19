@@ -21,11 +21,12 @@ interface Props {
   onOpenDesign(id: string): void;
   onOpenAnalysis(id: string): void;
   onOpenDraft(id: string): void;
+  onOpenTpArtifact(kind: "catalog" | "selection" | "alignment", id: string): void;
   onRefresh(): void;
   onDelete(kind: ArtifactKind, id: string): void;
 }
 
-export function WorkbenchHome({ locale, catalog, busy, error, onNavigate, onOpenDesign, onOpenAnalysis, onOpenDraft, onRefresh, onDelete }: Props) {
+export function WorkbenchHome({ locale, catalog, busy, error, onNavigate, onOpenDesign, onOpenAnalysis, onOpenDraft, onOpenTpArtifact, onRefresh, onDelete }: Props) {
   const chinese = locale === "zh-CN";
   const recent = catalog.artifacts.slice(0, 8);
   const counts = {
@@ -39,7 +40,7 @@ export function WorkbenchHome({ locale, catalog, busy, error, onNavigate, onOpen
       view: "PCB" as const,
       icon: CircuitryIcon,
       title: chinese ? "检查 PCB 制造数据" : "Inspect PCB manufacturing data",
-      description: chinese ? "导入或恢复 ODB++、Gerber 与 IPC-356，运行确定性 DFT/DFM 分析。" : "Import or resume ODB++, Gerber, and IPC-356, then run deterministic DFT/DFM analysis.",
+      description: chinese ? "导入 Allegro BRD 候选 TP、人工确认 CSV，再以 Gerber/IPC-356 实际制造几何运行 DFT。" : "Review Allegro BRD TP candidates in CSV, then run DFT against actual Gerber/IPC-356 manufacturing geometry.",
       metric: `${counts.designs} ${chinese ? "个设计" : "designs"}`
     },
     {
@@ -124,7 +125,7 @@ export function WorkbenchHome({ locale, catalog, busy, error, onNavigate, onOpen
             <div className="divide-y divide-white/[0.065] border-y border-white/[0.065]">
               {busy ? Array.from({ length: 4 }, (_, index) => <div key={index} className="h-[62px] animate-pulse bg-white/[0.015]" />) : recent.length ? recent.map((artifact) => (
                 <div key={`${artifact.kind}:${artifact.id}`} className="grid w-full grid-cols-[minmax(0,1fr)_32px] items-center gap-2 transition-colors hover:bg-white/[0.025]">
-                  <button className="flex w-full items-center gap-4 px-2 py-3.5 text-left" onClick={() => openArtifact(artifact.kind, artifact.id, onNavigate, onOpenDesign, onOpenAnalysis, onOpenDraft)}>
+                  <button className="flex w-full items-center gap-4 px-2 py-3.5 text-left" onClick={() => openArtifact(artifact.kind, artifact.id, onNavigate, onOpenDesign, onOpenAnalysis, onOpenDraft, onOpenTpArtifact)}>
                   <span className="w-28 shrink-0 font-mono text-[9px] tracking-[0.06em] text-[#8d744c]">{artifact.kind.replaceAll("_", " ")}</span>
                   <span className="min-w-0 flex-1"><span className="block truncate text-[12px] text-[#d3d1cc]">{artifact.title}</span><span className="mt-0.5 block truncate font-mono text-[9px] text-[#666966]">{artifact.subtitle}</span></span>
                   {artifact.status && <span className={`status-chip status-${artifact.status.toLowerCase().replaceAll("_", "-")}`}>{artifact.status}</span>}
@@ -144,11 +145,14 @@ export function WorkbenchHome({ locale, catalog, busy, error, onNavigate, onOpen
   );
 }
 
-function openArtifact(kind: string, id: string, onNavigate: (view: WorkspaceView) => void, onOpenDesign: (id: string) => void, onOpenAnalysis: (id: string) => void, onOpenDraft: (id: string) => void) {
+function openArtifact(kind: string, id: string, onNavigate: (view: WorkspaceView) => void, onOpenDesign: (id: string) => void, onOpenAnalysis: (id: string) => void, onOpenDraft: (id: string) => void, onOpenTpArtifact: (kind: "catalog" | "selection" | "alignment", id: string) => void) {
   if (kind === "DESIGN") onOpenDesign(id);
   else if (kind === "ANALYSIS") onOpenAnalysis(id);
   else if (kind === "WORKFLOW_DRAFT") onOpenDraft(id);
   else if (kind === "RULE_PACK") onNavigate("RULES");
+  else if (kind === "BRD_TP_CATALOG") onOpenTpArtifact("catalog", id);
+  else if (kind === "TP_SELECTION") onOpenTpArtifact("selection", id);
+  else if (kind === "TP_ALIGNMENT") onOpenTpArtifact("alignment", id);
   else onNavigate("WIB");
 }
 

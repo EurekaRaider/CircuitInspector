@@ -11,6 +11,10 @@ export async function listWorkflowArtifacts(cacheDir: string): Promise<ArtifactC
     scanJsonDirectory(path.join(cacheDir, "wib-constraints"), diagnostics, constraintArtifact),
     scanJsonDirectory(path.join(cacheDir, "wib-interface-contracts"), diagnostics, interfaceContractArtifact),
     scanJsonDirectory(path.join(cacheDir, "layout-baselines"), diagnostics, layoutBaselineArtifact),
+    scanBrdCatalogDirectory(path.join(cacheDir, "brd-catalogs"), diagnostics),
+    scanJsonDirectory(path.join(cacheDir, "test-point-selections"), diagnostics, testPointSelectionArtifact),
+    scanJsonDirectory(path.join(cacheDir, "test-point-alignments"), diagnostics, testPointAlignmentArtifact),
+    scanJsonDirectory(path.join(cacheDir, "selected-analyses"), diagnostics, analysisArtifact),
     scanAnalysisDirectory(path.join(cacheDir, "evidence"), diagnostics),
     scanJsonDirectory(path.join(cacheDir, "workflow-drafts"), diagnostics, draftArtifact)
   ]);
@@ -18,6 +22,31 @@ export async function listWorkflowArtifacts(cacheDir: string): Promise<ArtifactC
     artifacts: groups.flat().sort((left, right) => right.updated_at.localeCompare(left.updated_at)),
     diagnostics
   };
+}
+
+async function scanBrdCatalogDirectory(directory: string, diagnostics: Diagnostic[]): Promise<ArtifactSummary[]> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const artifacts: ArtifactSummary[] = [];
+  for (const name of names) {
+    const file = path.join(directory, name, "catalog.json");
+    try {
+      const [value, metadata] = await Promise.all([
+        readFile(file, "utf8").then((content) => JSON.parse(content) as Record<string, unknown>),
+        stat(file)
+      ]);
+      const artifact = brdCatalogArtifact(value, metadata.mtime.toISOString());
+      if (artifact) artifacts.push(artifact);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") diagnostics.push({ code: "INVALID_BRD_TP_CATALOG", severity: "WARNING", message: String(error), source: file });
+    }
+  }
+  return artifacts;
 }
 
 async function scanSchematicDirectory(directory: string, diagnostics: Diagnostic[]): Promise<ArtifactSummary[]> {
@@ -214,14 +243,64 @@ function layoutBaselineArtifact(value: Record<string, unknown>, updatedAt: strin
   };
 }
 
+function brdCatalogArtifact(value: Record<string, unknown>, updatedAt: string): ArtifactSummary | null {
+  if (value.schema_version !== 1 || value.kind !== "BRD_TEST_POINT_CATALOG" || typeof value.id !== "string") return null;
+  const sourcePath = typeof value.source_path === "string" ? value.source_path : null;
+  return {
+    id: value.id,
+    kind: "BRD_TP_CATALOG",
+    title: `BRD TP catalog · ${sourcePath ? path.basename(sourcePath) : value.id}`,
+    subtitle: `${Array.isArray(value.candidates) ? value.candidates.length : 0} candidate(s) · ${String((value.converter as { version?: unknown } | undefined)?.version ?? "KiCad 10")}`,
+    status: "GENERATED",
+    verdict: null,
+    analysis_kind: null,
+    source_path: sourcePath,
+    updated_at: updatedAt
+  };
+}
+
+function testPointSelectionArtifact(value: Record<string, unknown>, updatedAt: string): ArtifactSummary | null {
+  if (value.schema_version !== 1 || value.kind !== "TEST_POINT_SELECTION" || typeof value.id !== "string") return null;
+  const decisions = Array.isArray(value.decisions) ? value.decisions : [];
+  const required = decisions.filter((decision) => (decision as { decision?: unknown }).decision === "REQUIRED").length;
+  return {
+    id: value.id,
+    kind: "TP_SELECTION",
+    title: "Human-reviewed BRD TP selection",
+    subtitle: `${required} REQUIRED · ${String(value.catalog_id ?? "-")}`,
+    status: typeof value.lifecycle_status === "string" ? value.lifecycle_status : null,
+    verdict: null,
+    analysis_kind: null,
+    source_path: null,
+    updated_at: updatedAt
+  };
+}
+
+function testPointAlignmentArtifact(value: Record<string, unknown>, updatedAt: string): ArtifactSummary | null {
+  if (value.schema_version !== 1 || value.kind !== "TEST_POINT_ALIGNMENT" || typeof value.id !== "string") return null;
+  const score = value.selected as { unique_matches?: unknown; ambiguous_matches?: unknown; unmatched?: unknown } | undefined;
+  return {
+    id: value.id,
+    kind: "TP_ALIGNMENT",
+    title: "BRD ↔ Gerber TP alignment",
+    subtitle: `${String(score?.unique_matches ?? 0)} unique · ${String(score?.ambiguous_matches ?? 0)} ambiguous · ${String(score?.unmatched ?? 0)} unmatched`,
+    status: typeof value.lifecycle_status === "string" ? value.lifecycle_status : null,
+    verdict: null,
+    analysis_kind: null,
+    source_path: null,
+    updated_at: updatedAt
+  };
+}
+
 function analysisArtifact(value: Record<string, unknown>, updatedAt: string): ArtifactSummary | null {
   const kind = String(value.kind ?? "");
-  if (typeof value.id !== "string" || !["WIRING_COMPARISON", "MANUFACTURING_TEST_RECOMMENDATIONS", "LAYOUT_TEST_ACCESS_ANALYSIS", "WIB_DESIGN_QUALIFICATION"].includes(kind)) return null;
+  if (typeof value.id !== "string" || !["WIRING_COMPARISON", "MANUFACTURING_TEST_RECOMMENDATIONS", "LAYOUT_TEST_ACCESS_ANALYSIS", "WIB_DESIGN_QUALIFICATION", "SELECTED_TEST_POINT_ANALYSIS"].includes(kind)) return null;
   const titles: Record<string, string> = {
     WIRING_COMPARISON: "Product ↔ WIB wiring comparison",
     MANUFACTURING_TEST_RECOMMENDATIONS: "Controlled manufacturing test plan",
     LAYOUT_TEST_ACCESS_ANALYSIS: "Layout DFT test-access qualification",
-    WIB_DESIGN_QUALIFICATION: "Final WIB design qualification"
+    WIB_DESIGN_QUALIFICATION: "Final WIB design qualification",
+    SELECTED_TEST_POINT_ANALYSIS: "Selected BRD TP Gerber DFT analysis"
   };
   const verdict = ["PASS", "FAIL", "REVIEW", "NOT_APPLICABLE"].includes(String(value.verdict))
     ? value.verdict as ArtifactSummary["verdict"]

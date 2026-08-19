@@ -85,6 +85,13 @@ export function App() {
   useEffect(() => window.circuitInspector.onDeepLink((url) => {
     try {
       const parsed = new URL(url);
+      if (parsed.hostname === "tp-workflow") {
+        setDocumentAnalysis(null);
+        setInitialDesignId(null);
+        setDeepLinkUrl(url);
+        setView("PCB");
+        return;
+      }
       const id = parsed.hostname === "analysis"
         ? parsed.pathname.split("/").filter(Boolean)[0]
         : parsed.pathname.split("/").filter(Boolean).at(-1);
@@ -93,6 +100,13 @@ export function App() {
       setCatalogError(message(cause));
     }
   }), [openAnalysis]);
+
+  function openTpArtifact(kind: "catalog" | "selection" | "alignment", id: string) {
+    setDocumentAnalysis(null);
+    setInitialDesignId(null);
+    setDeepLinkUrl(`circuitinspector://tp-workflow?${kind}=${encodeURIComponent(id)}`);
+    setView("PCB");
+  }
 
   function navigate(next: WorkspaceView) {
     setWiringReview(null);
@@ -156,6 +170,7 @@ export function App() {
             onOpenDesign={(id) => { setInitialDesignId(id); setView("PCB"); }}
             onOpenAnalysis={(id) => void openAnalysis(id)}
             onOpenDraft={(id) => { setInitialDraftId(id); setView("WIB"); }}
+            onOpenTpArtifact={openTpArtifact}
             onRefresh={() => void refreshCatalog()}
             onDelete={(kind, id) => void deleteArtifact(kind, id)}
           />

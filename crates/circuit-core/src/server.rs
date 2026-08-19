@@ -106,6 +106,20 @@ pub fn dispatch(method: &str, params: Value) -> CoreResult<Value> {
         "pick_design" => pick_request(params),
         "list_test_points" => list_test_points_request(params),
         "review_test_points" => review_test_points_request(params),
+        "import_brd_test_points" => crate::brd::import_brd_test_points_request(params),
+        "query_brd_test_points" => crate::brd::query_brd_test_points_request(params),
+        "export_test_point_review" => crate::brd::export_test_point_review_request(params),
+        "import_test_point_review" => crate::brd::import_test_point_review_request(params),
+        "approve_test_point_selection" => crate::brd::approve_test_point_selection_request(params),
+        "propose_test_point_alignment" => crate::brd::propose_test_point_alignment_request(params),
+        "approve_test_point_alignment" => crate::brd::approve_test_point_alignment_request(params),
+        "analyze_selected_test_points" => crate::brd::analyze_selected_test_points_request(params),
+        "read_selected_test_point_analysis" => {
+            crate::brd::read_selected_test_point_analysis_request(params)
+        }
+        "read_brd_test_point_catalog" => crate::brd::read_brd_test_point_catalog_request(params),
+        "read_test_point_selection" => crate::brd::read_test_point_selection_request(params),
+        "read_test_point_alignment" => crate::brd::read_test_point_alignment_request(params),
         "save_rule_pack" => save_rule_pack_request(params),
         "update_rule_pack" => update_rule_pack_request(params),
         "list_rule_packs" => list_rule_packs_request(params),

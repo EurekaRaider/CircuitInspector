@@ -91,7 +91,7 @@ Test-point spacing and clearance, accessibility, trace geometry, copper/edge cle
 
 #### 03 · Model integration
 
-Twenty-one structured MCP tools, progress and cancellation, paginated findings, evidence resources, and stdout reserved for JSON-RPC.
+Twenty-nine structured MCP tools, progress and cancellation, paginated findings, evidence resources, and stdout reserved for JSON-RPC.
 
 </td>
 </tr>
@@ -131,6 +131,7 @@ Designs, rule documents, indexes, caches, reports, and evidence remain local by 
 - Node.js 22 or newer
 - npm 10 or newer
 - A WebGL2-capable GPU for the Viewer
+- KiCad 10.x installed locally when importing Cadence Allegro `.brd` test-point intent; CircuitInspector does not bundle KiCad or Cadence
 
 Install dependencies and validate the workspace:
 
@@ -184,6 +185,7 @@ When the packaged Viewer starts, it detects a local OpenCode installation or exi
 | Gerber X1 | Accurate graphic and basic DFM path | NET/component/test-point rules become `REVIEW` or `NOT_APPLICABLE` when semantics are unavailable |
 | Gerber Job `.gbrjob` | File inventory and layer-function metadata | Only declared metadata is added |
 | XNC / Excellon | Drill and slot data | Drill semantics are preserved with their source evidence |
+| Allegro `.brd` 17.2 / 17.4 TP workflow | User-installed KiCad 10 converts the authorized BRD to a controlled `.kicad_pcb`; CircuitInspector extracts only explicit Probe/Testprep evidence and TP-like candidates | BRD supplies design intent, never manufacturing truth. A complete human-reviewed CSV and approved BRD↔Gerber alignment are required before selected-TP DFT analysis |
 
 Every imported design returns a `SemanticCoverage` record for layers, nets, components, pins, test points, and drills. The rule engine uses those states as part of adjudication: `MISSING` inputs cannot produce a false FAIL, and heuristic test points remain `REVIEW` until confirmed.
 
@@ -219,6 +221,14 @@ Results are deliberately broader than PASS/FAIL:
 | Tool | Purpose |
 |---|---|
 | `import_design` | Detect and stream-import an ODB++ or Gerber manufacturing package; return semantic coverage and diagnostics |
+| `import_brd_test_points` | Invoke user-installed KiCad 10 without a shell, cache its JSON report and intermediate SHA-256, and create an auditable BRD TP catalog |
+| `query_brd_test_points` | Page BRD TP candidates by side and identity confidence |
+| `export_test_point_review` | Export the immutable candidate set as UTF-8 BOM RFC 4180 CSV; only `decision` and `comment` may be edited |
+| `import_test_point_review` | Atomically validate the complete reviewed CSV and create a DRAFT selection |
+| `approve_test_point_selection` | Reject unresolved `REVIEW` rows, then freeze the named approval and selection content hash |
+| `propose_test_point_alignment` | Rank rotation/mirror/translation and side mappings; ambiguous suggestions require three non-collinear anchors |
+| `approve_test_point_alignment` | Freeze transform, side mapping, residuals, anchors, lineage, approver, time, and comment |
+| `analyze_selected_test_points` | Bind only `REQUIRED` TP intent to same-side Gerber copper and mask geometry, then run only approved rules involving `TEST_POINT` |
 | `import_schematic` | Build a local `SchematicDocument v2` graph from a complete vector/scanned PDF, or adapt JSON/CSV/TSV/text pin mappings |
 | `trace_schematic_interface` | Rank connector candidates and trace selected interface pins through named nets and permitted passthrough devices to IC pins |
 | `apply_schematic_corrections` | Apply audited component, pin, NET, wire, junction, off-page, and passthrough corrections; invalidate stale confirmations |
@@ -249,6 +259,10 @@ The MCP never opens the Viewer on its own. A client can present a result link; t
 ## 06 / Viewer and evidence
 
 The renderer does not create a DOM or SVG node for each PCB primitive. Rust returns compact binary viewport tiles through transferable `ArrayBuffer` messages. The Viewer retains the current and adjacent GPU tiles, prefetches around a pan, switches LOD during zoom, and redraws vector geometry at every scale.
+
+The BRD TP workspace is a separate five-step path: import BRD, export/import the complete review CSV, approve the TP selection, review and approve Gerber alignment, and run an approved TP rule subset. Its virtualized candidate table filters decision, side, confidence, and binding state. During alignment review and after analysis, the existing Top/Bottom WebGL canvases overlay the transformed BRD point, actual Gerber contact box, and their connection; actual dimensions, thresholds, and failure reasons remain evidence-linked.
+
+TP identity, DFT rule verdict, and production readiness are intentionally independent. `PASS` in the selected-TP static analysis never closes probe angle, fixture reach, board flex, contact reliability, tester resources, powered safety, throughput, pilot yield, or factory release; production readiness remains `REVIEW`.
 
 Implemented interaction paths include:
 

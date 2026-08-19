@@ -2,6 +2,7 @@ import type {
   AnalysisStaleState,
   ArtifactCatalog,
   ArtifactKind,
+  BrdTestPointCatalogV1,
   ConnectorMapping,
   ControlledTestBaseline,
   LayoutTestAccessAnalysis,
@@ -12,6 +13,7 @@ import type {
   RuleReviewDecision,
   RuleReviewItem,
   RuleReviewResolution,
+  SelectedTestPointAnalysisV1,
   SchematicComponent,
   SchematicDocument,
   SchematicGraphPin,
@@ -22,6 +24,8 @@ import type {
   TableImportResult,
   TableKind,
   TestMethodCoverage,
+  TestPointAlignmentV1,
+  TestPointSelectionV1,
   TestPlanApproval,
   WibInterfaceContract,
   WibConstraintDefinition,
@@ -29,7 +33,7 @@ import type {
   WibWorkflowDraft
 } from "@circuit-inspector/contracts";
 
-export type { ArtifactCatalog, ArtifactKind, ConnectorMapping, LayoutBaselineConfirmation, LayoutTestAccessAnalysis, ManufacturingTestRequirement, RuleDocumentDiagnostic, RuleDocumentValidation, RuleReviewDecision, RuleReviewItem, RuleReviewResolution, SchematicDocument, TableFormat, TableImportResult, TableKind, TestMethodCoverage, WibConstraintDefinition, WibConstraintSet, WibInterfaceContract, WibWorkflowDraft };
+export type { ArtifactCatalog, ArtifactKind, BrdTestPointCatalogV1, ConnectorMapping, LayoutBaselineConfirmation, LayoutTestAccessAnalysis, ManufacturingTestRequirement, RuleDocumentDiagnostic, RuleDocumentValidation, RuleReviewDecision, RuleReviewItem, RuleReviewResolution, SchematicDocument, SelectedTestPointAnalysisV1, TableFormat, TableImportResult, TableKind, TestMethodCoverage, TestPointAlignmentV1, TestPointSelectionV1, WibConstraintDefinition, WibConstraintSet, WibInterfaceContract, WibWorkflowDraft };
 
 export type CoverageLevel = "EXPLICIT" | "SUPPLEMENTED" | "INFERRED" | "MISSING";
 
@@ -38,6 +42,16 @@ export interface BoundsNm {
   min_y: number;
   max_x: number;
   max_y: number;
+}
+
+export interface TestPointAlignmentOverlay {
+  candidate_id: string;
+  status: "PASS" | "REVIEW";
+  side: "TOP" | "BOTTOM";
+  brd_center: { x: number; y: number };
+  gerber_center: { x: number; y: number } | null;
+  gerber_width_nm: number | null;
+  gerber_height_nm: number | null;
 }
 
 export interface LayerSummary {
@@ -395,7 +409,7 @@ export interface WibQualificationAnalysis {
   stale?: AnalysisStaleState;
 }
 
-export type DocumentAnalysis = WiringAnalysis | TestRecommendationAnalysis | LayoutTestAccessAnalysis | WibQualificationAnalysis;
+export type DocumentAnalysis = WiringAnalysis | TestRecommendationAnalysis | LayoutTestAccessAnalysis | WibQualificationAnalysis | SelectedTestPointAnalysisV1;
 export type AnyAnalysis = AnalysisSummary | DocumentAnalysis;
 
 export interface TilePayload {
@@ -409,6 +423,19 @@ export interface TilePayload {
 export interface ViewerApi {
   platform: NodeJS.Platform;
   chooseDesign(locale: "zh-CN" | "en-US"): Promise<string | null>;
+  chooseBrd(locale: "zh-CN" | "en-US"): Promise<string | null>;
+  chooseTpReview(locale: "zh-CN" | "en-US"): Promise<string | null>;
+  importBrdTestPoints(input: { path: string; declared_allegro_version?: string; product_revision?: string }): Promise<BrdTestPointCatalogV1>;
+  readBrdTestPointCatalog(catalogId: string): Promise<BrdTestPointCatalogV1>;
+  queryBrdTestPoints(input: { catalog_id: string; side?: "TOP" | "BOTTOM"; confidence?: CoverageLevel; offset: number; limit: number }): Promise<{ catalog_id: string; total: number; offset: number; limit: number; candidates: BrdTestPointCatalogV1["candidates"] }>;
+  exportTpReview(catalogId: string, locale: "zh-CN" | "en-US"): Promise<{ ok: boolean; path: string | null; row_count: number }>;
+  importTpReview(input: { catalog_id: string; path: string; imported_by: string }): Promise<TestPointSelectionV1>;
+  readTpSelection(selectionId: string): Promise<TestPointSelectionV1>;
+  approveTpSelection(input: { selection_id: string; approved_by: string }): Promise<TestPointSelectionV1>;
+  proposeTpAlignment(input: { selection_id: string; design_id: string; anchors?: Array<{ candidate_id: string; design_point: { x: number; y: number } }> }): Promise<TestPointAlignmentV1>;
+  readTpAlignment(alignmentId: string): Promise<TestPointAlignmentV1>;
+  approveTpAlignment(input: { alignment_id: string; approved_by: string; comment: string }): Promise<TestPointAlignmentV1>;
+  analyzeSelectedTestPoints(input: { design_id: string; selection_id: string; alignment_id: string; rule_pack_id: string }): Promise<SelectedTestPointAnalysisV1>;
   importDesign(path: string): Promise<DesignSummary>;
   getDesignSummary(designId: string): Promise<DesignSummary>;
   getTile(input: Record<string, unknown>): Promise<TilePayload>;

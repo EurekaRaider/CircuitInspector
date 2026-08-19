@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import type {
   ArtifactCatalog,
   ArtifactKind,
   ArtifactSummary,
+  BrdTestPointCatalogV1,
   ConnectorMapping,
   DesignSummary,
   ManufacturingTestRequirement,
@@ -16,6 +17,9 @@ import type {
   TableKind,
   WibConstraintDefinition,
   TestMethodCoverage,
+  TestPointAlignmentV1,
+  TestPointSelectionV1,
+  SelectedTestPointAnalysisV1,
   WibWorkflowDraft
 } from "@circuit-inspector/contracts";
 import {
@@ -189,6 +193,66 @@ ipcMain.handle("design:choose", async (_event, locale: "zh-CN" | "en-US") => {
   return selected;
 });
 
+ipcMain.handle("brd:choose", async (_event, locale: "zh-CN" | "en-US") => {
+  const result = await dialog.showOpenDialog(window!, {
+    title: locale === "zh-CN" ? "选择 Allegro BRD" : "Choose Allegro BRD",
+    properties: ["openFile"],
+    filters: [{ name: "Cadence Allegro BRD", extensions: ["brd"] }]
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const selected = path.resolve(result.filePaths[0]);
+  grantedInputPaths.add(selected);
+  return selected;
+});
+
+ipcMain.handle("brd:choose-review", async (_event, locale: "zh-CN" | "en-US") => {
+  const result = await dialog.showOpenDialog(window!, {
+    title: locale === "zh-CN" ? "选择人工确认后的 TP CSV" : "Choose reviewed TP CSV",
+    properties: ["openFile"],
+    filters: [{ name: "TP review CSV", extensions: ["csv"] }]
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const selected = path.resolve(result.filePaths[0]);
+  grantedInputPaths.add(selected);
+  return selected;
+});
+
+ipcMain.handle("brd:import-test-points", async (_event, input: { path: string; declared_allegro_version?: string; product_revision?: string }): Promise<BrdTestPointCatalogV1> => {
+  const sourcePath = assertGrantedPath(grantedInputPaths, input.path);
+  sendWorkbenchProgress("BRD_TP_IMPORT", 5, "正在调用本机 KiCad 10 转换 Allegro BRD");
+  const catalog = await core.request<BrdTestPointCatalogV1>("import_brd_test_points", { cache_dir: cacheDir, path: sourcePath, declared_allegro_version: input.declared_allegro_version, product_revision: input.product_revision });
+  sendWorkbenchProgress("BRD_TP_IMPORT", 100, "BRD TP 候选清单已生成");
+  return catalog;
+});
+ipcMain.handle("brd:read-catalog", (_event, catalogId: string) => core.request<BrdTestPointCatalogV1>("read_brd_test_point_catalog", { cache_dir: cacheDir, catalog_id: assertArtifactId(catalogId) }));
+ipcMain.handle("brd:query-test-points", (_event, input: Record<string, unknown>) => core.request("query_brd_test_points", { cache_dir: cacheDir, ...withArtifactId(input, "catalog_id") }));
+ipcMain.handle("brd:export-review", async (_event, catalogId: string, locale: "zh-CN" | "en-US") => {
+  const result = await core.request<{ csv_path: string; row_count: number }>("export_test_point_review", { cache_dir: cacheDir, catalog_id: assertArtifactId(catalogId) });
+  const source = assertPathInside(path.join(cacheDir, "brd-catalogs"), result.csv_path);
+  const target = await dialog.showSaveDialog(window!, {
+    title: locale === "zh-CN" ? "导出 TP 人工确认清单" : "Export TP review list",
+    defaultPath: `${catalogId}-tp-review.csv`, filters: [{ name: "CSV", extensions: ["csv"] }]
+  });
+  if (target.canceled || !target.filePath) return { ok: false, path: null, row_count: result.row_count };
+  await copyFile(source, target.filePath);
+  return { ok: true, path: target.filePath, row_count: result.row_count };
+});
+ipcMain.handle("brd:import-review", (_event, input: { catalog_id: string; path: string; imported_by: string }): Promise<TestPointSelectionV1> => core.request("import_test_point_review", {
+  cache_dir: cacheDir, catalog_id: assertArtifactId(input.catalog_id), path: assertGrantedPath(grantedInputPaths, input.path), imported_by: input.imported_by
+}));
+ipcMain.handle("brd:read-selection", (_event, selectionId: string) => core.request<TestPointSelectionV1>("read_test_point_selection", { cache_dir: cacheDir, selection_id: assertArtifactId(selectionId) }));
+ipcMain.handle("brd:approve-selection", (_event, input: { selection_id: string; approved_by: string }): Promise<TestPointSelectionV1> => core.request("approve_test_point_selection", { cache_dir: cacheDir, selection_id: assertArtifactId(input.selection_id), approved_by: input.approved_by }));
+ipcMain.handle("brd:propose-alignment", (_event, input: { selection_id: string; design_id: string; anchors?: Array<{ candidate_id: string; design_point: { x: number; y: number } }> }): Promise<TestPointAlignmentV1> => core.request("propose_test_point_alignment", {
+  cache_dir: cacheDir, selection_id: assertArtifactId(input.selection_id), design_id: assertArtifactId(input.design_id), anchors: input.anchors ?? []
+}));
+ipcMain.handle("brd:read-alignment", (_event, alignmentId: string) => core.request<TestPointAlignmentV1>("read_test_point_alignment", { cache_dir: cacheDir, alignment_id: assertArtifactId(alignmentId) }));
+ipcMain.handle("brd:approve-alignment", (_event, input: { alignment_id: string; approved_by: string; comment: string }): Promise<TestPointAlignmentV1> => core.request("approve_test_point_alignment", {
+  cache_dir: cacheDir, alignment_id: assertArtifactId(input.alignment_id), approved_by: input.approved_by, comment: input.comment
+}));
+ipcMain.handle("brd:analyze-selected", (_event, input: { design_id: string; selection_id: string; alignment_id: string; rule_pack_id: string }): Promise<SelectedTestPointAnalysisV1> => core.request("analyze_selected_test_points", {
+  cache_dir: cacheDir, design_id: assertArtifactId(input.design_id), selection_id: assertArtifactId(input.selection_id), alignment_id: assertArtifactId(input.alignment_id), rule_pack_id: assertArtifactId(input.rule_pack_id)
+}));
+
 ipcMain.handle("workbench:choose-input", async (_event, kind: "RULE_DOCUMENT" | "SCHEMATIC" | "TABLE", multiple: boolean, locale: "zh-CN" | "en-US") => {
   kind = assertOneOf(kind, ["RULE_DOCUMENT", "SCHEMATIC", "TABLE"] as const, "workbench input kind");
   const chinese = locale === "zh-CN";
@@ -263,7 +327,10 @@ ipcMain.handle("workbench:delete-artifact", async (_event, kind: ArtifactKind, r
     CONSTRAINT_SET: [path.join(cacheDir, "wib-constraints", `${id}.json`)],
     INTERFACE_CONTRACT: [path.join(cacheDir, "wib-interface-contracts", `${id}.json`)],
     LAYOUT_BASELINE: [path.join(cacheDir, "layout-baselines", `${id}.json`)],
-    ANALYSIS: [path.join(cacheDir, "analyses", `${id}.json`), path.join(cacheDir, "evidence", id)],
+    BRD_TP_CATALOG: [path.join(cacheDir, "brd-catalogs", id)],
+    TP_SELECTION: [path.join(cacheDir, "test-point-selections", `${id}.json`)],
+    TP_ALIGNMENT: [path.join(cacheDir, "test-point-alignments", `${id}.json`)],
+    ANALYSIS: [path.join(cacheDir, "analyses", `${id}.json`), path.join(cacheDir, "selected-analyses", `${id}.json`), path.join(cacheDir, "evidence", id)],
     WORKFLOW_DRAFT: [path.join(cacheDir, "workflow-drafts", `${id}.json`)]
   };
   if (!Object.hasOwn(targets, kind)) throw new Error("Unsupported artifact kind");
@@ -605,6 +672,11 @@ ipcMain.handle("analysis:read", async (_event, analysisId: string) => {
     if (["WIRING_COMPARISON", "MANUFACTURING_TEST_RECOMMENDATIONS", "LAYOUT_TEST_ACCESS_ANALYSIS", "WIB_DESIGN_QUALIFICATION"].includes(parsed.kind ?? "")) return parsed;
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+  }
+  try {
+    return await core.request<SelectedTestPointAnalysisV1>("read_selected_test_point_analysis", { cache_dir: cacheDir, analysis_id: analysisId });
+  } catch {
+    // Continue to the existing geometry-analysis lookup.
   }
   const geometry = await core.request<Record<string, unknown>>("read_analysis", { cache_dir: cacheDir, analysis_id: analysisId });
   return { ...geometry, report_path: path.join(cacheDir, "evidence", analysisId, "report.html") };

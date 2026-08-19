@@ -144,6 +144,177 @@ server.registerTool(
   }
 );
 
+const tpCatalogOutputSchema = {
+  schema_version: z.literal(1), kind: z.literal("BRD_TEST_POINT_CATALOG"), id: z.string(), source_path: z.string(), brd_sha256: z.string(),
+  declared_allegro_version: z.string().nullable(), detected_allegro_version: z.string().nullable(), product_revision: z.string().nullable(),
+  bounds: z.record(z.string(), z.number()), converter: z.record(z.string(), z.unknown()), candidates: z.array(z.record(z.string(), z.unknown())),
+  diagnostics: z.array(z.record(z.string(), z.unknown())), review_csv_path: z.string(), generated_at: z.string(), content_hash: z.string(), cache_hit: z.boolean()
+};
+const tpSelectionOutputSchema = {
+  schema_version: z.literal(1), kind: z.literal("TEST_POINT_SELECTION"), id: z.string(), catalog_id: z.string(), catalog_content_hash: z.string(),
+  brd_sha256: z.string(), lifecycle_status: z.enum(["DRAFT", "APPROVED", "SUPERSEDED"]), decisions: z.array(z.record(z.string(), z.unknown())),
+  imported_by: z.string(), imported_at: z.string(), unresolved_count: z.number(), approval: z.record(z.string(), z.unknown()).nullable(), content_hash: z.string()
+};
+const tpAlignmentOutputSchema = {
+  schema_version: z.literal(1), kind: z.literal("TEST_POINT_ALIGNMENT"), id: z.string(), lifecycle_status: z.enum(["DRAFT", "APPROVED", "SUPERSEDED"]),
+  selection_id: z.string(), selection_content_hash: z.string(), catalog_id: z.string(), design_id: z.string(), design_content_hash: z.string(),
+  selected: z.record(z.string(), z.unknown()), alternatives: z.array(z.record(z.string(), z.unknown())), preview_bindings: z.array(z.record(z.string(), z.unknown())), anchors: z.array(z.record(z.string(), z.unknown())),
+  requires_manual_anchors: z.boolean(), generated_at: z.string(), approval: z.record(z.string(), z.unknown()).nullable(), content_hash: z.string()
+};
+
+server.registerTool(
+  "import_brd_test_points",
+  {
+    title: "Import Allegro BRD test-point candidates",
+    description: "Use the locally installed KiCad 10 CLI to convert an authorized Allegro BRD and create an auditable TP candidate catalog. BRD geometry is not manufacturing truth.",
+    inputSchema: { path: z.string().min(1), declared_allegro_version: z.string().min(1).optional(), product_revision: z.string().min(1).optional() },
+    outputSchema: tpCatalogOutputSchema,
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ path: brdPath, declared_allegro_version, product_revision }, extra) => {
+    await progress(extra, 0, 100, "Resolving KiCad 10 and converting the local Allegro BRD");
+    const catalog = await core.request<Record<string, unknown>>("import_brd_test_points", {
+      path: path.resolve(brdPath), cache_dir: cacheDir,
+      ...(declared_allegro_version ? { declared_allegro_version } : {}), ...(product_revision ? { product_revision } : {})
+    }, extra.signal);
+    await progress(extra, 100, 100, "BRD TP catalog and review CSV are ready");
+    return {
+      content: [
+        { type: "text" as const, text: `Created BRD TP catalog ${String(catalog.id)} with ${(catalog.candidates as unknown[]).length} candidate(s). Identity completeness remains independent from DFT verdicts.` },
+        { type: "resource_link" as const, name: "Open TP review CSV", uri: pathToFileURL(String(catalog.review_csv_path)).href, mimeType: "text/csv" },
+        { type: "resource_link" as const, name: "Open TP workflow in CircuitInspector Viewer", uri: tpWorkflowLink("catalog", String(catalog.id)), mimeType: "application/x-circuit-inspector" }
+      ],
+      structuredContent: catalog
+    };
+  }
+);
+
+server.registerTool(
+  "query_brd_test_points",
+  {
+    title: "Query BRD test-point candidates",
+    description: "Page and filter the immutable BRD TP candidate catalog by side and identity confidence.",
+    inputSchema: { catalog_id: z.string().min(1), side: z.enum(["TOP", "BOTTOM", "INNER", "NA"]).optional(), confidence: z.enum(["EXPLICIT", "SUPPLEMENTED", "INFERRED", "MISSING"]).optional(), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(1000).default(100) },
+    outputSchema: { catalog_id: z.string(), total: z.number(), offset: z.number(), limit: z.number(), candidates: z.array(z.record(z.string(), z.unknown())) },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  },
+  async (input, extra) => {
+    const result = await core.request<Record<string, unknown>>("query_brd_test_points", { cache_dir: cacheDir, ...input }, extra.signal);
+    return toolResult(result, `Returned ${(result.candidates as unknown[]).length} of ${String(result.total)} BRD TP candidates.`);
+  }
+);
+
+server.registerTool(
+  "export_test_point_review",
+  {
+    title: "Export TP review CSV",
+    description: "Regenerate the controlled UTF-8 BOM RFC 4180 review CSV. Only decision and comment may be edited.",
+    inputSchema: { catalog_id: z.string().min(1) },
+    outputSchema: { catalog_id: z.string(), csv_path: z.string(), row_count: z.number(), mime_type: z.literal("text/csv") },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  },
+  async ({ catalog_id }, extra) => {
+    const result = await core.request<{ catalog_id: string; csv_path: string; row_count: number; mime_type: "text/csv" }>("export_test_point_review", { cache_dir: cacheDir, catalog_id }, extra.signal);
+    return {
+      content: [
+        { type: "text" as const, text: `Exported ${result.row_count} TP review row(s).` },
+        { type: "resource_link" as const, name: "TP review CSV", uri: pathToFileURL(result.csv_path).href, mimeType: "text/csv" },
+        { type: "resource_link" as const, name: "Open TP workflow in CircuitInspector Viewer", uri: tpWorkflowLink("catalog", catalog_id), mimeType: "application/x-circuit-inspector" }
+      ], structuredContent: result
+    };
+  }
+);
+
+server.registerTool(
+  "import_test_point_review",
+  {
+    title: "Import human-reviewed TP CSV",
+    description: "Validate the complete TP CSV atomically. Unknown, duplicate, missing, changed immutable fields, or a wrong BRD hash reject the whole import.",
+    inputSchema: { catalog_id: z.string().min(1), path: z.string().min(1), imported_by: z.string().min(1) },
+    outputSchema: tpSelectionOutputSchema,
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ catalog_id, path: csvPath, imported_by }, extra) => {
+    const selection = await core.request<Record<string, unknown>>("import_test_point_review", { cache_dir: cacheDir, catalog_id, path: path.resolve(csvPath), imported_by }, extra.signal);
+    return { content: [
+      { type: "text" as const, text: `Imported TP selection ${String(selection.id)} as DRAFT with ${String(selection.unresolved_count)} REVIEW row(s).` },
+      { type: "resource_link" as const, name: "Open TP selection in CircuitInspector Viewer", uri: tpWorkflowLink("selection", String(selection.id)), mimeType: "application/x-circuit-inspector" }
+    ], structuredContent: selection };
+  }
+);
+
+server.registerTool(
+  "approve_test_point_selection",
+  {
+    title: "Approve TP selection",
+    description: "Freeze a fully closed human TP selection under the named approver and immutable content hash. Any REVIEW row blocks approval.",
+    inputSchema: { selection_id: z.string().min(1), approved_by: z.string().min(1) }, outputSchema: tpSelectionOutputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+  },
+  async ({ selection_id, approved_by }, extra) => {
+    const selection = await core.request<Record<string, unknown>>("approve_test_point_selection", { cache_dir: cacheDir, selection_id, approved_by }, extra.signal);
+    return toolResult(selection, `Approved immutable TP selection ${String(selection.id)} at ${String(selection.content_hash)}.`);
+  }
+);
+
+server.registerTool(
+  "propose_test_point_alignment",
+  {
+    title: "Propose BRD to Gerber TP alignment",
+    description: "Rank the eight orthogonal mirror/rotation transforms and translations. Suggestions are never auto-approved; ambiguous results require three non-collinear anchors.",
+    inputSchema: { selection_id: z.string().min(1), design_id: z.string().min(1), anchors: z.array(z.object({ candidate_id: z.string().min(1), design_point: z.object({ x: z.number().int(), y: z.number().int() }) })).optional() },
+    outputSchema: tpAlignmentOutputSchema,
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ selection_id, design_id, anchors }, extra) => {
+    const alignment = await core.request<Record<string, unknown>>("propose_test_point_alignment", { cache_dir: cacheDir, selection_id, design_id, ...(anchors ? { anchors } : {}) }, extra.signal);
+    return { content: [
+      { type: "text" as const, text: `Alignment proposal ${String(alignment.id)} is DRAFT. Manual anchors required: ${String(alignment.requires_manual_anchors)}.` },
+      { type: "resource_link" as const, name: "Review alignment in CircuitInspector Viewer", uri: tpWorkflowLink("alignment", String(alignment.id)), mimeType: "application/x-circuit-inspector" }
+    ], structuredContent: alignment };
+  }
+);
+
+server.registerTool(
+  "approve_test_point_alignment",
+  {
+    title: "Approve BRD to Gerber alignment",
+    description: "Freeze the reviewed transform, side mapping, residuals, anchors, lineage, approver, time, and comment.",
+    inputSchema: { alignment_id: z.string().min(1), approved_by: z.string().min(1), comment: z.string().min(1) }, outputSchema: tpAlignmentOutputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+  },
+  async ({ alignment_id, approved_by, comment }, extra) => {
+    const alignment = await core.request<Record<string, unknown>>("approve_test_point_alignment", { cache_dir: cacheDir, alignment_id, approved_by, comment }, extra.signal);
+    return toolResult(alignment, `Approved immutable BRD-to-Gerber alignment ${String(alignment.id)}.`);
+  }
+);
+
+server.registerTool(
+  "analyze_selected_test_points",
+  {
+    title: "Analyze approved selected TPs on Gerber",
+    description: "Bind only REQUIRED BRD TPs to same-side Gerber contact geometry and run only approved rules involving TEST_POINT. Production readiness always remains REVIEW.",
+    inputSchema: { design_id: z.string().min(1), selection_id: z.string().min(1), alignment_id: z.string().min(1), rule_pack_id: z.string().min(1) },
+    outputSchema: {
+      schema_version: z.literal(1), kind: z.literal("SELECTED_TEST_POINT_ANALYSIS"), id: z.string(), design_id: z.string(), design_content_hash: z.string(), derived_design_id: z.string(), catalog_id: z.string(), catalog_content_hash: z.string(),
+      selection_id: z.string(), selection_content_hash: z.string(), alignment_id: z.string(), alignment_content_hash: z.string(), rule_pack_id: z.string(), rule_pack_content_hash: z.string(), geometry_analysis_id: z.string(),
+      verdict: z.enum(["PASS", "FAIL", "REVIEW", "NOT_APPLICABLE"]), production_readiness_verdict: z.literal("REVIEW"), pass_count: z.number(), fail_count: z.number(), review_count: z.number(), not_applicable_count: z.number(), required_count: z.number(),
+      bindings: z.array(z.record(z.string(), z.unknown())), violations: z.array(z.record(z.string(), z.unknown())), diagnostics: z.array(z.record(z.string(), z.unknown())), report_uri: z.string(), report_path: z.string(), elapsed_ms: z.number(), stale: z.record(z.string(), z.unknown()).optional()
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async (input, extra) => {
+    await progress(extra, 0, 100, "Binding approved REQUIRED TPs to Gerber contact geometry");
+    const analysis = await core.request<Record<string, unknown>>("analyze_selected_test_points", { cache_dir: cacheDir, ...input }, extra.signal);
+    await progress(extra, 100, 100, "Selected-TP DFT analysis is ready; production readiness remains REVIEW");
+    return { content: [
+      { type: "text" as const, text: `Selected-TP DFT ${String(analysis.id)}: ${String(analysis.verdict)}. Production readiness: REVIEW. PASS ${String(analysis.pass_count)}, FAIL ${String(analysis.fail_count)}, REVIEW ${String(analysis.review_count)}, N/A ${String(analysis.not_applicable_count)}.` },
+      { type: "resource_link" as const, name: "Open selected-TP DFT report", uri: String(analysis.report_uri), mimeType: "text/html" },
+      { type: "resource_link" as const, name: "Open selected-TP analysis in CircuitInspector Viewer", uri: viewerLink(String(analysis.id)), mimeType: "application/x-circuit-inspector" }
+    ], structuredContent: analysis };
+  }
+);
+
 server.registerTool(
   "import_schematic",
   {
@@ -926,8 +1097,9 @@ server.registerResource(
   new ResourceTemplate("circuit://analysis/{analysisId}/summary", { list: undefined }),
   { title: "CircuitInspector analysis summary", mimeType: "application/json" },
   async (uri, { analysisId }) => {
-    const analysis = await readLocalDocumentAnalysis(String(analysisId), cacheDir)
-      ?? await core.request("read_analysis", { cache_dir: cacheDir, analysis_id: String(analysisId) });
+    const local = await readLocalDocumentAnalysis(String(analysisId), cacheDir);
+    const analysis = local ?? await core.request("read_selected_test_point_analysis", { cache_dir: cacheDir, analysis_id: String(analysisId) })
+      .catch(() => core.request("read_analysis", { cache_dir: cacheDir, analysis_id: String(analysisId) }));
     return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(analysis, null, 2) }] };
   }
 );
@@ -1004,6 +1176,10 @@ async function invalidateSchematicAnalyses(schematicId: string, reason: string) 
 function viewerLink(analysisId: string, issueId?: string): string {
   const search = issueId ? `?issue=${encodeURIComponent(issueId)}` : "";
   return `circuitinspector://analysis/${encodeURIComponent(analysisId)}${search}`;
+}
+
+function tpWorkflowLink(kind: "catalog" | "selection" | "alignment", id: string): string {
+  return `circuitinspector://tp-workflow?${kind}=${encodeURIComponent(id)}`;
 }
 
 function resourceSegment(value: unknown, allowDot = false): string {

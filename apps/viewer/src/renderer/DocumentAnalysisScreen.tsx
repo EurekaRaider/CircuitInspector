@@ -1,6 +1,6 @@
 import { ArrowLeftIcon, ArrowRightIcon, CheckCircleIcon, FileHtmlIcon, FolderOpenIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import type { DocumentAnalysis, LayoutTestAccessAnalysis, TestRecommendationAnalysis, WibQualificationAnalysis, WiringAnalysis } from "./types";
+import type { DocumentAnalysis, LayoutTestAccessAnalysis, SelectedTestPointAnalysisV1, TestRecommendationAnalysis, WibQualificationAnalysis, WiringAnalysis } from "./types";
 import type { Locale } from "./i18n";
 
 interface Props {
@@ -19,7 +19,8 @@ export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpe
     analysis.kind === "WIRING_COMPARISON" ? analysis.violations[0]?.id ?? analysis.connections[0]?.id ?? null
       : analysis.kind === "WIB_DESIGN_QUALIFICATION" ? analysis.constraint_results.find((result) => result.status !== "PASS")?.id ?? analysis.constraint_results[0]?.id ?? null
         : analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS" ? analysis.mappings.find((result) => result.status !== "PASS")?.id ?? analysis.mappings[0]?.id ?? null
-          : analysis.recommendations[0]?.id ?? null
+          : analysis.kind === "SELECTED_TEST_POINT_ANALYSIS" ? analysis.bindings.find((result) => result.status !== "PASS")?.candidate_id ?? analysis.bindings[0]?.candidate_id ?? null
+            : analysis.recommendations[0]?.id ?? null
   );
   const title = analysis.kind === "WIRING_COMPARISON"
     ? chinese ? "产品 ↔ WIB 接线检查" : "Product ↔ WIB wiring check"
@@ -27,7 +28,9 @@ export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpe
       ? chinese ? "制造测试与 WIB 设计建议" : "Manufacturing test and WIB design plan"
       : analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS"
         ? chinese ? "Layout DFT 测试访问闭环" : "Layout DFT test-access closure"
-        : chinese ? "最终 WIB 设计闭环验证" : "Final WIB design qualification";
+        : analysis.kind === "SELECTED_TEST_POINT_ANALYSIS"
+          ? chinese ? "人工选择 TP 的 Gerber DFT 分析" : "Selected-TP Gerber DFT analysis"
+          : chinese ? "最终 WIB 设计闭环验证" : "Final WIB design qualification";
 
   return (
     <main className="app-shell relative grid h-full min-w-[1000px] grid-rows-[64px_minmax(0,1fr)_32px] overflow-hidden text-[#ecebe7]">
@@ -51,17 +54,46 @@ export function DocumentAnalysisScreen({ analysis, locale, onLocaleChange, onOpe
         <RecommendationContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} chinese={chinese} />
       ) : analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS" ? (
         <LayoutAccessContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} {...(onLocateTestPoint ? { onLocateTestPoint } : {})} chinese={chinese} />
+      ) : analysis.kind === "SELECTED_TEST_POINT_ANALYSIS" ? (
+        <SelectedTpContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} chinese={chinese} />
       ) : (
         <QualificationContent analysis={analysis} selectedId={selectedId} onSelect={setSelectedId} chinese={chinese} />
       )}
 
       <footer className="grid grid-cols-[272px_minmax(0,1fr)_360px] items-center border-t border-white/[0.07] bg-[#131517] font-mono text-[9px] tracking-[0.02em] text-[#696a67]">
         <div className="truncate border-r border-white/[0.07] px-4">{analysis.kind}</div>
-        <div className="px-4">{chinese ? "证据模式" : "EVIDENCE MODE"} · {analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS" ? "AUTOMATED_GEOMETRY + DOCUMENT_BACKED" : analysis.verification_mode}</div>
+        <div className="px-4">{chinese ? "证据模式" : "EVIDENCE MODE"} · {analysis.kind === "LAYOUT_TEST_ACCESS_ANALYSIS" || analysis.kind === "SELECTED_TEST_POINT_ANALYSIS" ? "AUTOMATED_GEOMETRY + HUMAN APPROVAL" : analysis.verification_mode}</div>
         <div className="border-l border-white/[0.07] px-4 text-right">{chinese ? "仅本地 · 报告已生成" : "LOCAL ONLY · REPORT READY"}</div>
       </footer>
     </main>
   );
+}
+
+function SelectedTpContent({ analysis, selectedId, onSelect, chinese }: { analysis: SelectedTestPointAnalysisV1; selectedId: string | null; onSelect(id: string): void; chinese: boolean }) {
+  const selected = analysis.bindings.find((binding) => binding.candidate_id === selectedId) ?? null;
+  return <section className="grid min-h-0 grid-cols-[272px_minmax(0,1fr)_360px]">
+    <aside className="sidebar-surface min-h-0 overflow-y-auto border-r border-white/[0.07] p-5">
+      <SectionLabel>{chinese ? "冻结输入谱系" : "FROZEN LINEAGE"}</SectionLabel>
+      {[['GERBER', analysis.design_id], ['TP SELECTION', analysis.selection_id], ['ALIGNMENT', analysis.alignment_id], ['RULE PACK', analysis.rule_pack_id]].map(([label, value]) => <div key={label} className="mb-2 rounded-lg border border-white/[0.07] bg-[#15191b] p-3"><div className="font-mono text-[9px] text-[#777e7b]">{label}</div><div className="mt-1 break-all font-mono text-[10px] text-[#c9c7c1]">{value}</div></div>)}
+      <SectionLabel>{chinese ? "规则裁决" : "RULE VERDICT"}</SectionLabel>
+      <div className="grid grid-cols-2 gap-2"><Metric label="PASS" value={analysis.pass_count} /><Metric label="FAIL" value={analysis.fail_count} /><Metric label="REVIEW" value={analysis.review_count} /><Metric label="N/A" value={analysis.not_applicable_count} /></div>
+      <div className="mt-4 rounded-xl border border-[#c79d57]/25 bg-[#2a2519] p-3 text-[10px] leading-5 text-[#b59a69]">{chinese ? "TP 身份、DFT 规则裁决和生产放行相互独立；生产放行固定为 REVIEW。" : "TP identity, DFT verdict, and production release are independent. Production readiness remains REVIEW."}</div>
+    </aside>
+    <div className="canvas-stage min-h-0 overflow-y-auto p-6">
+      <div className="mx-auto max-w-[1120px]">
+        <div className="mb-4 flex items-center justify-between"><div><h2 className="text-[15px] font-semibold">{chinese ? `${analysis.required_count} 个 REQUIRED TP 的 Gerber 绑定` : `${analysis.required_count} REQUIRED TP Gerber bindings`}</h2><p className="mt-1 text-[11px] text-[#777e7b]">{chinese ? "实际尺寸来自唯一命中的 Gerber 几何；歧义、未命中和 NET 冲突保持 REVIEW。" : "Actual sizes come from uniquely matched Gerber geometry; ambiguity, misses, and NET conflicts remain REVIEW."}</p></div><Verdict verdict={analysis.verdict} /></div>
+        <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-[#15191b]">
+          <div className="grid grid-cols-[1fr_80px_80px_130px_1fr_100px] gap-3 border-b border-white/[0.07] px-4 py-2 font-mono text-[9px] text-[#777e7b]"><span>TP</span><span>SIDE</span><span>STATUS</span><span>ACTUAL SIZE</span><span>GERBER FEATURE / NET</span><span>POSITION</span></div>
+          <div className="max-h-[640px] overflow-y-auto">{analysis.bindings.map((binding) => <button key={binding.candidate_id} onClick={() => onSelect(binding.candidate_id)} className={`grid w-full grid-cols-[1fr_80px_80px_130px_1fr_100px] gap-3 border-b border-white/[0.05] px-4 py-3 text-left text-[10px] ${selectedId === binding.candidate_id ? "bg-[#c5a063]/[0.08]" : "hover:bg-white/[0.025]"}`}><span className="font-mono text-[#d2d0ca]">{binding.candidate_id}</span><span>{binding.side}</span><Verdict verdict={binding.status} compact /><span className="font-mono text-[#858b88]">{binding.matched_width_nm != null && binding.matched_height_nm != null ? `${(binding.matched_width_nm / 1e6).toFixed(3)} × ${(binding.matched_height_nm / 1e6).toFixed(3)} mm` : "—"}</span><span className="truncate font-mono text-[#858b88]">{binding.matched_feature_id ?? "UNMATCHED"} · {binding.matched_net_name ?? "NET ?"}</span><span className="font-mono text-[#858b88]">{(binding.transformed_center.x / 1e6).toFixed(3)}, {(binding.transformed_center.y / 1e6).toFixed(3)}</span></button>)}</div>
+        </div>
+      </div>
+    </div>
+    <aside className="sidebar-surface min-h-0 overflow-y-auto border-l border-white/[0.07] p-5">
+      <PanelHead title={chinese ? "绑定与失败证据" : "BINDING AND FAILURE EVIDENCE"} verdict={analysis.verdict} />
+      {selected ? <div className="rounded-xl border border-white/[0.08] bg-[#15191b] p-4"><div className="font-mono text-[10px] text-[#c5a063]">{selected.candidate_id}</div><p className="mt-2 text-[11px] leading-5 text-[#8d9390]">{selected.message}</p><div className="mt-3 font-mono text-[9px] text-[#6f7572]">{selected.matched_layer_id ?? "NO LAYER"}</div></div> : null}
+      <div className="mt-4 space-y-3">{analysis.violations.filter((violation) => !selected || violation.entity_ids?.some((id) => id.includes(selected.candidate_id))).map((violation) => <div key={violation.id} className="rounded-xl border border-[#b76755]/25 bg-[#2b1e1a] p-3"><div className="font-mono text-[9px] text-[#d58e7d]">{violation.rule_id} · {violation.verdict}</div><p className="mt-1 text-[10px] leading-4 text-[#bd9289]">{violation.message}</p></div>)}</div>
+    </aside>
+  </section>;
 }
 
 function WiringContent({ analysis, selectedId, onSelect, onReview, chinese }: { analysis: WiringAnalysis; selectedId: string | null; onSelect(id: string): void; onReview?: () => void; chinese: boolean }) {

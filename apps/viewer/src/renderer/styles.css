@@ -594,6 +594,23 @@ label:has(input:focus-visible) {
   background: transparent;
 }
 
+.workflow-input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 9px;
+  background: rgba(13, 16, 18, 0.92);
+  padding: 0 10px;
+  color: #d8d6d0;
+  font-size: 10px;
+  outline: none;
+}
+
+.workflow-input:focus {
+  border-color: rgba(197, 160, 99, 0.55);
+  box-shadow: 0 0 0 2px rgba(197, 160, 99, 0.08);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
