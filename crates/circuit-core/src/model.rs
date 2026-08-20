@@ -542,6 +542,41 @@ impl Design {
             },
         )
     }
+
+    pub fn covering_shield_candidate(&self, point: PointNm, side: Side) -> Option<&Component> {
+        if !matches!(side, Side::Top | Side::Bottom) {
+            return None;
+        }
+        self.components
+            .iter()
+            .filter(|component| component.side == side && component.is_shield_candidate())
+            .filter(|component| {
+                point.x >= component.bounds.min_x
+                    && point.x <= component.bounds.max_x
+                    && point.y >= component.bounds.min_y
+                    && point.y <= component.bounds.max_y
+            })
+            .min_by(|left, right| {
+                let area = |component: &Component| {
+                    i128::from(
+                        component
+                            .bounds
+                            .max_x
+                            .saturating_sub(component.bounds.min_x)
+                            .max(0),
+                    ) * i128::from(
+                        component
+                            .bounds
+                            .max_y
+                            .saturating_sub(component.bounds.min_y)
+                            .max(0),
+                    )
+                };
+                area(left)
+                    .cmp(&area(right))
+                    .then_with(|| left.refdes.cmp(&right.refdes))
+            })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -720,5 +755,82 @@ mod tests {
         };
         assert_eq!(bounds.distance_to_point(PointNm { x: 5, y: 5 }), 0);
         assert_eq!(bounds.distance_to_point(PointNm { x: 13, y: 14 }), 5);
+    }
+
+    #[test]
+    fn covering_shield_candidate_is_same_side_and_uses_smallest_cover() {
+        let component = |refdes: &str, side: Side, bounds: BoundsNm| Component {
+            refdes: refdes.into(),
+            package_name: Some("EMI_SHIELD".into()),
+            center: bounds.center(),
+            bounds,
+            side,
+            pins: Vec::new(),
+            confidence: CoverageLevel::Explicit,
+        };
+        let design = Design {
+            schema_version: Design::SCHEMA_VERSION,
+            id: "shield-fixture".into(),
+            format: DesignFormat::GerberPackage,
+            source_path: "fixture".into(),
+            content_hash: "fixture".into(),
+            bounds: BoundsNm {
+                min_x: 0,
+                min_y: 0,
+                max_x: 10,
+                max_y: 10,
+            },
+            layers: Vec::new(),
+            components: vec![
+                component(
+                    "SH1",
+                    Side::Top,
+                    BoundsNm {
+                        min_x: 0,
+                        min_y: 0,
+                        max_x: 10,
+                        max_y: 10,
+                    },
+                ),
+                component(
+                    "SH2",
+                    Side::Top,
+                    BoundsNm {
+                        min_x: 2,
+                        min_y: 2,
+                        max_x: 8,
+                        max_y: 8,
+                    },
+                ),
+                component(
+                    "SH3",
+                    Side::Bottom,
+                    BoundsNm {
+                        min_x: 4,
+                        min_y: 4,
+                        max_x: 6,
+                        max_y: 6,
+                    },
+                ),
+            ],
+            nets: Vec::new(),
+            test_points: Vec::new(),
+            coverage: SemanticCoverage::default(),
+            diagnostics: Vec::new(),
+        };
+        let point = PointNm { x: 5, y: 5 };
+        assert_eq!(
+            design
+                .covering_shield_candidate(point, Side::Top)
+                .map(|shield| shield.refdes.as_str()),
+            Some("SH2")
+        );
+        assert_eq!(
+            design
+                .covering_shield_candidate(point, Side::Bottom)
+                .map(|shield| shield.refdes.as_str()),
+            Some("SH3")
+        );
+        assert!(design.covering_shield_candidate(point, Side::Na).is_none());
     }
 }

@@ -730,6 +730,9 @@ export interface SelectedTestPointBindingV1 {
   matched_center: { x: number; y: number } | null;
   matched_width_nm: number | null;
   matched_height_nm: number | null;
+  shield_candidate_refdes: string | null;
+  shield_identity_confidence: CoverageLevel | null;
+  shield_bounds: BoundsNm | null;
   message: string;
 }
 

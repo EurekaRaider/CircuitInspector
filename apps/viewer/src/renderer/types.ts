@@ -52,6 +52,8 @@ export interface TestPointAlignmentOverlay {
   gerber_center: { x: number; y: number } | null;
   gerber_width_nm: number | null;
   gerber_height_nm: number | null;
+  shield_candidate_refdes: string | null;
+  shield_bounds: BoundsNm | null;
 }
 
 export interface LayerSummary {

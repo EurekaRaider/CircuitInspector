@@ -183,6 +183,17 @@ export class BoardRenderer {
       const brdY = point.brd_center.y / 1_000_000;
       const markerRadius = Math.max(0.04, 7 / this.#view.zoom);
       addRing(write, brdX, brdY, markerRadius, [0.98, 0.69, 0.27, 1]);
+      if (point.shield_bounds) {
+        addRectOutline(
+          write,
+          point.shield_bounds.min_x / 1_000_000,
+          point.shield_bounds.min_y / 1_000_000,
+          point.shield_bounds.max_x / 1_000_000,
+          point.shield_bounds.max_y / 1_000_000,
+          3 / this.#view.zoom,
+          [0.82, 0.65, 0.32, 1]
+        );
+      }
       if (!point.gerber_center) {
         addLine(write, brdX - markerRadius, brdY - markerRadius, brdX + markerRadius, brdY + markerRadius, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
         addLine(write, brdX - markerRadius, brdY + markerRadius, brdX + markerRadius, brdY - markerRadius, 2 / this.#view.zoom, [0.88, 0.36, 0.27, 1]);
@@ -190,7 +201,7 @@ export class BoardRenderer {
       }
       const gerberX = point.gerber_center.x / 1_000_000;
       const gerberY = point.gerber_center.y / 1_000_000;
-      const color = point.status === "PASS" ? [0.56, 0.72, 0.42, 1] : [0.88, 0.36, 0.27, 1];
+      const color = point.status === "PASS" ? [0.56, 0.72, 0.42, 1] : [0.82, 0.65, 0.32, 1];
       addLine(write, brdX, brdY, gerberX, gerberY, 2 / this.#view.zoom, [0.33, 0.73, 0.76, 1]);
       if (point.gerber_width_nm != null && point.gerber_height_nm != null) {
         const halfWidth = point.gerber_width_nm / 2_000_000;

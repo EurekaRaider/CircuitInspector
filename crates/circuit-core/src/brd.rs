@@ -205,6 +205,12 @@ pub struct SelectedTestPointBinding {
     pub matched_center: Option<PointNm>,
     pub matched_width_nm: Option<i64>,
     pub matched_height_nm: Option<i64>,
+    #[serde(default)]
+    pub shield_candidate_refdes: Option<String>,
+    #[serde(default)]
+    pub shield_identity_confidence: Option<CoverageLevel>,
+    #[serde(default)]
+    pub shield_bounds: Option<BoundsNm>,
     pub message: String,
 }
 
@@ -864,6 +870,8 @@ pub fn analyze_selected_test_points_request(params: Value) -> CoreResult<Value> 
                 ),
             ),
         };
+        let (status, message, shield_candidate_refdes, shield_identity_confidence, shield_bounds) =
+            apply_shield_review(&design, transformed_center, side, status, message);
         if let Some(feature) = matched {
             let radius_nm = match feature.geometry {
                 FeatureGeometry::Pad {
@@ -920,6 +928,9 @@ pub fn analyze_selected_test_points_request(params: Value) -> CoreResult<Value> 
                 let bounds = feature.geometry.bounds();
                 bounds.max_y - bounds.min_y
             }),
+            shield_candidate_refdes,
+            shield_identity_confidence,
+            shield_bounds,
             message,
         });
     }
@@ -2560,6 +2571,13 @@ fn preview_alignment_bindings(
                     ),
                 ),
             };
+            let (
+                status,
+                message,
+                shield_candidate_refdes,
+                shield_identity_confidence,
+                shield_bounds,
+            ) = apply_shield_review(design, transformed_center, side, status, message);
             SelectedTestPointBinding {
                 candidate_id: candidate.id.clone(),
                 decision: decision.decision,
@@ -2578,10 +2596,45 @@ fn preview_alignment_bindings(
                     let bounds = feature.geometry.bounds();
                     bounds.max_y - bounds.min_y
                 }),
+                shield_candidate_refdes,
+                shield_identity_confidence,
+                shield_bounds,
                 message,
             }
         })
         .collect()
+}
+
+fn apply_shield_review(
+    design: &Design,
+    point: PointNm,
+    side: Side,
+    status: BindingStatus,
+    mut message: String,
+) -> (
+    BindingStatus,
+    String,
+    Option<String>,
+    Option<CoverageLevel>,
+    Option<BoundsNm>,
+) {
+    let Some(shield) = design.covering_shield_candidate(point, side) else {
+        return (status, message, None, None, None);
+    };
+    if !message.is_empty() {
+        message.push(' ');
+    }
+    message.push_str(&format!(
+        "The approved TP is inside same-side inferred shield candidate {}; physical probe access remains REVIEW.",
+        shield.refdes
+    ));
+    (
+        BindingStatus::Review,
+        message,
+        Some(shield.refdes.clone()),
+        Some(CoverageLevel::Inferred),
+        Some(shield.bounds),
+    )
 }
 
 fn contact_features(design: &Design, point: PointNm, side: Side) -> Vec<&Feature> {
@@ -2649,8 +2702,11 @@ fn render_selected_report(analysis: &SelectedTestPointAnalysis) -> String {
             (Some(width), Some(height)) => format!("{:.6} × {:.6} mm", width as f64 / 1_000_000.0, height as f64 / 1_000_000.0),
             _ => "N/A".into(),
         };
+        let shield = binding.shield_candidate_refdes.as_deref().map(|reference| {
+            format!("{} · {:?}", html(reference), binding.shield_identity_confidence.unwrap_or(CoverageLevel::Inferred))
+        }).unwrap_or_else(|| "-".into());
         format!(
-            "<tr class=\"{}\"><td>{}</td><td><code>{}</code></td><td>{}</td><td>{:?}</td><td>{:.6}</td><td>{:.6}</td><td>{size}</td><td><code>{}</code></td><td>{}</td></tr>",
+            "<tr class=\"{}\"><td>{}</td><td><code>{}</code></td><td>{}</td><td>{:?}</td><td>{:.6}</td><td>{:.6}</td><td>{size}</td><td><code>{}</code></td><td>{shield}</td><td>{}</td></tr>",
             if binding.status == BindingStatus::Pass { "pass" } else { "review" },
             if binding.status == BindingStatus::Pass { "PASS" } else { "REVIEW" },
             html(&binding.candidate_id),
@@ -2671,7 +2727,7 @@ fn render_selected_report(analysis: &SelectedTestPointAnalysis) -> String {
         html(&violation.message),
     )).collect::<String>();
     format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Selected TP DFT {verdict:?}</title><style>:root{{font-family:Inter,system-ui;color-scheme:dark;background:#111416;color:#ecebe7}}body{{margin:0}}main{{max-width:1500px;margin:auto;padding:36px}}header{{display:flex;justify-content:space-between;border-bottom:1px solid #2d3234;padding-bottom:22px}}h1{{margin:6px 0}}p,li{{color:#a4aaa7;line-height:1.6}}.badge{{padding:9px 15px;border:1px solid #5c5140;border-radius:999px;height:max-content}}.metrics{{display:flex;gap:10px;margin:22px 0}}.metrics div{{flex:1;padding:16px;border:1px solid #2d3234;border-radius:10px}}table{{width:100%;border-collapse:collapse;font-size:11px}}th,td{{padding:9px;text-align:left;vertical-align:top;border-bottom:1px solid #2a2f31}}tr.fail{{background:#2c1e1b}}tr.review{{background:#292419}}code{{color:#b7c7c3}}footer{{margin-top:26px;padding-top:18px;border-top:1px solid #2d3234;color:#9a8870}}</style></head><body><main><header><div><small>CircuitInspector · SELECTED TP DFT</small><h1>BRD selection → Gerber geometry</h1><code>{id}</code></div><strong class="badge">{verdict:?}</strong></header><section class="metrics"><div><b>{pass}</b> PASS</div><div><b>{fail}</b> FAIL</div><div><b>{review}</b> REVIEW</div><div><b>{na}</b> N/A</div></section><section><h2>Controlled inputs</h2><ul><li>Gerber design: <code>{design}</code> · {design_hash}</li><li>TP selection: <code>{selection}</code> · {selection_hash}</li><li>Alignment: <code>{alignment}</code> · {alignment_hash}</li><li>Approved rule pack: <code>{rules}</code> · {rules_hash}</li></ul></section><section><h2>Required TP binding</h2><table><thead><tr><th>Status</th><th>Candidate</th><th>Decision</th><th>Side</th><th>X mm</th><th>Y mm</th><th>Actual size</th><th>Gerber feature</th><th>Evidence</th></tr></thead><tbody>{binding_rows}</tbody></table></section><section><h2>Automated TP geometry</h2><table><thead><tr><th>Verdict</th><th>Rule</th><th>Actual</th><th>Threshold</th><th>Finding</th></tr></thead><tbody>{violations}</tbody></table></section><footer>Production readiness remains REVIEW. Static geometry does not establish probe reach, fixture mechanics, contact reliability, tester capacity, powered safety, throughput, pilot yield, or factory release.</footer></main></body></html>"#,
+        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Selected TP DFT {verdict:?}</title><style>:root{{font-family:Inter,system-ui;color-scheme:dark;background:#111416;color:#ecebe7}}body{{margin:0}}main{{max-width:1500px;margin:auto;padding:36px}}header{{display:flex;justify-content:space-between;border-bottom:1px solid #2d3234;padding-bottom:22px}}h1{{margin:6px 0}}p,li{{color:#a4aaa7;line-height:1.6}}.badge{{padding:9px 15px;border:1px solid #5c5140;border-radius:999px;height:max-content}}.metrics{{display:flex;gap:10px;margin:22px 0}}.metrics div{{flex:1;padding:16px;border:1px solid #2d3234;border-radius:10px}}table{{width:100%;border-collapse:collapse;font-size:11px}}th,td{{padding:9px;text-align:left;vertical-align:top;border-bottom:1px solid #2a2f31}}tr.fail{{background:#2c1e1b}}tr.review{{background:#292419}}code{{color:#b7c7c3}}footer{{margin-top:26px;padding-top:18px;border-top:1px solid #2d3234;color:#9a8870}}</style></head><body><main><header><div><small>CircuitInspector · SELECTED TP DFT</small><h1>BRD selection → Gerber geometry</h1><code>{id}</code></div><strong class="badge">{verdict:?}</strong></header><section class="metrics"><div><b>{pass}</b> PASS</div><div><b>{fail}</b> FAIL</div><div><b>{review}</b> REVIEW</div><div><b>{na}</b> N/A</div></section><section><h2>Controlled inputs</h2><ul><li>Gerber design: <code>{design}</code> · {design_hash}</li><li>TP selection: <code>{selection}</code> · {selection_hash}</li><li>Alignment: <code>{alignment}</code> · {alignment_hash}</li><li>Approved rule pack: <code>{rules}</code> · {rules_hash}</li></ul></section><section><h2>Required TP binding</h2><table><thead><tr><th>Status</th><th>Candidate</th><th>Decision</th><th>Side</th><th>X mm</th><th>Y mm</th><th>Actual size</th><th>Gerber feature</th><th>Shield candidate</th><th>Evidence</th></tr></thead><tbody>{binding_rows}</tbody></table></section><section><h2>Automated TP geometry</h2><table><thead><tr><th>Verdict</th><th>Rule</th><th>Actual</th><th>Threshold</th><th>Finding</th></tr></thead><tbody>{violations}</tbody></table></section><footer>Production readiness remains REVIEW. Static geometry does not establish probe reach, fixture mechanics, contact reliability, tester capacity, powered safety, throughput, pilot yield, or factory release.</footer></main></body></html>"#,
         verdict = analysis.verdict,
         id = html(&analysis.id),
         pass = analysis.pass_count,
@@ -2820,7 +2876,7 @@ fn diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Layer, Polarity, SemanticCoverage};
+    use crate::model::{Component, Layer, Polarity, SemanticCoverage};
     use std::collections::BTreeMap;
 
     fn sample_catalog() -> BrdTestPointCatalog {
@@ -3080,6 +3136,52 @@ mod tests {
         assert_eq!(preview[0].status, BindingStatus::Pass);
         assert_eq!(preview[0].matched_feature_id.as_deref(), Some("cu"));
         assert_eq!(preview[0].matched_width_nm, Some(900_000));
+        design.components.push(Component {
+            refdes: "SH1".into(),
+            package_name: Some("EMI_SHIELD".into()),
+            center: point,
+            bounds: BoundsNm {
+                min_x: point.x - 2_000_000,
+                min_y: point.y - 2_000_000,
+                max_x: point.x + 2_000_000,
+                max_y: point.y + 2_000_000,
+            },
+            side: Side::Top,
+            pins: Vec::new(),
+            confidence: CoverageLevel::Explicit,
+        });
+        let shielded = preview_alignment_bindings(
+            &[(&candidate, &decision)],
+            &design,
+            &TestPointTransform {
+                rotation_deg: 0,
+                mirrored: false,
+                swap_sides: false,
+                translate_x_nm: 0,
+                translate_y_nm: 0,
+            },
+        );
+        assert_eq!(shielded[0].status, BindingStatus::Review);
+        assert_eq!(shielded[0].shield_candidate_refdes.as_deref(), Some("SH1"));
+        assert_eq!(
+            shielded[0].shield_identity_confidence,
+            Some(CoverageLevel::Inferred)
+        );
+        assert!(shielded[0].message.contains("physical probe access"));
+        design.components[0].side = Side::Bottom;
+        let opposite_side = preview_alignment_bindings(
+            &[(&candidate, &decision)],
+            &design,
+            &TestPointTransform {
+                rotation_deg: 0,
+                mirrored: false,
+                swap_sides: false,
+                translate_x_nm: 0,
+                translate_y_nm: 0,
+            },
+        );
+        assert_eq!(opposite_side[0].status, BindingStatus::Pass);
+        assert!(opposite_side[0].shield_candidate_refdes.is_none());
         assert!(
             contact_mask_evidence(
                 &design,
@@ -3487,6 +3589,60 @@ mod tests {
                 .unwrap()
                 .test_points
                 .is_empty()
+        );
+
+        let mut shielded_design = design.clone();
+        shielded_design.id = "gerber-design-shielded".into();
+        shielded_design.content_hash = "gerber-content-shielded".into();
+        shielded_design.components.push(Component {
+            refdes: "SH1".into(),
+            package_name: Some("SHIELD_CAN".into()),
+            center,
+            bounds: BoundsNm {
+                min_x: center.x - 2_000_000,
+                min_y: center.y - 2_000_000,
+                max_x: center.x + 2_000_000,
+                max_y: center.y + 2_000_000,
+            },
+            side: Side::Top,
+            pins: Vec::new(),
+            confidence: CoverageLevel::Explicit,
+        });
+        cache.save_design(&shielded_design).unwrap();
+        let mut shielded_alignment = alignment.clone();
+        shielded_alignment.id = "alignment-shielded".into();
+        shielded_alignment.design_id = shielded_design.id.clone();
+        shielded_alignment.design_content_hash = shielded_design.content_hash.clone();
+        shielded_alignment.content_hash = "alignment-content-shielded".into();
+        shielded_alignment.approval.as_mut().unwrap().content_hash =
+            shielded_alignment.content_hash.clone();
+        cache
+            .save_json(
+                &alignment_path(&cache, &shielded_alignment.id),
+                &shielded_alignment,
+            )
+            .unwrap();
+        let shielded: SelectedTestPointAnalysis = serde_json::from_value(
+            analyze_selected_test_points_request(json!({
+                "cache_dir": cache.root(),
+                "design_id": shielded_design.id,
+                "selection_id": selection.id,
+                "alignment_id": shielded_alignment.id,
+                "rule_pack_id": pack.id,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(shielded.verdict, Verdict::Review);
+        assert_eq!(shielded.bindings[0].status, BindingStatus::Review);
+        assert_eq!(
+            shielded.bindings[0].shield_candidate_refdes.as_deref(),
+            Some("SH1")
+        );
+        assert!(
+            fs::read_to_string(&shielded.report_path)
+                .unwrap()
+                .contains("Shield candidate")
         );
     }
 

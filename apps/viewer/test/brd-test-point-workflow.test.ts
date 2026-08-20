@@ -54,12 +54,13 @@ describe("BRD TP five-step Viewer workflow", () => {
       review_count: 1,
       not_applicable_count: 0,
       required_count: 1,
-      bindings: [{ candidate_id: "tp1", decision: "REQUIRED", status: "REVIEW", transformed_center: { x: 1_000_000, y: 2_000_000 }, side: "TOP", matched_feature_id: "pad1", matched_layer_id: "top.gtl", matched_net_name: "GND", matched_center: { x: 1_000_000, y: 2_000_000 }, matched_width_nm: 900_000, matched_height_nm: 800_000, message: "Solder-mask semantics are missing." }],
+      bindings: [{ candidate_id: "tp1", decision: "REQUIRED", status: "REVIEW", transformed_center: { x: 1_000_000, y: 2_000_000 }, side: "TOP", matched_feature_id: "pad1", matched_layer_id: "top.gtl", matched_net_name: "GND", matched_center: { x: 1_000_000, y: 2_000_000 }, matched_width_nm: 900_000, matched_height_nm: 800_000, shield_candidate_refdes: "SH1", shield_identity_confidence: "INFERRED", shield_bounds: { min_x: 500_000, min_y: 1_500_000, max_x: 1_500_000, max_y: 2_500_000 }, message: "The approved TP is inside same-side inferred shield candidate SH1; physical probe access remains REVIEW." }],
       violations: [], diagnostics: [], report_uri: "circuit://analysis/selected-a/report", report_path: "/tmp/report.html", elapsed_ms: 1
     } satisfies SelectedTestPointAnalysisV1;
     const markup = renderToStaticMarkup(createElement(DocumentAnalysisScreen, { analysis, locale: "zh-CN", onLocaleChange: () => undefined, onOpenDesign: () => undefined }));
     expect(markup).toContain("0.900 × 0.800 mm");
-    expect(markup).toContain("Solder-mask semantics are missing.");
+    expect(markup).toContain("SH1 · REVIEW");
+    expect(markup).toContain("physical probe access remains REVIEW");
     expect(markup).toContain("生产放行固定为 REVIEW");
   });
 });

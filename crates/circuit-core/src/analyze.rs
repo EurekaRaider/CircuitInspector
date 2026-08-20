@@ -184,7 +184,7 @@ fn evaluate_distance(design: &Design, rule: &RuleDefinition, analysis_id: &str) 
     let mut violations = Vec::new();
     let mut emitted_pairs = HashSet::new();
     for (source_index, source) in sources.iter().enumerate() {
-        if let Some(shield) = covering_shield(source, &shield_candidates) {
+        if let Some(shield) = covering_shield(design, source, &shield_candidates) {
             violations.push(shield_coverage_review(
                 design,
                 rule,
@@ -257,31 +257,17 @@ fn evaluate_distance(design: &Design, rule: &RuleDefinition, analysis_id: &str) 
 }
 
 fn covering_shield<'a>(
+    design: &Design,
     source: &GeometryRef<'_>,
     shields: &'a [GeometryRef<'a>],
 ) -> Option<&'a GeometryRef<'a>> {
     if source.kind != EntityKind::TestPoint || !matches!(source.side, Side::Top | Side::Bottom) {
         return None;
     }
-    shields
-        .iter()
-        .filter(|shield| shield.side == source.side)
-        .filter(|shield| {
-            source.center.x >= shield.bounds.min_x
-                && source.center.x <= shield.bounds.max_x
-                && source.center.y >= shield.bounds.min_y
-                && source.center.y <= shield.bounds.max_y
-        })
-        .min_by(|left, right| {
-            bounds_area(left.bounds)
-                .cmp(&bounds_area(right.bounds))
-                .then_with(|| left.id.cmp(right.id))
-        })
-}
-
-fn bounds_area(bounds: BoundsNm) -> i128 {
-    i128::from(bounds.max_x.saturating_sub(bounds.min_x).max(0))
-        * i128::from(bounds.max_y.saturating_sub(bounds.min_y).max(0))
+    let refdes = &design
+        .covering_shield_candidate(source.center, source.side)?
+        .refdes;
+    shields.iter().find(|shield| shield.id == refdes)
 }
 
 fn shield_coverage_review(

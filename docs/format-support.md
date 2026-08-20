@@ -17,7 +17,7 @@ Allegro BRD 专项流程使用的 `.kicad_pcb` 只是受控中间格式，不表
 
 TP CSV 是带 UTF-8 BOM 的 RFC 4180 文件，固定 16 列；只有 `decision` 与 `comment` 可编辑。未知、重复、缺失候选，来源哈希不符或任何不可编辑字段变化都会整体拒绝。含 `REVIEW` 的选择只能保持 `DRAFT`；具名批准会冻结内容哈希。对齐建议不会自动批准；建议不唯一时必须提供三组非共线锚点。输入版本变化会保留旧对象并把依赖分析标为 `STALE`。
 
-只有 `REQUIRED` TP 会成为派生设计中的测试点，但板边、器件、孔、铜、mask、胶层以及其他 REQUIRED TP 仍来自完整 Gerber 数据并参与距离比较。唯一命中使用 Gerber 实际尺寸并标记为 `SUPPLEMENTED`；未命中、多命中、跨面、NET 冲突、缺少 mask/IPC-356 或必要语义保持 `REVIEW`。没有 REQUIRED TP 或没有涉及 `TEST_POINT` 的批准规则时返回 `NOT_APPLICABLE`。这条专项路径不会满足或绕过 ODB++ `confirm_layout_baseline` 门禁。
+只有 `REQUIRED` TP 会成为派生设计中的测试点，但板边、器件、孔、铜、mask、胶层以及其他 REQUIRED TP 仍来自完整 Gerber 数据并参与距离比较。唯一命中使用 Gerber 实际尺寸并标记为 `SUPPLEMENTED`；未命中、多命中、跨面、NET 冲突、缺少 mask/IPC-356 或必要语义保持 `REVIEW`。已确认 TP 若位于同面推断屏蔽罩候选范围内，也会独立标注屏蔽罩位号和范围并保持 `REVIEW`，不依赖规则包是否包含 TP 到器件距离规则；异面屏蔽罩不触发该标注。没有 REQUIRED TP 或没有涉及 `TEST_POINT` 的批准规则时返回 `NOT_APPLICABLE`。这条专项路径不会满足或绕过 ODB++ `confirm_layout_baseline` 门禁。
 
 当前不解析 Altium、OrCAD、KiCad 等原生原理图数据库。任意 PDF 并不天然等同于权威网表：相接线段会合并，交叉线仅在检测到连接点时连通，同作用域 NET label 按名称合并；跨页/层级标签、总线成员、MUX、level shifter 或多芯片端点无法唯一解释时保持 `REVIEW`。自动追踪的 `Ux.pin` 只代表候选图中的实际连通端点；若批准约束或黄金参考没有规定预期芯片/引脚，报告不会额外宣称其符合产品功能意图。
 

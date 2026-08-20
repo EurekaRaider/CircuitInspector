@@ -108,7 +108,9 @@ export function BrdTestPointWorkflow({ locale, design, rulePacks, initialReferen
         brd_center: binding.transformed_center,
         gerber_center: binding.matched_center,
         gerber_width_nm: binding.matched_width_nm,
-        gerber_height_nm: binding.matched_height_nm
+        gerber_height_nm: binding.matched_height_nm,
+        shield_candidate_refdes: binding.shield_candidate_refdes,
+        shield_bounds: binding.shield_bounds
       })));
   }, [alignment, analysis, onOverlayChange]);
 
@@ -239,7 +241,7 @@ export function BrdTestPointWorkflow({ locale, design, rulePacks, initialReferen
             const decision = decisionById.get(candidate.id)?.decision ?? "REVIEW";
             const binding = bindingById.get(candidate.id);
             const violations = analysis?.violations.filter((violation) => violation.entity_ids?.some((id) => id.includes(candidate.id))) ?? [];
-            return <div key={candidate.id} style={{ contentVisibility: "auto", containIntrinsicSize: "0 50px" }} className="grid grid-cols-[1fr_110px_110px_90px_120px_1.4fr] gap-3 border-b border-white/[0.045] px-4 py-3 text-[10px]"><div className="min-w-0"><div className="truncate font-mono text-[#d3d0c9]">{candidate.refdes ?? candidate.id}</div><div className="mt-1 truncate text-[#717773]">{candidate.net_name ?? "NET ?"}</div></div><span className={candidate.identity_confidence === "INFERRED" ? "text-[#d0a65f]" : "text-[#95b083]"}>{candidate.source_kind} · {candidate.identity_confidence}</span><span>{decision}</span><span>{candidate.side}</span><span className="font-mono">{binding?.matched_width_nm != null && binding.matched_height_nm != null ? `${(binding.matched_width_nm / 1e6).toFixed(3)} × ${(binding.matched_height_nm / 1e6).toFixed(3)} mm` : "—"}</span><div><div className={binding?.status === "PASS" ? "text-[#95b083]" : "text-[#d0a65f]"}>{binding ? `${binding.status} · ${binding.matched_feature_id ?? "UNMATCHED"}` : "UNANALYZED"}</div><div className="mt-1 text-[#737975]">{violations[0] ? `${violations[0].rule_id} · ${formatThreshold(violations[0].measured_value_nm)} / ${formatThreshold(violations[0].threshold_nm)} · ${violations[0].message}` : binding?.message ?? candidate.source_evidence.join(" · ")}</div></div></div>;
+            return <div key={candidate.id} style={{ contentVisibility: "auto", containIntrinsicSize: "0 50px" }} className="grid grid-cols-[1fr_110px_110px_90px_120px_1.4fr] gap-3 border-b border-white/[0.045] px-4 py-3 text-[10px]"><div className="min-w-0"><div className="truncate font-mono text-[#d3d0c9]">{candidate.refdes ?? candidate.id}</div><div className="mt-1 truncate text-[#717773]">{candidate.net_name ?? "NET ?"}</div></div><span className={candidate.identity_confidence === "INFERRED" ? "text-[#d0a65f]" : "text-[#95b083]"}>{candidate.source_kind} · {candidate.identity_confidence}</span><span>{decision}</span><span>{candidate.side}</span><span className="font-mono">{binding?.matched_width_nm != null && binding.matched_height_nm != null ? `${(binding.matched_width_nm / 1e6).toFixed(3)} × ${(binding.matched_height_nm / 1e6).toFixed(3)} mm` : "—"}</span><div><div className={binding?.status === "PASS" ? "text-[#95b083]" : "text-[#d0a65f]"}>{binding ? `${binding.status} · ${binding.shield_candidate_refdes ? `SHIELD ${binding.shield_candidate_refdes}` : binding.matched_feature_id ?? "UNMATCHED"}` : "UNANALYZED"}</div><div className="mt-1 text-[#737975]">{violations[0] ? `${violations[0].rule_id} · ${formatThreshold(violations[0].measured_value_nm)} / ${formatThreshold(violations[0].threshold_nm)} · ${violations[0].message}` : binding?.message ?? candidate.source_evidence.join(" · ")}</div></div></div>;
           })}</div>
         </div>}
       </div>
