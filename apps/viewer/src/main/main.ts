@@ -57,7 +57,7 @@ import {
 import { CoreClient } from "./core-client.js";
 import { circuitInspectorMcpLaunch, configureOpenCodeMcp } from "./opencode-integration.js";
 import { watchRuleCatalog } from "./rule-catalog-watcher.js";
-import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, assertViolationReviewUpdate, withArtifactId } from "./security.js";
+import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, assertTestPointReviewUpdate, assertViolationReviewUpdate, withArtifactId } from "./security.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const iconPath = path.resolve(directory, "../assets/icon.png");
@@ -242,6 +242,10 @@ ipcMain.handle("brd:export-review", async (_event, catalogId: string, locale: "z
 ipcMain.handle("brd:import-review", (_event, input: { catalog_id: string; path: string; imported_by: string }): Promise<TestPointSelectionV1> => core.request("import_test_point_review", {
   cache_dir: cacheDir, catalog_id: assertArtifactId(input.catalog_id), path: assertGrantedPath(grantedInputPaths, input.path), imported_by: input.imported_by
 }));
+ipcMain.handle("brd:save-review", (_event, value: unknown): Promise<TestPointSelectionV1> => {
+  const input = assertTestPointReviewUpdate(value);
+  return core.request("save_test_point_review", { cache_dir: cacheDir, ...input });
+});
 ipcMain.handle("brd:read-selection", (_event, selectionId: string) => core.request<TestPointSelectionV1>("read_test_point_selection", { cache_dir: cacheDir, selection_id: assertArtifactId(selectionId) }));
 ipcMain.handle("brd:approve-selection", (_event, input: { selection_id: string; approved_by: string }): Promise<TestPointSelectionV1> => core.request("approve_test_point_selection", { cache_dir: cacheDir, selection_id: assertArtifactId(input.selection_id), approved_by: input.approved_by }));
 ipcMain.handle("brd:propose-alignment", (_event, input: { selection_id: string; design_id: string; anchors?: Array<{ candidate_id: string; design_point: { x: number; y: number } }> }): Promise<TestPointAlignmentV1> => core.request("propose_test_point_alignment", {

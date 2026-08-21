@@ -26,6 +26,7 @@ import type {
   TableKind,
   TestMethodCoverage,
   TestPointAlignmentV1,
+  TestPointReviewAction,
   TestPointSelectionV1,
   TestPlanApproval,
   WibInterfaceContract,
@@ -34,7 +35,7 @@ import type {
   WibWorkflowDraft
 } from "@circuit-inspector/contracts";
 
-export type { ArtifactCatalog, ArtifactKind, BrdTestPointCatalogV1, ConnectorMapping, KicadCliDetectionV1, LayoutBaselineConfirmation, LayoutTestAccessAnalysis, ManufacturingTestRequirement, RuleDocumentDiagnostic, RuleDocumentValidation, RuleReviewDecision, RuleReviewItem, RuleReviewResolution, SchematicDocument, SelectedTestPointAnalysisV1, TableFormat, TableImportResult, TableKind, TestMethodCoverage, TestPointAlignmentV1, TestPointSelectionV1, WibConstraintDefinition, WibConstraintSet, WibInterfaceContract, WibWorkflowDraft };
+export type { ArtifactCatalog, ArtifactKind, BrdTestPointCatalogV1, ConnectorMapping, KicadCliDetectionV1, LayoutBaselineConfirmation, LayoutTestAccessAnalysis, ManufacturingTestRequirement, RuleDocumentDiagnostic, RuleDocumentValidation, RuleReviewDecision, RuleReviewItem, RuleReviewResolution, SchematicDocument, SelectedTestPointAnalysisV1, TableFormat, TableImportResult, TableKind, TestMethodCoverage, TestPointAlignmentV1, TestPointReviewAction, TestPointSelectionV1, WibConstraintDefinition, WibConstraintSet, WibInterfaceContract, WibWorkflowDraft };
 
 export type CoverageLevel = "EXPLICIT" | "SUPPLEMENTED" | "INFERRED" | "MISSING";
 
@@ -434,6 +435,7 @@ export interface ViewerApi {
   queryBrdTestPoints(input: { catalog_id: string; side?: "TOP" | "BOTTOM"; confidence?: CoverageLevel; offset: number; limit: number }): Promise<{ catalog_id: string; total: number; offset: number; limit: number; candidates: BrdTestPointCatalogV1["candidates"] }>;
   exportTpReview(catalogId: string, locale: "zh-CN" | "en-US"): Promise<{ ok: boolean; path: string | null; row_count: number }>;
   importTpReview(input: { catalog_id: string; path: string; imported_by: string }): Promise<TestPointSelectionV1>;
+  saveTpReview(input: { catalog_id: string; reviewed_by: string; decisions: Array<{ candidate_id: string; review_action: TestPointReviewAction; comment: string }> }): Promise<TestPointSelectionV1>;
   readTpSelection(selectionId: string): Promise<TestPointSelectionV1>;
   approveTpSelection(input: { selection_id: string; approved_by: string }): Promise<TestPointSelectionV1>;
   proposeTpAlignment(input: { selection_id: string; design_id: string; anchors?: Array<{ candidate_id: string; design_point: { x: number; y: number } }> }): Promise<TestPointAlignmentV1>;

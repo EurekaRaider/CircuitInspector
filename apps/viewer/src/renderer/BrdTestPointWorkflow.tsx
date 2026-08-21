@@ -1,4 +1,4 @@
-import { CheckCircleIcon, FileArrowDownIcon, FileArrowUpIcon, FolderOpenIcon, PlayIcon, ShieldCheckIcon, XIcon } from "@phosphor-icons/react";
+import { CheckCircleIcon, FileArrowDownIcon, FolderOpenIcon, PlayIcon, ShieldCheckIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import type { Locale } from "./i18n";
 import type {
@@ -9,6 +9,7 @@ import type {
   SelectedTestPointAnalysisV1,
   TestPointAlignmentOverlay,
   TestPointAlignmentV1,
+  TestPointReviewAction,
   TestPointSelectionV1
 } from "./types";
 
@@ -131,9 +132,9 @@ export function BrdTestPointWorkflow({ locale, design, rulePacks, initialReferen
   const decisionById = useMemo(() => new Map(selection?.decisions.map((item) => [item.candidate_id, item]) ?? []), [selection]);
   const bindingById = useMemo(() => new Map((analysis?.bindings ?? alignment?.preview_bindings ?? []).map((item) => [item.candidate_id, item])), [alignment, analysis]);
   const shownCandidates = useMemo(() => candidates.filter((candidate) => {
-    const decision = decisionById.get(candidate.id)?.decision ?? "REVIEW";
+    const reviewAction = reviewActionFor(decisionById.get(candidate.id));
     const match = bindingById.get(candidate.id)?.status ?? "UNANALYZED";
-    return (filters.decision === "ALL" || decision === filters.decision) && (filters.match === "ALL" || match === filters.match);
+    return (filters.decision === "ALL" || reviewAction === filters.decision) && (filters.match === "ALL" || match === filters.match);
   }), [bindingById, candidates, decisionById, filters.decision, filters.match]);
   const anchorCandidateIds = catalog?.candidates.map((candidate) => candidate.id) ?? [];
 
@@ -161,15 +162,24 @@ export function BrdTestPointWorkflow({ locale, design, rulePacks, initialReferen
     });
   }
 
-  async function importReview() {
-    if (!catalog || !operator.trim()) return;
-    const reviewPath = await window.circuitInspector.chooseTpReview(locale);
-    if (!reviewPath) return;
+  async function reviewCandidate(candidateId: string, reviewAction: Exclude<TestPointReviewAction, "REVIEW">) {
+    if (!catalog || !operator.trim() || selection?.lifecycle_status === "APPROVED") return;
     localStorage.setItem("circuit-inspector.approver", operator.trim());
     await execute(async () => {
-      const loaded = await window.circuitInspector.importTpReview({ catalog_id: catalog.id, path: reviewPath, imported_by: operator.trim() });
+      const loaded = await window.circuitInspector.saveTpReview({
+        catalog_id: catalog.id,
+        reviewed_by: operator.trim(),
+        decisions: catalog.candidates.map((candidate) => {
+          const current = decisionById.get(candidate.id);
+          return {
+            candidate_id: candidate.id,
+            review_action: candidate.id === candidateId ? reviewAction : reviewActionFor(current),
+            comment: current?.comment ?? ""
+          };
+        })
+      });
       setSelection(loaded); setAlignment(null); setAnalysis(null);
-      setNotice(chinese ? `CSV 整体校验通过，${loaded.unresolved_count} 行仍为 REVIEW。` : `CSV passed atomic validation; ${loaded.unresolved_count} row(s) remain REVIEW.`);
+      setNotice(chinese ? `已保存 ${reviewAction}，${loaded.unresolved_count} 行仍为 REVIEW。` : `Saved ${reviewAction}; ${loaded.unresolved_count} row(s) remain REVIEW.`);
       onCatalogChanged?.();
     });
   }
@@ -233,13 +243,14 @@ export function BrdTestPointWorkflow({ locale, design, rulePacks, initialReferen
             <button className="primary-button mt-3" disabled={busy} onClick={() => void importBrd()}><FolderOpenIcon size={15} />{chinese ? "选择 .brd（自动调用本机 KiCad）" : "Choose .brd (run local KiCad automatically)"}</button>
             {catalog && <ArtifactLine label="CATALOG" value={`${catalog.id} · ${catalog.candidates.length} TP`} />}
           </Step>
-          <Step number={2} title={chinese ? "导出 / 回导人工 CSV" : "Export / import human CSV"} complete={Boolean(selection)}>
+          <Step number={2} title={chinese ? "导出候选 CSV / 界面逐点复核" : "Export candidate CSV / review inline"} complete={selection?.unresolved_count === 0}>
             <Field label={chinese ? "操作人" : "OPERATOR"}><input value={operator} onChange={(event) => setOperator(event.target.value)} className="workflow-input" /></Field>
-            <div className="mt-3 flex gap-2"><button className="secondary-button" disabled={!catalog || busy} onClick={() => void exportReview()}><FileArrowDownIcon size={15} />{chinese ? "导出 CSV" : "Export CSV"}</button><button className="primary-button" disabled={!catalog || !operator.trim() || busy} onClick={() => void importReview()}><FileArrowUpIcon size={15} />{chinese ? "回导已确认 CSV" : "Import reviewed CSV"}</button></div>
+            <p className="mt-2 text-[10px] leading-5 text-[#858b87]">{chinese ? "无需回导 CSV；请在下方逐个选择 APPROVE、REJECT 或 IGNORE。" : "No CSV re-import is required; choose APPROVE, REJECT, or IGNORE for every candidate below."}</p>
+            <button className="secondary-button mt-3" disabled={!catalog || busy} onClick={() => void exportReview()}><FileArrowDownIcon size={15} />{chinese ? "导出候选 CSV（可选）" : "Export candidate CSV (optional)"}</button>
             {selection && <ArtifactLine label="SELECTION" value={`${selection.id} · REVIEW ${selection.unresolved_count}`} />}
           </Step>
           <Step number={3} title={chinese ? "批准并冻结 TP 清单" : "Approve and freeze TP selection"} complete={selection?.lifecycle_status === "APPROVED"}>
-            <p className="text-[10px] leading-5 text-[#858b87]">{chinese ? "候选全集必须完整，且所有 decision 必须关闭为 REQUIRED 或 NOT_REQUIRED。" : "The complete candidate set is required and every decision must close as REQUIRED or NOT_REQUIRED."}</p>
+            <p className="text-[10px] leading-5 text-[#858b87]">{chinese ? "候选全集必须完整，且下方所有行必须关闭为 APPROVE、REJECT 或 IGNORE。只有 APPROVE 会进入后续分析。" : "The complete candidate set is required and every row below must close as APPROVE, REJECT, or IGNORE. Only APPROVE enters downstream analysis."}</p>
             <button className="primary-button mt-3" disabled={!selection || selection.lifecycle_status !== "DRAFT" || selection.unresolved_count > 0 || !operator.trim() || busy} onClick={() => void approveSelection()}><ShieldCheckIcon size={15} />{chinese ? "具名批准 TP 清单" : "Approve TP selection"}</button>
             {selection?.approval && <ArtifactLine label="SHA-256" value={selection.approval.content_hash} />}
           </Step>
@@ -257,13 +268,13 @@ export function BrdTestPointWorkflow({ locale, design, rulePacks, initialReferen
         </Step>
 
         {catalog && <div className="mt-4 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#101315]">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-4 py-3"><div><div className="text-[12px] font-semibold">{chinese ? "TP 候选与 Gerber 绑定" : "TP candidates and Gerber bindings"}</div><div className="mt-1 font-mono text-[9px] text-[#6e7470]">{shownCandidates.length} / {catalog.candidates.length} · content-visibility virtualized rows</div></div><div className="flex gap-2">{(['decision', 'side', 'confidence', 'match'] as const).map((key) => <select key={key} className="workflow-input min-w-[118px]" value={filters[key]} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))}><option value="ALL">{key.toUpperCase()} · ALL</option>{filterOptions(key).map((option) => <option key={option}>{option}</option>)}</select>)}</div></div>
-          <div className="grid grid-cols-[1fr_110px_110px_90px_120px_1.4fr] gap-3 border-b border-white/[0.06] px-4 py-2 font-mono text-[8px] text-[#686e6a]"><span>TP / NET</span><span>IDENTITY</span><span>DECISION</span><span>SIDE</span><span>ACTUAL SIZE</span><span>MATCH / RULE EVIDENCE</span></div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-4 py-3"><div><div className="text-[12px] font-semibold">{chinese ? "TP 候选与 Gerber 绑定" : "TP candidates and Gerber bindings"}</div><div className="mt-1 font-mono text-[9px] text-[#6e7470]">{shownCandidates.length} / {catalog.candidates.length} · content-visibility virtualized rows</div></div><div className="flex gap-2">{(['decision', 'side', 'confidence', 'match'] as const).map((key) => <select key={key} className="workflow-input min-w-[118px]" value={filters[key]} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))}><option value="ALL">{filterLabel(key)} · ALL</option>{filterOptions(key).map((option) => <option key={option}>{option}</option>)}</select>)}</div></div>
+          <div className="grid grid-cols-[minmax(150px,1fr)_105px_245px_70px_110px_minmax(230px,1.3fr)] gap-3 border-b border-white/[0.06] px-4 py-2 font-mono text-[8px] text-[#686e6a]"><span>TP / NET</span><span>IDENTITY</span><span>REVIEW ACTION</span><span>SIDE</span><span>ACTUAL SIZE</span><span>MATCH / RULE EVIDENCE</span></div>
           <div className="max-h-[360px] overflow-y-auto">{shownCandidates.map((candidate) => {
-            const decision = decisionById.get(candidate.id)?.decision ?? "REVIEW";
+            const reviewAction = reviewActionFor(decisionById.get(candidate.id));
             const binding = bindingById.get(candidate.id);
             const violations = analysis?.violations.filter((violation) => violation.entity_ids?.some((id) => id.includes(candidate.id))) ?? [];
-            return <div key={candidate.id} style={{ contentVisibility: "auto", containIntrinsicSize: "0 50px" }} className="grid grid-cols-[1fr_110px_110px_90px_120px_1.4fr] gap-3 border-b border-white/[0.045] px-4 py-3 text-[10px]"><div className="min-w-0"><div className="truncate font-mono text-[#d3d0c9]">{candidate.refdes ?? candidate.id}</div><div className="mt-1 truncate text-[#717773]">{candidate.net_name ?? "NET ?"}</div></div><span className={candidate.identity_confidence === "INFERRED" ? "text-[#d0a65f]" : "text-[#95b083]"}>{candidate.source_kind} · {candidate.identity_confidence}</span><span>{decision}</span><span>{candidate.side}</span><span className="font-mono">{binding?.matched_width_nm != null && binding.matched_height_nm != null ? `${(binding.matched_width_nm / 1e6).toFixed(3)} × ${(binding.matched_height_nm / 1e6).toFixed(3)} mm` : "—"}</span><div><div className={binding?.status === "PASS" ? "text-[#95b083]" : "text-[#d0a65f]"}>{binding ? `${binding.status} · ${binding.shield_candidate_refdes ? `SHIELD ${binding.shield_candidate_refdes}` : binding.matched_feature_id ?? "UNMATCHED"}` : "UNANALYZED"}</div><div className="mt-1 text-[#737975]">{violations[0] ? `${violations[0].rule_id} · ${formatThreshold(violations[0].measured_value_nm)} / ${formatThreshold(violations[0].threshold_nm)} · ${violations[0].message}` : binding?.message ?? candidate.source_evidence.join(" · ")}</div></div></div>;
+            return <div key={candidate.id} style={{ contentVisibility: "auto", containIntrinsicSize: "0 64px" }} className="grid grid-cols-[minmax(150px,1fr)_105px_245px_70px_110px_minmax(230px,1.3fr)] gap-3 border-b border-white/[0.045] px-4 py-3 text-[10px]"><div className="min-w-0"><div className="truncate font-mono text-[#d3d0c9]">{candidate.refdes ?? candidate.id}</div><div className="mt-1 truncate text-[#717773]">{candidate.net_name ?? "NET ?"}</div></div><span className={candidate.identity_confidence === "INFERRED" ? "text-[#d0a65f]" : "text-[#95b083]"}>{candidate.source_kind} · {candidate.identity_confidence}</span><TpCandidateReviewControls action={reviewAction} locale={locale} disabled={busy || !operator.trim() || selection?.lifecycle_status === "APPROVED"} onChoose={(action) => void reviewCandidate(candidate.id, action)} /><span>{candidate.side}</span><span className="font-mono">{binding?.matched_width_nm != null && binding.matched_height_nm != null ? `${(binding.matched_width_nm / 1e6).toFixed(3)} × ${(binding.matched_height_nm / 1e6).toFixed(3)} mm` : "—"}</span><div><div className={binding?.status === "PASS" ? "text-[#95b083]" : "text-[#d0a65f]"}>{binding ? `${binding.status} · ${binding.shield_candidate_refdes ? `SHIELD ${binding.shield_candidate_refdes}` : binding.matched_feature_id ?? "UNMATCHED"}` : "UNANALYZED"}</div><div className="mt-1 text-[#737975]">{violations[0] ? `${violations[0].rule_id} · ${formatThreshold(violations[0].measured_value_nm)} / ${formatThreshold(violations[0].threshold_nm)} · ${violations[0].message}` : binding?.message ?? candidate.source_evidence.join(" · ")}</div></div></div>;
           })}</div>
         </div>}
       </div>
@@ -277,6 +288,14 @@ function Step({ number, title, complete, wide, children }: { number: number; tit
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1 block font-mono text-[8px] text-[#6f7571]">{label}</span>{children}</label>; }
 function ArtifactLine({ label, value }: { label: string; value: string }) { return <div className="mt-3 min-w-0 rounded-lg border border-white/[0.06] bg-[#101315] px-3 py-2"><div className="font-mono text-[8px] text-[#686e6a]">{label}</div><div className="mt-1 truncate font-mono text-[9px] text-[#a4a7a1]" title={value}>{value}</div></div>; }
 function Metric({ label, value }: { label: string; value: string | number }) { return <div className="rounded-lg border border-white/[0.06] bg-[#101315] px-3 py-2"><div className="font-mono text-[8px] text-[#686e6a]">{label}</div><div className="mt-1 font-mono text-[11px] text-[#d0cec8]">{value}</div></div>; }
-function filterOptions(key: "decision" | "side" | "confidence" | "match") { return key === "decision" ? ["REQUIRED", "NOT_REQUIRED", "REVIEW"] : key === "side" ? ["TOP", "BOTTOM"] : key === "confidence" ? ["EXPLICIT", "INFERRED"] : ["PASS", "REVIEW", "UNANALYZED"]; }
+export function TpCandidateReviewControls({ action, locale, disabled, onChoose }: { action: TestPointReviewAction; locale: Locale; disabled: boolean; onChoose(action: Exclude<TestPointReviewAction, "REVIEW">): void }) {
+  const chinese = locale === "zh-CN";
+  const options = ["APPROVE", "REJECT", "IGNORE"] as const;
+  return <div><div className={`mb-1 font-mono text-[8px] ${action === "REVIEW" ? "text-[#d0a65f]" : "text-[#858b87]"}`}>{action === "REVIEW" ? (chinese ? "REVIEW · 请选择" : "REVIEW · choose") : action}</div><div className="grid grid-cols-3 gap-1">{options.map((option) => <button key={option} type="button" aria-pressed={action === option} title={reviewActionTitle(option, chinese)} disabled={disabled} onClick={() => onChoose(option)} className={`h-7 rounded-md border px-1 font-mono text-[7px] transition ${action === option ? option === "APPROVE" ? "border-[#779166]/60 bg-[#779166]/20 text-[#b9cdaa]" : option === "REJECT" ? "border-[#b76755]/60 bg-[#b76755]/15 text-[#e0a295]" : "border-[#8b8476]/55 bg-[#8b8476]/15 text-[#c8c0b0]" : "border-white/[0.08] bg-white/[0.025] text-[#737975] hover:bg-white/[0.06]"}`}>{option}</button>)}</div></div>;
+}
+function reviewActionFor(decision: TestPointSelectionV1["decisions"][number] | undefined): TestPointReviewAction { return decision?.review_action ?? (decision?.decision === "REQUIRED" ? "APPROVE" : decision?.decision === "NOT_REQUIRED" ? "REJECT" : "REVIEW"); }
+function reviewActionTitle(action: Exclude<TestPointReviewAction, "REVIEW">, chinese: boolean) { return action === "APPROVE" ? (chinese ? "确认该候选为需要分析的 TP" : "Select this candidate as a required TP") : action === "REJECT" ? (chinese ? "否决该 TP 候选身份" : "Reject this TP candidate identity") : (chinese ? "有意排除该候选，不进入分析" : "Intentionally exclude this candidate from analysis"); }
+function filterLabel(key: "decision" | "side" | "confidence" | "match") { return key === "decision" ? "REVIEW" : key.toUpperCase(); }
+function filterOptions(key: "decision" | "side" | "confidence" | "match") { return key === "decision" ? ["APPROVE", "REJECT", "IGNORE", "REVIEW"] : key === "side" ? ["TOP", "BOTTOM"] : key === "confidence" ? ["EXPLICIT", "INFERRED"] : ["PASS", "REVIEW", "UNANALYZED"]; }
 function formatThreshold(value: number | null) { return value == null ? "?" : `${(value / 1e6).toFixed(3)} mm`; }
 function message(cause: unknown) { return cause instanceof Error ? cause.message : String(cause); }

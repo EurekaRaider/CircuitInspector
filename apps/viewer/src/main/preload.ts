@@ -11,6 +11,7 @@ const api = {
   queryBrdTestPoints: (input: Record<string, unknown>) => ipcRenderer.invoke("brd:query-test-points", input),
   exportTpReview: (catalogId: string, locale: "zh-CN" | "en-US") => ipcRenderer.invoke("brd:export-review", catalogId, locale),
   importTpReview: (input: Record<string, unknown>) => ipcRenderer.invoke("brd:import-review", input),
+  saveTpReview: (input: Record<string, unknown>) => ipcRenderer.invoke("brd:save-review", input),
   readTpSelection: (selectionId: string) => ipcRenderer.invoke("brd:read-selection", selectionId),
   approveTpSelection: (input: Record<string, unknown>) => ipcRenderer.invoke("brd:approve-selection", input),
   proposeTpAlignment: (input: Record<string, unknown>) => ipcRenderer.invoke("brd:propose-alignment", input),

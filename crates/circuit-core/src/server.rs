@@ -111,6 +111,7 @@ pub fn dispatch(method: &str, params: Value) -> CoreResult<Value> {
         "query_brd_test_points" => crate::brd::query_brd_test_points_request(params),
         "export_test_point_review" => crate::brd::export_test_point_review_request(params),
         "import_test_point_review" => crate::brd::import_test_point_review_request(params),
+        "save_test_point_review" => crate::brd::save_test_point_review_request(params),
         "approve_test_point_selection" => crate::brd::approve_test_point_selection_request(params),
         "propose_test_point_alignment" => crate::brd::propose_test_point_alignment_request(params),
         "approve_test_point_alignment" => crate::brd::approve_test_point_alignment_request(params),

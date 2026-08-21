@@ -59,6 +59,15 @@ pub enum TestPointDecision {
     Review,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TestPointReviewAction {
+    Approve,
+    Reject,
+    Ignore,
+    Review,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactApproval {
     pub approved_by: String,
@@ -121,6 +130,8 @@ pub struct BrdTestPointCatalog {
 pub struct TestPointSelectionDecision {
     pub candidate_id: String,
     pub decision: TestPointDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_action: Option<TestPointReviewAction>,
     pub comment: String,
 }
 
@@ -508,6 +519,89 @@ pub fn import_test_point_review_request(params: Value) -> CoreResult<Value> {
     )
     .map_err(|error| CoreError::Parse(format!("TP review CSV is not UTF-8: {error}")))?;
     let decisions = validate_review_csv(text, &catalog)?;
+    save_selection_draft(&cache, catalog, decisions, params.imported_by.trim())
+}
+
+pub fn save_test_point_review_request(params: Value) -> CoreResult<Value> {
+    #[derive(Deserialize)]
+    struct DecisionInput {
+        candidate_id: String,
+        review_action: TestPointReviewAction,
+        #[serde(default)]
+        comment: String,
+    }
+    #[derive(Deserialize)]
+    struct Params {
+        cache_dir: PathBuf,
+        catalog_id: String,
+        reviewed_by: String,
+        decisions: Vec<DecisionInput>,
+    }
+    let params: Params = serde_json::from_value(params)?;
+    let reviewer = params.reviewed_by.trim();
+    if reviewer.is_empty() || reviewer.len() > 200 {
+        return Err(CoreError::InvalidInput(
+            "reviewed_by must contain 1 to 200 characters".into(),
+        ));
+    }
+    let cache = CacheStore::new(params.cache_dir)?;
+    let catalog = load_catalog(&cache, &params.catalog_id)?;
+    if params.decisions.len() != catalog.candidates.len() {
+        return Err(CoreError::InvalidInput(format!(
+            "TP review must contain all {} candidates exactly once",
+            catalog.candidates.len()
+        )));
+    }
+    let expected = catalog
+        .candidates
+        .iter()
+        .map(|candidate| candidate.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let mut decisions = Vec::with_capacity(params.decisions.len());
+    for input in params.decisions {
+        if !expected.contains(input.candidate_id.as_str()) {
+            return Err(CoreError::InvalidInput(format!(
+                "TP review contains unknown candidate {}",
+                input.candidate_id
+            )));
+        }
+        if !seen.insert(input.candidate_id.clone()) {
+            return Err(CoreError::InvalidInput(format!(
+                "TP review duplicates candidate {}",
+                input.candidate_id
+            )));
+        }
+        if input.comment.len() > 2_000 {
+            return Err(CoreError::InvalidInput(format!(
+                "TP review comment for {} exceeds 2000 characters",
+                input.candidate_id
+            )));
+        }
+        let decision = match input.review_action {
+            TestPointReviewAction::Approve => TestPointDecision::Required,
+            TestPointReviewAction::Reject | TestPointReviewAction::Ignore => {
+                TestPointDecision::NotRequired
+            }
+            TestPointReviewAction::Review => TestPointDecision::Review,
+        };
+        decisions.push(TestPointSelectionDecision {
+            candidate_id: input.candidate_id,
+            decision,
+            review_action: Some(input.review_action),
+            comment: input.comment.trim().to_owned(),
+        });
+    }
+    decisions.sort_by(|left, right| left.candidate_id.cmp(&right.candidate_id));
+    save_selection_draft(&cache, catalog, decisions, reviewer)
+}
+
+fn save_selection_draft(
+    cache: &CacheStore,
+    catalog: BrdTestPointCatalog,
+    decisions: Vec<TestPointSelectionDecision>,
+    reviewed_by: &str,
+) -> CoreResult<Value> {
     let unresolved_count = decisions
         .iter()
         .filter(|row| row.decision == TestPointDecision::Review)
@@ -526,7 +620,7 @@ pub fn import_test_point_review_request(params: Value) -> CoreResult<Value> {
         brd_sha256: catalog.brd_sha256,
         lifecycle_status: ArtifactLifecycle::Draft,
         decisions,
-        imported_by: params.imported_by.trim().to_owned(),
+        imported_by: reviewed_by.to_owned(),
         imported_at: timestamp(),
         unresolved_count,
         approval: None,
@@ -2312,6 +2406,11 @@ fn validate_review_csv(
         decisions.push(TestPointSelectionDecision {
             candidate_id,
             decision,
+            review_action: Some(match decision {
+                TestPointDecision::Required => TestPointReviewAction::Approve,
+                TestPointDecision::NotRequired => TestPointReviewAction::Reject,
+                TestPointDecision::Review => TestPointReviewAction::Review,
+            }),
             comment: row[15].trim().to_owned(),
         });
     }
@@ -3149,8 +3248,76 @@ mod tests {
         let decisions =
             validate_review_csv(closed.trim_start_matches('\u{feff}'), &catalog).unwrap();
         assert_eq!(decisions[0].decision, TestPointDecision::Required);
+        assert_eq!(
+            decisions[0].review_action,
+            Some(TestPointReviewAction::Approve)
+        );
         let changed = closed.replace(",TP1,", ",TP9,");
         assert!(validate_review_csv(changed.trim_start_matches('\u{feff}'), &catalog).is_err());
+    }
+
+    #[test]
+    fn inline_review_preserves_approve_reject_and_ignore_actions() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cache = CacheStore::new(temporary.path()).unwrap();
+        let mut catalog = sample_catalog();
+        for (id, refdes) in [("tp2", "TP2"), ("tp3", "TP3")] {
+            let mut candidate = catalog.candidates[0].clone();
+            candidate.id = id.into();
+            candidate.refdes = Some(refdes.into());
+            catalog.candidates.push(candidate);
+        }
+        cache
+            .save_json(
+                &catalog_directory(&cache, &catalog.id).join("catalog.json"),
+                &catalog,
+            )
+            .unwrap();
+
+        let selection: TestPointSelection = serde_json::from_value(
+            save_test_point_review_request(json!({
+                "cache_dir": cache.root(),
+                "catalog_id": catalog.id,
+                "reviewed_by": "dft-owner",
+                "decisions": [
+                    { "candidate_id": "tp1", "review_action": "APPROVE", "comment": "required" },
+                    { "candidate_id": "tp2", "review_action": "REJECT", "comment": "not a TP" },
+                    { "candidate_id": "tp3", "review_action": "IGNORE", "comment": "not in scope" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(selection.unresolved_count, 0);
+        assert_eq!(selection.imported_by, "dft-owner");
+        assert_eq!(selection.decisions[0].decision, TestPointDecision::Required);
+        assert_eq!(
+            selection.decisions[0].review_action,
+            Some(TestPointReviewAction::Approve)
+        );
+        assert_eq!(
+            selection.decisions[1].review_action,
+            Some(TestPointReviewAction::Reject)
+        );
+        assert_eq!(
+            selection.decisions[2].review_action,
+            Some(TestPointReviewAction::Ignore)
+        );
+        assert!(
+            selection.decisions[1..]
+                .iter()
+                .all(|decision| decision.decision == TestPointDecision::NotRequired)
+        );
+
+        assert!(
+            save_test_point_review_request(json!({
+                "cache_dir": cache.root(),
+                "catalog_id": catalog.id,
+                "reviewed_by": "dft-owner",
+                "decisions": [{ "candidate_id": "tp1", "review_action": "APPROVE" }]
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -3359,6 +3526,7 @@ mod tests {
         let decision = TestPointSelectionDecision {
             candidate_id: candidate.id.clone(),
             decision: TestPointDecision::Required,
+            review_action: Some(TestPointReviewAction::Approve),
             comment: String::new(),
         };
         let preview = preview_alignment_bindings(
@@ -3454,6 +3622,7 @@ mod tests {
             .map(|candidate| TestPointSelectionDecision {
                 candidate_id: candidate.id.clone(),
                 decision: TestPointDecision::Required,
+                review_action: Some(TestPointReviewAction::Approve),
                 comment: String::new(),
             })
             .collect::<Vec<_>>();
@@ -3547,6 +3716,7 @@ mod tests {
             .map(|candidate| TestPointSelectionDecision {
                 candidate_id: candidate.id.clone(),
                 decision: TestPointDecision::Required,
+                review_action: Some(TestPointReviewAction::Approve),
                 comment: String::new(),
             })
             .collect::<Vec<_>>();
@@ -3689,6 +3859,7 @@ mod tests {
             decisions: vec![TestPointSelectionDecision {
                 candidate_id: catalog.candidates[0].id.clone(),
                 decision: TestPointDecision::Required,
+                review_action: Some(TestPointReviewAction::Approve),
                 comment: "fixture".into(),
             }],
             imported_by: "operator".into(),
@@ -3907,6 +4078,7 @@ mod tests {
             decisions: vec![TestPointSelectionDecision {
                 candidate_id: "tp1".into(),
                 decision: TestPointDecision::Review,
+                review_action: Some(TestPointReviewAction::Review),
                 comment: String::new(),
             }],
             imported_by: "operator".into(),
@@ -3920,6 +4092,7 @@ mod tests {
             .unwrap();
         assert!(approve_test_point_selection_request(json!({ "cache_dir": cache.root(), "selection_id": draft.id, "approved_by": "first" })).is_err());
         draft.decisions[0].decision = TestPointDecision::Required;
+        draft.decisions[0].review_action = Some(TestPointReviewAction::Approve);
         draft.unresolved_count = 0;
         cache
             .save_json(&selection_path(&cache, &draft.id), &draft)

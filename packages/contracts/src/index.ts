@@ -636,6 +636,7 @@ export interface LayoutTestAccessAnalysis {
 
 export type ArtifactLifecycle = "DRAFT" | "APPROVED" | "SUPERSEDED";
 export type TestPointDecision = "REQUIRED" | "NOT_REQUIRED" | "REVIEW";
+export type TestPointReviewAction = "APPROVE" | "REJECT" | "IGNORE" | "REVIEW";
 
 export interface ArtifactApproval {
   approved_by: string;
@@ -702,7 +703,7 @@ export interface TestPointSelectionV1 {
   catalog_content_hash: string;
   brd_sha256: string;
   lifecycle_status: ArtifactLifecycle;
-  decisions: Array<{ candidate_id: string; decision: TestPointDecision; comment: string }>;
+  decisions: Array<{ candidate_id: string; decision: TestPointDecision; review_action?: TestPointReviewAction; comment: string }>;
   imported_by: string;
   imported_at: string;
   unresolved_count: number;

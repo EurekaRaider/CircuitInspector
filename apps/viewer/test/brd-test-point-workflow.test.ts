@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BrdTestPointWorkflow } from "../src/renderer/BrdTestPointWorkflow";
+import { BrdTestPointWorkflow, TpCandidateReviewControls } from "../src/renderer/BrdTestPointWorkflow";
 import { DocumentAnalysisScreen } from "../src/renderer/DocumentAnalysisScreen";
 import type { SelectedTestPointAnalysisV1 } from "../src/renderer/types";
 
@@ -22,7 +22,8 @@ describe("BRD TP five-step Viewer workflow", () => {
       onClose: () => undefined
     }));
     expect(markup).toContain("导入 BRD");
-    expect(markup).toContain("导出 / 回导人工 CSV");
+    expect(markup).toContain("导出候选 CSV / 界面逐点复核");
+    expect(markup).not.toContain("回导已确认 CSV");
     expect(markup).toContain("批准并冻结 TP 清单");
     expect(markup).toContain("Gerber 与人工对齐复核");
     expect(markup).toContain("选择批准规则包并分析 REQUIRED TP");
@@ -30,6 +31,20 @@ describe("BRD TP five-step Viewer workflow", () => {
     expect(markup).toContain("KICAD（自动检测）");
     expect(markup).toContain("源 BRD 版本（ALLEGRO，不是 KICAD）");
     expect(markup).toContain("选择 .brd（自动调用本机 KiCad）");
+  });
+
+  it("renders inline APPROVE, REJECT, and IGNORE controls for every candidate", () => {
+    const markup = renderToStaticMarkup(createElement(TpCandidateReviewControls, {
+      action: "IGNORE",
+      locale: "zh-CN",
+      disabled: false,
+      onChoose: () => undefined
+    }));
+    expect(markup).toContain("APPROVE");
+    expect(markup).toContain("REJECT");
+    expect(markup).toContain("IGNORE");
+    expect(markup).toContain('aria-pressed="true"');
+    expect(markup).toContain("有意排除该候选，不进入分析");
   });
 
   it("renders actual Gerber size, binding reason, and production REVIEW in selected analysis", () => {

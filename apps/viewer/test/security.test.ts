@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, assertViolationReviewUpdate, withArtifactId } from "../src/main/security.js";
+import { assertArtifactId, assertGrantedPath, assertOneOf, assertPathInside, assertRuleDraftUpdate, assertTestPointReviewUpdate, assertViolationReviewUpdate, withArtifactId } from "../src/main/security.js";
 
 describe("viewer IPC security boundaries", () => {
   it("accepts stable IDs and rejects traversal-like artifact identifiers", () => {
@@ -40,6 +40,18 @@ describe("viewer IPC security boundaries", () => {
     expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [{ id: "../rule" }], review_item_resolutions: [] })).toThrow(/Invalid/);
     expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [], review_item_resolutions: "review-1" })).toThrow(/Invalid/);
     expect(() => assertRuleDraftUpdate({ rule_pack_id: "rules-1", rules: [], review_item_resolutions: [{ review_item_id: "review-1", decision: "SKIP", note: "", rule_id: null }] })).toThrow(/Invalid/);
+  });
+
+  it("validates complete inline TP review actions before they cross IPC", () => {
+    const valid = assertTestPointReviewUpdate({
+      catalog_id: "catalog-1",
+      reviewed_by: "dft-owner",
+      decisions: [{ candidate_id: "tp-1", review_action: "IGNORE", comment: "Out of scope" }]
+    });
+    expect(valid.decisions[0]?.review_action).toBe("IGNORE");
+    expect(() => assertTestPointReviewUpdate({ ...valid, reviewed_by: "" })).toThrow(/reviewer/);
+    expect(() => assertTestPointReviewUpdate({ ...valid, decisions: [{ ...valid.decisions[0], review_action: "SKIP" }] })).toThrow(/action/);
+    expect(() => assertTestPointReviewUpdate({ ...valid, decisions: [{ ...valid.decisions[0], candidate_id: "../tp" }] })).toThrow(/Invalid/);
   });
 
   it("requires an auditable comment when ignoring a shield-coverage review", () => {

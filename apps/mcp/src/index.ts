@@ -244,6 +244,40 @@ server.registerTool(
 );
 
 server.registerTool(
+  "save_test_point_review",
+  {
+    title: "Save inline TP review",
+    description: "Save a complete Viewer-style TP review. APPROVE selects a REQUIRED TP; REJECT and IGNORE remain distinct audit actions and exclude the candidate from selected-TP analysis; REVIEW remains unresolved.",
+    inputSchema: {
+      catalog_id: z.string().min(1),
+      reviewed_by: z.string().min(1).max(200),
+      decisions: z.array(z.object({
+        candidate_id: z.string().min(1),
+        review_action: z.enum(["APPROVE", "REJECT", "IGNORE", "REVIEW"]),
+        comment: z.string().max(2000).optional()
+      }))
+    },
+    outputSchema: tpSelectionOutputSchema,
+    annotations: { readOnlyHint: false, openWorldHint: false }
+  },
+  async ({ catalog_id, reviewed_by, decisions }, extra) => {
+    const selection = await core.request<Record<string, unknown>>("save_test_point_review", {
+      cache_dir: cacheDir,
+      catalog_id,
+      reviewed_by,
+      decisions: decisions.map((decision) => ({ ...decision, comment: decision.comment ?? "" }))
+    }, extra.signal);
+    return {
+      content: [
+        { type: "text" as const, text: `Saved inline TP selection ${String(selection.id)} as DRAFT with ${String(selection.unresolved_count)} unresolved REVIEW row(s).` },
+        { type: "resource_link" as const, name: "Continue TP review in CircuitInspector Viewer", uri: tpWorkflowLink("selection", String(selection.id)), mimeType: "application/x-circuit-inspector" }
+      ],
+      structuredContent: selection
+    };
+  }
+);
+
+server.registerTool(
   "approve_test_point_selection",
   {
     title: "Approve TP selection",

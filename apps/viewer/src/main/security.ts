@@ -66,6 +66,34 @@ export function assertRuleDraftUpdate(value: unknown): {
   };
 }
 
+export function assertTestPointReviewUpdate(value: unknown): {
+  catalog_id: string;
+  reviewed_by: string;
+  decisions: Array<{ candidate_id: string; review_action: "APPROVE" | "REJECT" | "IGNORE" | "REVIEW"; comment: string }>;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid TP review update");
+  const input = value as Record<string, unknown>;
+  if (typeof input.reviewed_by !== "string" || input.reviewed_by.trim().length === 0 || input.reviewed_by.length > 200) {
+    throw new Error("Invalid TP reviewer");
+  }
+  if (!Array.isArray(input.decisions) || input.decisions.length > 100_000) throw new Error("Invalid TP review decisions");
+  const decisions = input.decisions.map((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid TP review decision");
+    const decision = value as Record<string, unknown>;
+    if (typeof decision.comment !== "string" || decision.comment.length > 2_000) throw new Error("Invalid TP review comment");
+    return {
+      candidate_id: assertArtifactId(decision.candidate_id),
+      review_action: assertOneOf(decision.review_action, ["APPROVE", "REJECT", "IGNORE", "REVIEW"] as const, "TP review action"),
+      comment: decision.comment
+    };
+  });
+  return {
+    catalog_id: assertArtifactId(input.catalog_id),
+    reviewed_by: input.reviewed_by.trim(),
+    decisions
+  };
+}
+
 export function assertViolationReviewUpdate(value: unknown): {
   analysis_id: string;
   violation_id: string;
