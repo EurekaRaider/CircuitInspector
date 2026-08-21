@@ -4,6 +4,7 @@ const api = {
   platform: process.platform,
   chooseDesign: (locale: "zh-CN" | "en-US") => ipcRenderer.invoke("design:choose", locale) as Promise<string | null>,
   chooseBrd: (locale: "zh-CN" | "en-US") => ipcRenderer.invoke("brd:choose", locale),
+  detectKiCad: () => ipcRenderer.invoke("brd:detect-kicad"),
   chooseTpReview: (locale: "zh-CN" | "en-US") => ipcRenderer.invoke("brd:choose-review", locale),
   importBrdTestPoints: (input: Record<string, unknown>) => ipcRenderer.invoke("brd:import-test-points", input),
   readBrdTestPointCatalog: (catalogId: string) => ipcRenderer.invoke("brd:read-catalog", catalogId),

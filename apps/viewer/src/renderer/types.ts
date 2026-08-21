@@ -5,6 +5,7 @@ import type {
   BrdTestPointCatalogV1,
   ConnectorMapping,
   ControlledTestBaseline,
+  KicadCliDetectionV1,
   LayoutTestAccessAnalysis,
   LayoutBaselineConfirmation,
   ManufacturingTestRequirement,
@@ -33,7 +34,7 @@ import type {
   WibWorkflowDraft
 } from "@circuit-inspector/contracts";
 
-export type { ArtifactCatalog, ArtifactKind, BrdTestPointCatalogV1, ConnectorMapping, LayoutBaselineConfirmation, LayoutTestAccessAnalysis, ManufacturingTestRequirement, RuleDocumentDiagnostic, RuleDocumentValidation, RuleReviewDecision, RuleReviewItem, RuleReviewResolution, SchematicDocument, SelectedTestPointAnalysisV1, TableFormat, TableImportResult, TableKind, TestMethodCoverage, TestPointAlignmentV1, TestPointSelectionV1, WibConstraintDefinition, WibConstraintSet, WibInterfaceContract, WibWorkflowDraft };
+export type { ArtifactCatalog, ArtifactKind, BrdTestPointCatalogV1, ConnectorMapping, KicadCliDetectionV1, LayoutBaselineConfirmation, LayoutTestAccessAnalysis, ManufacturingTestRequirement, RuleDocumentDiagnostic, RuleDocumentValidation, RuleReviewDecision, RuleReviewItem, RuleReviewResolution, SchematicDocument, SelectedTestPointAnalysisV1, TableFormat, TableImportResult, TableKind, TestMethodCoverage, TestPointAlignmentV1, TestPointSelectionV1, WibConstraintDefinition, WibConstraintSet, WibInterfaceContract, WibWorkflowDraft };
 
 export type CoverageLevel = "EXPLICIT" | "SUPPLEMENTED" | "INFERRED" | "MISSING";
 
@@ -426,6 +427,7 @@ export interface ViewerApi {
   platform: NodeJS.Platform;
   chooseDesign(locale: "zh-CN" | "en-US"): Promise<string | null>;
   chooseBrd(locale: "zh-CN" | "en-US"): Promise<string | null>;
+  detectKiCad(): Promise<KicadCliDetectionV1>;
   chooseTpReview(locale: "zh-CN" | "en-US"): Promise<string | null>;
   importBrdTestPoints(input: { path: string; declared_allegro_version?: string; product_revision?: string }): Promise<BrdTestPointCatalogV1>;
   readBrdTestPointCatalog(catalogId: string): Promise<BrdTestPointCatalogV1>;

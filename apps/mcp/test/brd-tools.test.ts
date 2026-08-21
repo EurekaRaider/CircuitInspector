@@ -19,5 +19,6 @@ describe("Allegro BRD selected-TP MCP surface", () => {
     expect(source).toContain("pathToFileURL(result.csv_path).href");
     expect(source).toContain("circuitinspector://tp-workflow");
     expect(source).toContain("production_readiness_verdict: z.literal(\"REVIEW\")");
+    expect(source).toContain("parser_revision: z.number().int().positive()");
   });
 });

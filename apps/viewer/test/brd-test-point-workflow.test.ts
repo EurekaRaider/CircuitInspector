@@ -27,6 +27,9 @@ describe("BRD TP five-step Viewer workflow", () => {
     expect(markup).toContain("Gerber 与人工对齐复核");
     expect(markup).toContain("选择批准规则包并分析 REQUIRED TP");
     expect(markup).toContain("TP 身份、规则裁决、生产放行是三个独立结论");
+    expect(markup).toContain("KICAD（自动检测）");
+    expect(markup).toContain("源 BRD 版本（ALLEGRO，不是 KICAD）");
+    expect(markup).toContain("选择 .brd（自动调用本机 KiCad）");
   });
 
   it("renders actual Gerber size, binding reason, and production REVIEW in selected analysis", () => {

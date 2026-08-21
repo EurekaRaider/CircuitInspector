@@ -106,6 +106,7 @@ pub fn dispatch(method: &str, params: Value) -> CoreResult<Value> {
         "pick_design" => pick_request(params),
         "list_test_points" => list_test_points_request(params),
         "review_test_points" => review_test_points_request(params),
+        "detect_kicad_cli" => crate::brd::detect_kicad_cli_request(params),
         "import_brd_test_points" => crate::brd::import_brd_test_points_request(params),
         "query_brd_test_points" => crate::brd::query_brd_test_points_request(params),
         "export_test_point_review" => crate::brd::export_test_point_review_request(params),

@@ -11,6 +11,7 @@ import type {
   BrdTestPointCatalogV1,
   ConnectorMapping,
   DesignSummary,
+  KicadCliDetectionV1,
   ManufacturingTestRequirement,
   RulePack,
   TableFormat,
@@ -224,6 +225,7 @@ ipcMain.handle("brd:import-test-points", async (_event, input: { path: string; d
   sendWorkbenchProgress("BRD_TP_IMPORT", 100, "BRD TP 候选清单已生成");
   return catalog;
 });
+ipcMain.handle("brd:detect-kicad", () => core.request<KicadCliDetectionV1>("detect_kicad_cli", {}));
 ipcMain.handle("brd:read-catalog", (_event, catalogId: string) => core.request<BrdTestPointCatalogV1>("read_brd_test_point_catalog", { cache_dir: cacheDir, catalog_id: assertArtifactId(catalogId) }));
 ipcMain.handle("brd:query-test-points", (_event, input: Record<string, unknown>) => core.request("query_brd_test_points", { cache_dir: cacheDir, ...withArtifactId(input, "catalog_id") }));
 ipcMain.handle("brd:export-review", async (_event, catalogId: string, locale: "zh-CN" | "en-US") => {

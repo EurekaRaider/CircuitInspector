@@ -658,8 +658,17 @@ export interface BrdTestPointCandidateV1 {
   source_evidence: string[];
 }
 
+export interface KicadCliDetectionV1 {
+  available: boolean;
+  supported: boolean;
+  version: string | null;
+  executable_path: string | null;
+  diagnostic: string | null;
+}
+
 export interface BrdTestPointCatalogV1 {
   schema_version: 1;
+  parser_revision: number;
   kind: "BRD_TEST_POINT_CATALOG";
   id: string;
   source_path: string;

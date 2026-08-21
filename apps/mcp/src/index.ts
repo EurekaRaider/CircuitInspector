@@ -145,7 +145,7 @@ server.registerTool(
 );
 
 const tpCatalogOutputSchema = {
-  schema_version: z.literal(1), kind: z.literal("BRD_TEST_POINT_CATALOG"), id: z.string(), source_path: z.string(), brd_sha256: z.string(),
+  schema_version: z.literal(1), parser_revision: z.number().int().positive(), kind: z.literal("BRD_TEST_POINT_CATALOG"), id: z.string(), source_path: z.string(), brd_sha256: z.string(),
   declared_allegro_version: z.string().nullable(), detected_allegro_version: z.string().nullable(), product_revision: z.string().nullable(),
   bounds: z.record(z.string(), z.number()), converter: z.record(z.string(), z.unknown()), candidates: z.array(z.record(z.string(), z.unknown())),
   diagnostics: z.array(z.record(z.string(), z.unknown())), review_csv_path: z.string(), generated_at: z.string(), content_hash: z.string(), cache_hit: z.boolean()

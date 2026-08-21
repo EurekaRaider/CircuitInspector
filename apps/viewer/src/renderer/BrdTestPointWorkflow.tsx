@@ -4,6 +4,7 @@ import type { Locale } from "./i18n";
 import type {
   BrdTestPointCatalogV1,
   DesignSummary,
+  KicadCliDetectionV1,
   RulePack,
   SelectedTestPointAnalysisV1,
   TestPointAlignmentOverlay,
@@ -45,6 +46,19 @@ export function BrdTestPointWorkflow({ locale, design, rulePacks, initialReferen
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [kicadDetection, setKicadDetection] = useState<KicadCliDetectionV1 | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.circuitInspector.detectKiCad()
+      .then((detected) => { if (!cancelled) setKicadDetection(detected); })
+      .catch((cause) => {
+        if (!cancelled) {
+          setKicadDetection({ available: false, supported: false, version: null, executable_path: null, diagnostic: message(cause) });
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!initialReference) return;
@@ -207,8 +221,16 @@ export function BrdTestPointWorkflow({ locale, design, rulePacks, initialReferen
         {notice && <div className="mb-4 rounded-xl border border-[#779166]/30 bg-[#1b251d] p-3 text-[11px] text-[#a9bd9b]">{notice}</div>}
         <div className="grid gap-4 lg:grid-cols-2">
           <Step number={1} title={chinese ? "导入 BRD" : "Import BRD"} complete={Boolean(catalog)}>
-            <div className="grid grid-cols-2 gap-2"><Field label="ALLEGRO"><select value={declaredVersion} onChange={(event) => setDeclaredVersion(event.target.value)} className="workflow-input"><option>17.2</option><option>17.4</option></select></Field><Field label={chinese ? "产品修订" : "PRODUCT REVISION"}><input value={productRevision} onChange={(event) => setProductRevision(event.target.value)} className="workflow-input" placeholder="REV A" /></Field></div>
-            <button className="primary-button mt-3" disabled={busy} onClick={() => void importBrd()}><FolderOpenIcon size={15} />{chinese ? "选择 .brd 并调用 KiCad 10" : "Choose .brd and run KiCad 10"}</button>
+            <ArtifactLine
+              label={chinese ? "KICAD（自动检测）" : "KICAD (AUTO-DETECTED)"}
+              value={catalog
+                ? `${catalog.converter.version} · ${catalog.converter.executable_path}`
+                : kicadDetection?.supported
+                  ? `${kicadDetection.version} · ${kicadDetection.executable_path}`
+                  : kicadDetection?.diagnostic ?? (chinese ? "正在自动检测本机 KiCad…" : "Detecting local KiCad…")}
+            />
+            <div className="mt-3 grid grid-cols-2 gap-2"><Field label={chinese ? "源 BRD 版本（ALLEGRO，不是 KICAD）" : "SOURCE BRD VERSION (ALLEGRO, NOT KICAD)"}><select value={declaredVersion} onChange={(event) => setDeclaredVersion(event.target.value)} className="workflow-input"><option>17.2</option><option>17.4</option></select></Field><Field label={chinese ? "产品修订" : "PRODUCT REVISION"}><input value={productRevision} onChange={(event) => setProductRevision(event.target.value)} className="workflow-input" placeholder="REV A" /></Field></div>
+            <button className="primary-button mt-3" disabled={busy} onClick={() => void importBrd()}><FolderOpenIcon size={15} />{chinese ? "选择 .brd（自动调用本机 KiCad）" : "Choose .brd (run local KiCad automatically)"}</button>
             {catalog && <ArtifactLine label="CATALOG" value={`${catalog.id} · ${catalog.candidates.length} TP`} />}
           </Step>
           <Step number={2} title={chinese ? "导出 / 回导人工 CSV" : "Export / import human CSV"} complete={Boolean(selection)}>

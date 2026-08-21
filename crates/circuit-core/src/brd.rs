@@ -41,6 +41,7 @@ const REVIEW_CSV_HEADERS: [&str; 16] = [
 const DEFAULT_KICAD_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_TOOL_OUTPUT_BYTES: usize = 1_048_576;
 const MAX_REVIEW_CSV_BYTES: u64 = 64 * 1024 * 1024;
+const BRD_CATALOG_PARSER_REVISION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -96,6 +97,8 @@ pub struct BrdTestPointCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrdTestPointCatalog {
     pub schema_version: u32,
+    #[serde(default)]
+    pub parser_revision: u32,
     pub kind: String,
     pub id: String,
     pub source_path: String,
@@ -346,6 +349,7 @@ pub fn import_brd_test_points_request(params: Value) -> CoreResult<Value> {
     }
 
     let identity = json!({
+        "parser_revision": BRD_CATALOG_PARSER_REVISION,
         "brd_sha256": brd_sha256,
         "source_path": params.path,
         "kicad_version": kicad_version,
@@ -378,6 +382,7 @@ pub fn import_brd_test_points_request(params: Value) -> CoreResult<Value> {
     let review_csv_path = directory.join("tp-review.csv");
     let mut catalog = BrdTestPointCatalog {
         schema_version: 1,
+        parser_revision: BRD_CATALOG_PARSER_REVISION,
         kind: "BRD_TEST_POINT_CATALOG".into(),
         id: id.clone(),
         source_path: params.path.display().to_string(),
@@ -1247,6 +1252,28 @@ fn resolve_kicad_cli() -> CoreResult<(PathBuf, String)> {
     }
 }
 
+pub fn detect_kicad_cli_request(_params: Value) -> CoreResult<Value> {
+    Ok(match resolve_kicad_cli() {
+        Ok((executable_path, version)) => json!({
+            "available": true,
+            "supported": true,
+            "version": version,
+            "executable_path": executable_path,
+            "diagnostic": null,
+        }),
+        Err(error) => {
+            let diagnostic = error.to_string();
+            json!({
+                "available": diagnostic.contains("KICAD_VERSION_UNSUPPORTED"),
+                "supported": false,
+                "version": null,
+                "executable_path": null,
+                "diagnostic": diagnostic,
+            })
+        }
+    })
+}
+
 fn run_kicad_import(
     executable: &Path,
     source: &Path,
@@ -1350,6 +1377,7 @@ fn find_cached_catalog(
             continue;
         };
         if catalog.brd_sha256 != brd_sha256
+            || catalog.parser_revision != BRD_CATALOG_PARSER_REVISION
             || catalog.converter.version != kicad_version
             || catalog.source_path != source_path
             || catalog.declared_allegro_version.as_deref() != declared_allegro_version
@@ -1526,6 +1554,15 @@ struct ParsedKicadBoard {
 }
 
 #[derive(Debug, Clone)]
+struct ParsedKicadPad {
+    center: PointNm,
+    shape: Option<String>,
+    width_nm: Option<i64>,
+    height_nm: Option<i64>,
+    net_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 enum SExpr {
     Atom(String),
     List(Vec<SExpr>),
@@ -1585,6 +1622,30 @@ fn parse_kicad_board(text: &str) -> CoreResult<ParsedKicadBoard> {
     {
         diagnostics.push(diagnostic("INFERRED_BRD_TEST_POINTS", Severity::Warning, "TP-like references or footprints were found without preserved Allegro Probe/Testprep evidence; identity requires human review.", None));
     }
+    if candidates.iter().any(|candidate| {
+        candidate
+            .source_evidence
+            .iter()
+            .any(|evidence| evidence.starts_with("Multiple KiCad pads"))
+    }) {
+        diagnostics.push(diagnostic(
+            "BRD_TEST_POINT_PAD_AMBIGUOUS",
+            Severity::Warning,
+            "One or more TP footprints contain multiple pads without a unique contact geometry; affected candidates remain REVIEW.",
+            None,
+        ));
+    }
+    if candidates
+        .iter()
+        .any(|candidate| candidate.net_name.is_none())
+    {
+        diagnostics.push(diagnostic(
+            "BRD_TEST_POINT_NET_MISSING",
+            Severity::Warning,
+            "One or more TP candidates do not have a uniquely resolved KiCad net; affected candidates remain REVIEW.",
+            None,
+        ));
+    }
     Ok(ParsedKicadBoard {
         bounds: bounds.normalized(),
         candidates,
@@ -1611,39 +1672,61 @@ fn footprint_candidate(
         .map(parse_at)
         .transpose()?
         .unwrap_or((0.0, 0.0, 0.0));
-    let pad = parts.iter().find(|child| child.head() == Some("pad"));
-    let (center, shape, width_nm, height_nm, net_name, evidence) = if let Some(pad) = pad {
-        let pad_parts = pad.as_list().unwrap_or_default();
-        let shape = pad_parts.get(3).and_then(SExpr::as_text).map(str::to_owned);
-        let local = find_direct_child(pad, "at")
-            .map(parse_at)
-            .transpose()?
-            .unwrap_or((0.0, 0.0, 0.0));
-        let size = find_direct_child(pad, "size")
-            .map(parse_pair)
-            .transpose()?
-            .unwrap_or((0.0, 0.0));
-        let center = transform_footprint_point(footprint_at, local, side);
-        let net_name = find_direct_child(pad, "net")
-            .and_then(|net| net.as_list())
-            .and_then(|net| {
-                net.get(2)
-                    .and_then(SExpr::as_text)
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        net.get(1)
-                            .and_then(SExpr::as_text)
-                            .and_then(|id| nets.get(id).cloned())
-                    })
-            });
-        let mut evidence = vec!["KiCad imported footprint pad".into()];
+    let pads = parts
+        .iter()
+        .filter(|child| child.head() == Some("pad"))
+        .map(|pad| parse_kicad_pad(pad, footprint_at, side, nets))
+        .collect::<CoreResult<Vec<_>>>()?;
+    let netted_pads = pads
+        .iter()
+        .filter(|pad| pad.net_name.is_some())
+        .collect::<Vec<_>>();
+    let unique_nets = netted_pads
+        .iter()
+        .filter_map(|pad| pad.net_name.as_deref())
+        .collect::<HashSet<_>>();
+    let selected_pad = if pads.len() == 1 {
+        pads.first()
+    } else if netted_pads.len() == 1 {
+        netted_pads.first().copied()
+    } else {
+        None
+    };
+    let unique_net_name = (unique_nets.len() == 1)
+        .then(|| unique_nets.iter().next().map(|name| (*name).to_owned()))
+        .flatten();
+    let (center, shape, width_nm, height_nm, net_name, evidence) = if let Some(pad) = selected_pad {
+        let mut evidence = vec![if pads.len() == 1 {
+            "KiCad imported footprint pad".into()
+        } else {
+            "Selected the sole net-assigned pad from a multi-pad KiCad footprint".into()
+        }];
         evidence.extend(probe_evidence(item));
         (
-            center,
-            shape,
-            Some(mm_to_nm(size.0)),
-            Some(mm_to_nm(size.1)),
-            net_name,
+            pad.center,
+            pad.shape.clone(),
+            pad.width_nm,
+            pad.height_nm,
+            pad.net_name.clone(),
+            evidence,
+        )
+    } else if !pads.is_empty() {
+        let mut evidence = vec![if unique_net_name.is_some() {
+            "Multiple KiCad pads share one net, but contact geometry is ambiguous".into()
+        } else {
+            "Multiple KiCad pads have missing or conflicting nets; contact identity is ambiguous"
+                .into()
+        }];
+        evidence.extend(probe_evidence(item));
+        (
+            PointNm {
+                x: mm_to_nm(footprint_at.0),
+                y: mm_to_nm(footprint_at.1),
+            },
+            None,
+            None,
+            None,
+            unique_net_name,
             evidence,
         )
     } else {
@@ -1693,6 +1776,39 @@ fn footprint_candidate(
     }))
 }
 
+fn parse_kicad_pad(
+    pad: &SExpr,
+    footprint_at: (f64, f64, f64),
+    side: Side,
+    nets: &HashMap<String, String>,
+) -> CoreResult<ParsedKicadPad> {
+    let parts = pad.as_list().unwrap_or_default();
+    let local = find_direct_child(pad, "at")
+        .map(parse_at)
+        .transpose()?
+        .unwrap_or((0.0, 0.0, 0.0));
+    let size = find_direct_child(pad, "size").map(parse_pair).transpose()?;
+    Ok(ParsedKicadPad {
+        center: transform_footprint_point(footprint_at, local, side),
+        shape: parts.get(3).and_then(SExpr::as_text).map(str::to_owned),
+        width_nm: size.map(|size| mm_to_nm(size.0)),
+        height_nm: size.map(|size| mm_to_nm(size.1)),
+        net_name: find_direct_child(pad, "net").and_then(|net| parse_kicad_net_name(net, nets)),
+    })
+}
+
+fn parse_kicad_net_name(net: &SExpr, nets: &HashMap<String, String>) -> Option<String> {
+    let parts = net.as_list()?;
+    if let Some(name) = parts.get(2).and_then(SExpr::as_text) {
+        return (!name.is_empty()).then(|| name.to_owned());
+    }
+    let name_or_id = parts.get(1).and_then(SExpr::as_text)?;
+    nets.get(name_or_id).cloned().or_else(|| {
+        (!name_or_id.is_empty() && name_or_id.parse::<u64>().is_err())
+            .then(|| name_or_id.to_owned())
+    })
+}
+
 fn via_candidate(
     item: &SExpr,
     nets: &HashMap<String, String>,
@@ -1702,18 +1818,7 @@ fn via_candidate(
         .transpose()?
         .unwrap_or((0.0, 0.0, 0.0));
     let size = find_direct_child_text(item, "size", 1).and_then(|value| value.parse::<f64>().ok());
-    let net_name = find_direct_child(item, "net")
-        .and_then(|net| net.as_list())
-        .and_then(|net| {
-            net.get(2)
-                .and_then(SExpr::as_text)
-                .map(str::to_owned)
-                .or_else(|| {
-                    net.get(1)
-                        .and_then(SExpr::as_text)
-                        .and_then(|id| nets.get(id).cloned())
-                })
-        });
+    let net_name = find_direct_child(item, "net").and_then(|net| parse_kicad_net_name(net, nets));
     let side = if expression_text(item)
         .to_ascii_uppercase()
         .contains("PROBE_BOTTOM")
@@ -2882,6 +2987,7 @@ mod tests {
     fn sample_catalog() -> BrdTestPointCatalog {
         BrdTestPointCatalog {
             schema_version: 1,
+            parser_revision: BRD_CATALOG_PARSER_REVISION,
             kind: "BRD_TEST_POINT_CATALOG".into(),
             id: "brd-tp-catalog".into(),
             source_path: "fixture.brd".into(),
@@ -2949,7 +3055,73 @@ mod tests {
                 y: 6_000_000
             }
         );
+        assert_eq!(parsed.candidates[0].net_name.as_deref(), Some("GND"));
         assert_eq!(parsed.bounds.max_x, 20_000_000);
+    }
+
+    #[test]
+    fn parses_kicad_10_name_only_nets_for_footprints_and_vias() {
+        let board = r#"(kicad_pcb
+          (footprint "Imported" (layer "F.Cu") (at 5 6)
+            (property "Reference" "TP403")
+            (pad "1" smd circle (at 0 0) (size 0.475 0.475) (layers "F.Cu" "F.Mask") (net "SXR_RESOUT_N")))
+          (via (at 8 9) (size 0.7) (layers "F.Cu" "B.Cu") (net "VIA_TEST_NET")
+            (property "AllegroSubclass" "MANUFACTURING/PROBE_BOTTOM")))"#;
+        let parsed = parse_kicad_board(board).unwrap();
+        let footprint = parsed
+            .candidates
+            .iter()
+            .find(|candidate| candidate.refdes.as_deref() == Some("TP403"))
+            .unwrap();
+        assert_eq!(footprint.net_name.as_deref(), Some("SXR_RESOUT_N"));
+        let via = parsed
+            .candidates
+            .iter()
+            .find(|candidate| candidate.source_kind == "ALLEGRO_PROBE_VIA")
+            .unwrap();
+        assert_eq!(via.net_name.as_deref(), Some("VIA_TEST_NET"));
+    }
+
+    #[test]
+    fn multi_pad_footprints_select_only_unique_electrical_contacts() {
+        let board = r#"(kicad_pcb
+          (footprint "Imported" (layer "F.Cu") (at 10 20)
+            (property "Reference" "TP1")
+            (pad "" smd circle (at 0 0) (size 0.2 0.2) (layers "F.Cu"))
+            (pad "1" smd circle (at 1 2) (size 0.8 0.7) (layers "F.Cu" "F.Mask") (net "NET_A")))
+          (footprint "Imported" (layer "F.Cu") (at 30 40)
+            (property "Reference" "TP2")
+            (pad "1" smd circle (at 0 0) (size 0.8 0.8) (layers "F.Cu") (net "NET_A"))
+            (pad "2" smd circle (at 2 0) (size 0.8 0.8) (layers "F.Cu") (net "NET_B"))))"#;
+        let parsed = parse_kicad_board(board).unwrap();
+        let unique = parsed
+            .candidates
+            .iter()
+            .find(|candidate| candidate.refdes.as_deref() == Some("TP1"))
+            .unwrap();
+        assert_eq!(unique.net_name.as_deref(), Some("NET_A"));
+        assert_eq!(
+            unique.center,
+            PointNm {
+                x: 11_000_000,
+                y: 22_000_000
+            }
+        );
+        assert_eq!(unique.pad_width_nm, Some(800_000));
+
+        let ambiguous = parsed
+            .candidates
+            .iter()
+            .find(|candidate| candidate.refdes.as_deref() == Some("TP2"))
+            .unwrap();
+        assert_eq!(ambiguous.net_name, None);
+        assert_eq!(ambiguous.pad_width_nm, None);
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BRD_TEST_POINT_PAD_AMBIGUOUS")
+        );
     }
 
     #[test]
@@ -3033,6 +3205,20 @@ mod tests {
                     && candidate.pad_width_nm.is_none())
         );
         assert!(
+            parsed
+                .candidates
+                .iter()
+                .any(|candidate| candidate.refdes.as_deref() == Some("TP2")
+                    && candidate.net_name.as_deref() == Some("RESET_N"))
+        );
+        assert!(
+            parsed
+                .candidates
+                .iter()
+                .any(|candidate| candidate.source_kind == "ALLEGRO_PROBE_VIA"
+                    && candidate.net_name.as_deref() == Some("GND"))
+        );
+        assert!(
             !parsed
                 .candidates
                 .iter()
@@ -3058,6 +3244,59 @@ mod tests {
         assert!(report_has_warnings(
             &json!({ "messages": [{ "severity": "warning", "text": "loss" }] })
         ));
+    }
+
+    #[test]
+    fn cached_catalog_requires_current_parser_revision() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cache = CacheStore::new(temporary.path()).unwrap();
+        let directory = cache.root().join("brd-catalogs").join("catalog-a");
+        fs::create_dir_all(&directory).unwrap();
+        let report = directory.join("import-report.json");
+        let intermediate = directory.join("converted.kicad_pcb");
+        fs::write(&report, "{}").unwrap();
+        fs::write(&intermediate, "(kicad_pcb)").unwrap();
+
+        let mut catalog = sample_catalog();
+        catalog.source_path = "fixture.brd".into();
+        catalog.brd_sha256 = "brd-hash".into();
+        catalog.converter.report_path = report.display().to_string();
+        catalog.converter.report_hash = hash_input(&report).unwrap();
+        catalog.converter.intermediate_path = intermediate.display().to_string();
+        catalog.converter.intermediate_hash = hash_input(&intermediate).unwrap();
+        catalog.parser_revision = BRD_CATALOG_PARSER_REVISION - 1;
+        cache
+            .save_json(&directory.join("catalog.json"), &catalog)
+            .unwrap();
+        assert!(
+            find_cached_catalog(
+                &cache,
+                "brd-hash",
+                "10.0.3",
+                "fixture.brd",
+                Some("17.4"),
+                Some("A")
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        catalog.parser_revision = BRD_CATALOG_PARSER_REVISION;
+        cache
+            .save_json(&directory.join("catalog.json"), &catalog)
+            .unwrap();
+        assert!(
+            find_cached_catalog(
+                &cache,
+                "brd-hash",
+                "10.0.3",
+                "fixture.brd",
+                Some("17.4"),
+                Some("A")
+            )
+            .unwrap()
+            .is_some()
+        );
     }
 
     #[test]
